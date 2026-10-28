@@ -18,3 +18,4 @@
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, 403 for other clients, relative and offline URLs.
+- LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
