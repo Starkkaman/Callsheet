@@ -1,0 +1,59 @@
+{
+  "sample": true,
+  "kind": "Morning brief",
+  "date": "2026-10-28",
+  "date_long": "Wednesday 28 Oct",
+  "date_short": "Wed 28 Oct",
+  "written_at": "06:30",
+  "next_checkin": "12:30",
+  "areas": [
+    {"id": "personal", "name": "Personal", "colour": 1},
+    {"id": "co-a", "name": "CO. A", "colour": 2},
+    {"id": "co-b", "name": "CO. B", "colour": 3},
+    {"id": "co-c", "name": "CO. C", "colour": 4}
+  ],
+  "schedule": [
+    {"time": "07:45", "title": "School drop-off", "short": "School drop-off", "area": "personal",
+     "flag": {"text": "Family calendar", "ok": true}, "note": "Amber has pickup"},
+    {"time": "09:30", "title": "Daily stand-up", "short": "Stand-up", "area": "co-a", "first": true},
+    {"time": "11:00", "title": "Q4 roadmap review", "short": "Q4 roadmap", "area": "co-b", "clash": true,
+     "flag": {"text": "Not accepted yet"}, "note": "Deck from Priya in mail, unread",
+     "phone_note": "Not accepted · clashes with 11:30"},
+    {"time": "11:30", "title": "Vendor call", "short": "Vendor call", "area": "co-c", "clash": true,
+     "flag": {"text": "Overlaps 11:00 review"}, "note": "Pick one: draft decline ready"},
+    {"time": "14:00", "title": "Design sync", "short": "Design sync", "area": "co-a",
+     "note": "Prep: read spec v3 (2 pp)", "phone_note": "Prep: spec v3"},
+    {"time": "18:30", "title": "Dentist — Marissa", "short": "Dentist — Marissa", "area": "personal",
+     "flag": {"text": "Added by text, not on a calendar"}, "note": "From WhatsApp, Mon",
+     "phone_note": "Only in WhatsApp, not on a calendar"}
+  ],
+  "replies": [
+    {"who": "Priya N.", "area": "co-b", "source": "Mail", "text": "\"Can you sign off the budget by Thursday?\"",
+     "short": "budget sign-off by Thu", "age": "3d", "action": "Draft ready"},
+    {"who": "#ops-alerts", "area": "co-a", "source": "Slack", "text": "Asked you directly about the deploy window",
+     "short": "deploy window question", "age": "18h", "action": "Draft ready"},
+    {"who": "Amber", "area": "personal", "source": "WhatsApp", "text": "\"Did you book the plumber?\"",
+     "age": "1d", "action": "Draft ready"},
+    {"who": "J. Ortiz", "area": "co-c", "source": "Mail", "text": "Contract redlines, deadline Fri 31 Oct",
+     "short": "contract redlines by Fri", "age": "2d", "action": "Open"},
+    {"who": "Landlord", "area": "personal", "source": "Mail", "text": "Inspection date — needs a yes/no",
+     "short": "inspection date, yes/no", "age": "4d", "action": "Draft ready"}
+  ],
+  "heads_up": [
+    "Invoice from CO. C due Fri — not paid",
+    "Flight check-in opens tomorrow 07:10",
+    "3 newsletters muted, 41 mails filed as FYI",
+    "Gitea: countdown PR waiting for your review 19d"
+  ],
+  "projects": [
+    {"name": "Jamfin", "area": "personal", "pct": 72, "note": "Yesterday: disc skim keys. Next: **HDMV menu disc test**"},
+    {"name": "Crew Hub", "area": "personal", "pct": 85, "note": "Next: rotate NAS command secret"},
+    {"name": "Aero 15 box", "area": "personal", "pct": 60, "note": "**Stalled 9d** · WoL black screen"},
+    {"name": "Billing migration", "area": "co-a", "pct": 40, "note": "2 tickets moved yesterday"},
+    {"name": "Spec v3", "area": "co-a", "pct": null, "note": "Review at 14:00 today"},
+    {"name": "Q4 roadmap", "area": "co-b", "pct": 55, "note": "Waiting on **your budget sign-off**"},
+    {"name": "Vendor contract", "area": "co-c", "pct": 80, "note": "Redlines due Fri"},
+    {"name": "Onboarding docs", "area": "co-c", "pct": 20, "note": "No movement 14d"}
+  ],
+  "sources": "Written 06:30 from 3 mailboxes, 4 calendars, 2 Slack, 1 WhatsApp, Gitea, ~/project"
+}

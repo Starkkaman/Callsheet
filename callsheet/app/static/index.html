@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Daily Brief · Callsheet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<!-- Every URL in this app is relative: Home Assistant Ingress serves it under /api/hassio_ingress/<token>/ -->
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app" id="app" data-look="bold" data-mode="auto">
+
+<header class="top">
+  <div class="topbar">
+    <span class="brand disp">Callsheet</span>
+    <span class="tag sample" id="sample-tag" hidden>Sample data</span>
+    <button type="button" class="lookbtn" id="look-btn" aria-expanded="false" aria-controls="look-panel">Look</button>
+  </div>
+  <div class="lookpanel" id="look-panel" role="region" aria-label="Look and mode" hidden>
+    <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Look</span>
+      <button type="button" class="chip" data-set-look="bold" aria-pressed="true">Bold</button>
+      <button type="button" class="chip" data-set-look="clean" aria-pressed="false">Clean</button>
+      <button type="button" class="chip" data-set-look="easy" aria-pressed="false">Easy read</button>
+    </div>
+    <div class="grp" role="group" aria-labelledby="lbl-mode"><span class="label" id="lbl-mode">Mode</span>
+      <button type="button" class="chip" data-set-mode="auto" aria-pressed="true">Auto</button>
+      <button type="button" class="chip" data-set-mode="light" aria-pressed="false">Light</button>
+      <button type="button" class="chip" data-set-mode="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+</header>
+
+<main class="main" id="main">
+  <p class="status" id="status" role="status">Loading the brief…</p>
+</main>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
