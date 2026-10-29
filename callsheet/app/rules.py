@@ -197,15 +197,20 @@ def _addressed(hdr, names, me):
     return any(a.lower() == me for _, a in email.utils.getaddresses([hdr.get(n, "") for n in names]))
 
 
-def gmail_link(account_email, message_id, thread_id):
-    """Link that opens the message in the right Gmail account. authuser picks the account by address
-    (a /u/<email>/ path shows "account temporarily unavailable" with several accounts signed in).
-    Searches by Message-ID; falls back to the thread id when the message has none."""
+def gmail_link(account_email, thread_id, message_id=""):
+    """Direct link to a message in the right Gmail account, in the format Gmail's own view links use:
+    /mail/u/?authuser=<email>#all/thread-f:<id>|msg-f:<id>, with the API's hex ids written in decimal.
+    (/mail/?authuser= is ignored and /u/<email>/ shows "account temporarily unavailable" when several
+    accounts are signed in; checked by the owner 2026-10-29.)"""
     base = "https://mail.google.com/mail/u/?authuser=" + urllib.parse.quote(account_email, safe="@.")
-    mid = (message_id or "").strip().removeprefix("<").removesuffix(">").strip()
-    if mid:
-        return base + "#search/rfc822msgid:" + urllib.parse.quote(mid, safe="@.")
-    return base + "#all/" + urllib.parse.quote(str(thread_id or ""), safe="")
+    try:
+        link = base + "#all/thread-f:" + str(int(str(thread_id), 16))
+    except ValueError:
+        return base
+    try:
+        return link + "|msg-f:" + str(int(str(message_id), 16)) if message_id else link
+    except ValueError:
+        return link
 
 
 def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
@@ -244,7 +249,7 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
         return None
     text = _clip(subject, 120) if subject else '"' + _clip(snippet, 118) + '"'
     who = name.strip() or vips.get(addr) or addr or "Unknown sender"
-    link = gmail_link(account_email, hdr.get("message-id", ""), thread.get("id", ""))
+    link = gmail_link(account_email, thread.get("id", ""), last.get("id", ""))
     return {"who": _clip(who, 60), "area": area, "source": "Mail", "text": text, "short": _clip(text, 40),
             "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
             "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s}

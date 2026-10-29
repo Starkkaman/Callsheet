@@ -66,12 +66,12 @@ plain rules build the brief.
   overlap another non-free timed event). All-day events go to Heads up ("All day: <title>").
   First meeting = first timed event with at least one other attendee, else first timed event.
 - Gmail (areas that read mail): `threads.list` q=`in:inbox -category:promotions -category:social -category:forums
-  newer_than:14d`, maxResults 50; `threads.get` format=metadata, metadataHeaders From/To/Cc/Subject/Date/Message-ID (+ list headers).
+  newer_than:14d`, maxResults 50; `threads.get` format=metadata, metadataHeaders From/To/Cc/Subject/Date (+ list headers).
   A thread needs a reply when the last message is not from the account itself and at least one of:
   the last message's snippet or subject contains a question mark ("Direct question"); unanswered for ≥
   reply_age_days ("Waiting N days"); snippet or subject mentions a deadline (regex: deadline, due, by
   (mon|tue|…|tomorrow|today|eod|end of day|\d)) ("Mentions a deadline"); sender is a VIP ("VIP").
   Row: who (display name), area, source "Mail", subject or snippet quote, age ("3d", "18h"), reasons, link
-  `https://mail.google.com/mail/u/?authuser=<email>#search/rfc822msgid:<Message-ID>` (fallback `#all/<threadId>`). Sorted VIP first, then age.
+  `https://mail.google.com/mail/u/?authuser=<email>#all/thread-f:<threadId as decimal>|msg-f:<last message id as decimal>`. Sorted VIP first, then age.
 - Heads up: all-day events, plus sync problems ("Couldn't read <email>: <reason>").
 - Token refresh on 401/expiry; invalid_grant → account status needs_reconnect, brief shows it in Heads up.

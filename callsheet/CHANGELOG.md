@@ -2,9 +2,9 @@
 
 ## 0.3.1
 
-- "Open in Gmail" links now pick the account with `?authuser=<email>` and find the message by its
-  Message-ID, so they work when several Google accounts are signed in to one browser (they used to
-  show Gmail's "account temporarily unavailable" page). Messages without a Message-ID open the thread.
+- "Open in Gmail" links open the message directly in the right account, in Gmail's own link format
+  (`/mail/u/?authuser=<email>#all/thread-f:<id>|msg-f:<id>`), so they work when several Google accounts
+  are signed in to one browser (they used to show Gmail's "account temporarily unavailable" page).
 
 ## 0.3.0
 
