@@ -15,7 +15,14 @@
   <div class="topbar">
     <span class="brand disp">Callsheet</span>
     <span class="tag sample" id="sample-tag" hidden>Sample data</span>
-    <button type="button" class="lookbtn" id="look-btn" aria-expanded="false" aria-controls="look-panel">Look</button>
+    <span class="fresh" id="fresh" hidden><span id="fresh-t"></span>
+      <button type="button" class="hbtn" id="refresh-btn">Refresh</button>
+      <span class="err" id="refresh-err" role="alert"></span></span>
+    <span class="hnav">
+      <button type="button" class="hbtn" id="setup-btn">Setup</button>
+      <button type="button" class="hbtn" id="back-btn" hidden>Back to brief</button>
+      <button type="button" class="hbtn lookbtn" id="look-btn" aria-expanded="false" aria-controls="look-panel">Look</button>
+    </span>
   </div>
   <div class="lookpanel" id="look-panel" role="region" aria-label="Look and mode" hidden>
     <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Look</span>
@@ -28,11 +35,12 @@
       <button type="button" class="chip" data-set-mode="light" aria-pressed="false">Light</button>
       <button type="button" class="chip" data-set-mode="dark" aria-pressed="false">Dark</button>
     </div>
+    <span class="err" id="look-err" role="alert"></span>
   </div>
 </header>
 
 <main class="main" id="main">
-  <p class="status" id="status" role="status">Loading the brief…</p>
+  <p class="status" id="status" role="status">Loading…</p>
 </main>
 
 </div>

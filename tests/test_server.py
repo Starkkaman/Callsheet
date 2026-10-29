@@ -4,6 +4,7 @@ import json
 import pathlib
 import re
 import sys
+import tempfile
 import threading
 import unittest
 
@@ -16,7 +17,8 @@ import server  # noqa: E402
 class ServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.httpd = server.make_server("127.0.0.1", 0)
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.httpd = server.make_server("127.0.0.1", 0, data=cls.tmp.name)
         cls.port = cls.httpd.server_address[1]
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
 
@@ -24,6 +26,8 @@ class ServerTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
+        cls.httpd.app.close()
+        cls.tmp.cleanup()
 
     def get(self, path, method="GET"):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -47,6 +51,7 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(r.getheader("Cache-Control"), "no-cache")
             data = json.loads(body)
             self.assertIs(data["sample"], True)
+            self.assertEqual(set(data["sections"].values()), {"sample"})
             area_ids = {a["id"] for a in data["areas"]}
             for key in ("schedule", "replies", "projects"):
                 for item in data[key]:
@@ -82,7 +87,7 @@ class ServerTest(unittest.TestCase):
         self.assertTrue(server.client_allowed(server.parse_allow("*"), "192.168.1.20"))
 
     def test_refuses_other_clients(self):
-        httpd = server.make_server("127.0.0.1", 0, allow="172.30.32.2")  # loopback not allowed here
+        httpd = server.make_server("127.0.0.1", 0, allow="172.30.32.2", app=self.httpd.app)  # no loopback
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
             for path in ("/", "/api/brief"):

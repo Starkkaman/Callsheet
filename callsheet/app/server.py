@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """Callsheet web server (stdlib only).
 
-Serves the Daily Brief page from static/ and the brief data at api/brief.
-Home Assistant Ingress strips its /api/hassio_ingress/<token> prefix before
-forwarding, so every path here is served the same way whatever the prefix;
-the page itself only uses relative URLs.
+Serves the Daily Brief page from static/ and the JSON API under api/ (see api.py and
+docs/step2-google.md). Home Assistant Ingress strips its /api/hassio_ingress/<token> prefix before
+forwarding, so every path here is served the same way whatever the prefix; the page itself only
+uses relative URLs.
 
-Only GET and HEAD. Nothing here sends anything anywhere.
+This layer stays thin: client allowlist, the X-Callsheet header on mutating requests, a 64 KB JSON
+body limit, and JSON errors. Nothing here sends mail or messages; the only outbound traffic is the
+read-only Google client in google.py.
 """
 import argparse
 import http.server
 import ipaddress
 import json
+import os
 import pathlib
 import sys
+import traceback
 import urllib.parse
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import api  # noqa: E402
+from store import InputError, NotFound  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATIC = HERE / "static"
-SAMPLE = HERE / "sample_brief.json"
+SAMPLE = api.SAMPLE
+MAX_BODY = 64 * 1024
+MUTATING = ("POST", "PATCH", "DELETE")
 
 # The Supervisor's ingress proxy. Everything else is refused (HA ingress docs).
 # Loopback stays allowed for local testing and in-container health checks.
@@ -37,9 +47,8 @@ TYPES = {
 }
 
 
-def load_brief():
-    """The brief to show. Step 1: always the bundled sample."""
-    return json.loads(SAMPLE.read_text(encoding="utf-8"))
+def data_dir():
+    return os.environ.get("CALLSHEET_DATA", "/data")
 
 
 def parse_allow(spec):
@@ -66,6 +75,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     sys_version = ""
     extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map, **TYPES}
     allow = parse_allow(DEFAULT_ALLOW)
+    app = None  # api.App, set by make_server
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC), **kwargs)
@@ -76,9 +86,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(403, "Forbidden")
             return None
         path = urllib.parse.urlsplit(self.path).path
-        if path.rstrip("/") == "/api/brief":
-            return self._send_json(load_brief(), head)
-        if path.startswith("/api/") or (path != "/" and pathlib.Path(self.translate_path(path)).is_dir()):
+        if path.startswith("/api/"):
+            return self._api("GET", path, head)
+        if path != "/" and pathlib.Path(self.translate_path(path)).is_dir():
             # no directory listings, and no redirect to an absolute "dir/" URL (breaks under ingress)
             self.send_error(404, "Not found")
             return None
@@ -92,10 +102,56 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self._route(head=True) is False:
             super().do_HEAD()
 
+    def _mutate(self):
+        if not client_allowed(self.allow, self.client_address[0]):
+            self.send_error(403, "Forbidden")
+            return
+        path = urllib.parse.urlsplit(self.path).path
+        if not path.startswith("/api/"):
+            return self._send_json({"error": "There's nothing here."}, False, 404)
+        if self.headers.get("X-Callsheet") != "1":
+            return self._send_json({"error": "This request is missing the X-Callsheet header."}, False, 403)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0 or length > MAX_BODY:
+            self.close_connection = True
+            return self._send_json({"error": "That request is too large."}, False, 413)
+        raw = self.rfile.read(length) if length else b""
+        body = None
+        if raw.strip():
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                return self._send_json({"error": "That request isn't valid JSON."}, False, 400)
+        elif self.command != "DELETE":
+            body = {}
+        return self._api(self.command, path, False, body)
+
+    do_POST = do_PATCH = do_DELETE = _mutate
+
+    def _api(self, method, path, head, body=None):
+        sub = path[len("/api/"):].rstrip("/")
+        try:
+            data = self.app.handle(method, sub, body)
+        except InputError as e:
+            return self._send_json({"error": str(e)}, head, 400)
+        except NotFound as e:
+            return self._send_json({"error": str(e)}, head, 404)
+        except api.MethodNotAllowed:
+            return self._send_json({"error": "That action isn't possible here."}, head, 405)
+        except Exception:
+            # Tracebacks carry no local values; our exceptions never hold tokens.
+            sys.stderr.write(traceback.format_exc())
+            return self._send_json({"error": "Something went wrong inside Callsheet. Check the app log."},
+                                   head, 500)
+        return self._send_json(data, head)
+
     # --- responses -----------------------------------------------------
-    def _send_json(self, data, head):
+    def _send_json(self, data, head, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", TYPES[".json"])
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -121,9 +177,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
 
-def make_server(host="0.0.0.0", port=8099, allow=DEFAULT_ALLOW):
-    handler = type("CallsheetHandler", (Handler,), {"allow": parse_allow(allow)})
-    return http.server.ThreadingHTTPServer((host, port), handler)
+def make_server(host="0.0.0.0", port=8099, allow=DEFAULT_ALLOW, data=None, app=None):
+    """data: data directory (default env CALLSHEET_DATA or /data). The scheduler is not started here."""
+    app = app or api.App(data or data_dir())
+    handler = type("CallsheetHandler", (Handler,), {"allow": parse_allow(allow), "app": app})
+    httpd = http.server.ThreadingHTTPServer((host, port), handler)
+    httpd.app = app
+    return httpd
 
 
 def main(argv=None):
@@ -132,8 +192,12 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8099)
     ap.add_argument("--allow", default=DEFAULT_ALLOW,
                     help="comma-separated client IPs, or * for any (default: %(default)s)")
+    ap.add_argument("--no-scheduler", action="store_true", help="don't sync at call times (testing)")
     args = ap.parse_args(argv)
+    os.umask(0o077)  # the data dir holds secrets: new files are private
     httpd = make_server(args.host, args.port, args.allow)
+    if not args.no_scheduler:
+        httpd.app.scheduler.start()
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)
     try:
         httpd.serve_forever()
@@ -141,6 +205,7 @@ def main(argv=None):
         pass
     finally:
         httpd.server_close()
+        httpd.app.close()
 
 
 if __name__ == "__main__":

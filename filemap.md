@@ -5,17 +5,28 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.1.0, ingress on 8099, sidebar icon/title).
-- `callsheet/Dockerfile`: image from the HA base-python image; copies app/ and run.sh.
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.2.0, ingress on 8099, sidebar icon/title).
+- `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
-- `callsheet/DOCS.md`: user documentation shown in Home Assistant (today and next).
+- `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
-- `callsheet/app/server.py`: stdlib web server: static files, `api/brief`, cache headers, client allowlist.
-- `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`).
+- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync).
+- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version, settings defaults and validation, areas, accounts and tokens, VIPs, last sync, cached brief.
+- `callsheet/app/google.py`: the only network code: Google OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
+- `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
+- `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons, call times, brief composition.
+- `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors), caches the brief, one counts-only log line.
+- `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
+- `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
 - `callsheet/app/static/index.html`: page shell: header (wordmark, sample tag, look picker) and main.
 - `callsheet/app/static/app.css`: theme tokens (from themes.css) + Daily Brief styles, phone under 700px.
 - `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief, look/mode, area filter, tabs.
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, 403 for other clients, relative and offline URLs.
+- `tests/fake_google.py`: fake Google HTTP server for tests (token/revoke with PKCE checks, Gmail and Calendar reads; records requests).
+- `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
+- `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
+- `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).

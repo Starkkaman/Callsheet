@@ -1,5 +1,6 @@
 {
   "sample": true,
+  "sections": {"schedule": "sample", "replies": "sample", "headsup": "sample", "projects": "sample"},
   "kind": "Morning brief",
   "date": "2026-10-28",
   "date_long": "Wednesday 28 Oct",
