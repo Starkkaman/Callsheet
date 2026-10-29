@@ -135,8 +135,9 @@ another run is going, or without a local base URL) reads Google through `Syncer.
 `_writer_input`, stripping and ids; no cached brief, last_sync, last_writer or account status written), fits
 one payload for the largest answer room, then sends G0 (production request, thinking off), Q-low
 (`enable_thinking` true, `reasoning_effort` low, `reasoning_budget_tokens` 2048, max_tokens 6144, 450 s),
-Q-med (medium, 4096, 8192, 450 s) and a Gemma reload (max_tokens 8) to the configured local server, one at
-a time, with the usual retry while loading. Each setup is gated by the call-time window again. Files in
+Q-med (medium, 4096, 8192, 450 s; both Qwen setups with temperature 1.0, top_p 0.95, top_k 20 as in the
+replay harness's Phase 2, G0 none) and a Gemma reload (max_tokens 8) to the configured local server, one at
+a time, with the usual retry while loading. While a run is going, `POST api/sync` answers 409. Each setup is gated by the call-time window again. Files in
 `<data>/writer-eval/<UTC>/` (payload.txt, data.json, responses.jsonl, metrics.json, run.json, choices.json;
 0700/0600, last 5 kept). Metrics from `evalscore.py` and `states_decision`. `GET api/eval/<run>` returns the
 two blind pairs (G0 vs Q-med, Q-low vs Q-med; order seeded per run) without names until `POST

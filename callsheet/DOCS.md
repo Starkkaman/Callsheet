@@ -132,10 +132,11 @@ its requests.
 - **Run evaluation** reads your mail and calendar the same read-only way a refresh does and builds the same
   writer input, but it never changes your brief, the last refresh or the last writer run. It only runs
   when you press the button; it is refused within 10 minutes before or after a brief or check-in, while a
-  refresh runs, while another evaluation runs, or when no local model server is set.
+  refresh runs, while another evaluation runs, or when no local model server is set. While it runs,
+  **Refresh** is refused (scheduled briefs are kept apart by the 10-minute rule).
 - The data goes only to your local model server, one request at a time: **Gemma** with thinking off (as
   the brief uses it), **Qwen** thinking a little (`reasoning_effort` low, 2,048-token budget) and thinking
-  more (medium, 4,096), each with up to 450 seconds, then one tiny request so Gemma is loaded again. If a
+  more (medium, 4,096), both with temperature 1.0, top_p 0.95 and top_k 20, each with up to 450 seconds, then one tiny request so Gemma is loaded again. If a
   brief comes within 10 minutes before a setup starts, the run stops early. A run can take up to about half
   an hour. Under the page's **Advanced** you can change the model names if your server calls them
   differently.

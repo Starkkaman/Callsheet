@@ -142,6 +142,17 @@ class ToggleAndRefusalTest(EvalBase):
         status, data, _ = self.call("POST", "/api/eval/run", {})
         self.assertEqual((status, data["error"]), (409, "Add the local model's server address in Setup, Delivery first."))
 
+    def test_manual_sync_refused_while_running(self):
+        self.setup_all()
+        self.ev.job = {"run": "x", "step": 2, "config": "Q-low", "t0": time.monotonic()}
+        try:
+            status, data, _ = self.call("POST", "/api/sync", {})
+            self.assertEqual((status, data["error"]), (409, "An evaluation is running. Try again when it's finished."))
+        finally:
+            self.ev.job = None
+        self.assertEqual(self.ok("GET", "/api/state")["last_sync"]["at"], None)
+        self.assertEqual(self.call("POST", "/api/sync", {})[0], 200)
+
     def test_concurrency(self):
         self.setup_all()
         self.app.syncer.lock.acquire()
@@ -194,10 +205,13 @@ class RunTest(EvalBase):
         self.assertEqual(g0["max_tokens"], 4096)
         self.assertNotIn("reasoning_effort", g0)
         self.assertNotIn("reasoning_budget_tokens", g0)
+        for k in ("temperature", "top_p", "top_k"):
+            self.assertNotIn(k, g0)
         for body, effort, budget in ((qlow, "low", 2048), (qmed, "medium", 4096)):
             self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": True})
             self.assertEqual((body["reasoning_effort"], body["reasoning_budget_tokens"], body["max_tokens"]),
                              (effort, budget, budget + 4096))
+            self.assertEqual((body["temperature"], body["top_p"], body["top_k"]), (1.0, 0.95, 20))
             self.assertEqual(body["messages"], g0["messages"])  # the same payload for every setup
             self.assertEqual(body["response_format"], g0["response_format"])
         self.assertEqual(reload["max_tokens"], 8)

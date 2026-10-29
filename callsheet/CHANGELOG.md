@@ -7,6 +7,7 @@
   open **Writer evaluation**.
 - It only runs when you press **Run evaluation**: never on a schedule, and not within 10 minutes of a
   brief or check-in, while a refresh runs, or while another evaluation runs.
+- While an evaluation runs, **Refresh** is refused until it has finished.
 - It reads your mail and calendar the same read-only way a refresh does, and never changes the live brief,
   the last refresh or the last writer run.
 - It sends the real brief data only to the local model server you configured: Gemma with thinking off (as

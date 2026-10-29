@@ -8,6 +8,7 @@ server, one request at a time:
     G0     the production local request: Gemma, thinking off, the owner's local options (max tokens, timeout)
     Q-low  Qwen, thinking on, reasoning_effort "low",    reasoning_budget_tokens 2048, max_tokens 2048 + 4096, 450 s
     Q-med  Qwen, thinking on, reasoning_effort "medium", reasoning_budget_tokens 4096, max_tokens 4096 + 4096, 450 s
+           (both Qwen setups with temperature 1.0, top_p 0.95, top_k 20, as in the replay harness's Phase 2)
     reload one tiny chat request (max_tokens 8) to the Gemma model, so the brief's model is loaded again
 
 All three get the same payload (fitted once for the largest max_tokens). Model ids can be changed in the
@@ -38,6 +39,9 @@ GEMMA_MODEL = "gemma-4-26b-a4b-it-qat-q4_0"
 QWEN_MODEL = "Qwen3.8-27B-UD-Q3_K_XL"
 QWEN_TIMEOUT = 450        # seconds per Qwen request
 QWEN_ANSWER = 4096        # answer room on top of the reasoning budget
+# Qwen sampling as in the replay harness's Phase 2 (phase2.sh), so results compare with it. G0 sends none,
+# like the production request.
+QWEN_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
 RELOAD_MAX_TOKENS = 8
 CONFIGS = (
     {"name": "G0", "family": "gemma"},
@@ -74,6 +78,7 @@ def config_body(cfg, model, payload_text, ids, opts):
     o = dict(opts, thinking=True, reasoning_budget=cfg["budget"], max_tokens=QWEN_ANSWER, timeout=QWEN_TIMEOUT)
     body = writer.local_body(model, payload_text, ids, o)  # enable_thinking true, budget, max_tokens budget+4096
     body["reasoning_effort"] = cfg["effort"]
+    body.update(QWEN_SAMPLING)
     return body, o
 
 

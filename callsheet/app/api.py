@@ -193,6 +193,8 @@ class App:
     def sync(self, _body):
         if not self.store.has_accounts():
             raise InputError("Connect a Google account first.")
+        if self.evaluator.job is not None:  # the live writer would swap the local model mid-evaluation
+            raise Conflict("An evaluation is running. Try again when it's finished.")
         return self.syncer.run_now()
 
     # --- AI writer --------------------------------------------------------
