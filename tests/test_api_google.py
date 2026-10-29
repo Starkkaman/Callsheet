@@ -269,7 +269,7 @@ class SyncTest(Base):
         ]}
         threads = [
             thread("t1", "Priya N <priya@acme.example>", "Budget", "Can you sign off by Thursday?",
-                   now - dt.timedelta(days=3)),
+                   now - dt.timedelta(days=3), headers={"Message-ID": "<CAB+x/1=@mail.acme.example>"}),
             thread("t2", "Bob <bob@x.example>", "Lunch", "See you there", now - dt.timedelta(hours=5)),
             thread("t3", f"Me <{email}>", "Re: Plan", "Sure?", now - dt.timedelta(days=4)),
             thread("t4", "Boss <boss@acme.example>", "FYI", "Notes attached", now - dt.timedelta(hours=2, minutes=5)),
@@ -309,7 +309,9 @@ class SyncTest(Base):
         priya = b["replies"][1]
         self.assertEqual(priya["reasons"], ["Direct question", "Mentions a deadline", "Waiting 3 days"])
         self.assertEqual((priya["age"], priya["source"], priya["area"]), ("3d", "Mail", "personal"))
-        self.assertEqual(priya["link"], "https://mail.google.com/mail/u/me@example.com/#all/t1")
+        self.assertEqual(priya["link"], "https://mail.google.com/mail/?authuser=me@example.com"
+                                        "#search/rfc822msgid:CAB%2Bx%2F1%3D@mail.acme.example")
+        self.assertEqual(b["replies"][0]["link"], "https://mail.google.com/mail/?authuser=me@example.com#all/t4")
         self.assertEqual(b["replies"][0]["reasons"], ["VIP"])
         self.assertEqual(b["replies"][0]["age"], "2h")
         # Gmail/Calendar were only read (GET); POSTs only to token/revoke
@@ -328,7 +330,7 @@ class SyncTest(Base):
         self.assertEqual(gets[0]["format"], ["metadata"])
         self.assertEqual(gets[0]["metadataHeaders"], ["From", "To", "Cc", "Subject", "Date", "List-Id",
                                                       "List-Unsubscribe", "Precedence", "Auto-Submitted",
-                                                      "Reply-To"])
+                                                      "Reply-To", "Message-ID"])
         ev = [q for m, p, q in reqs if p.endswith("/events")]
         self.assertEqual(len(ev), 1)  # only the selected (primary) calendar
         self.assertEqual((ev[0]["singleEvents"], ev[0]["orderBy"]), (["true"], ["startTime"]))

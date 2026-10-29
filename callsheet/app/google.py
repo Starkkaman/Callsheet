@@ -22,7 +22,7 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 REDIRECT_URI = "http://127.0.0.1:8765/"
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date", "List-Id", "List-Unsubscribe", "Precedence",
-                    "Auto-Submitted", "Reply-To")
+                    "Auto-Submitted", "Reply-To", "Message-ID")
 TIMEOUT = 15
 
 

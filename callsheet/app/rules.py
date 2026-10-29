@@ -197,6 +197,17 @@ def _addressed(hdr, names, me):
     return any(a.lower() == me for _, a in email.utils.getaddresses([hdr.get(n, "") for n in names]))
 
 
+def gmail_link(account_email, message_id, thread_id):
+    """Link that opens the message in the right Gmail account. authuser picks the account by address
+    (a /u/<email>/ path shows "account temporarily unavailable" with several accounts signed in).
+    Searches by Message-ID; falls back to the thread id when the message has none."""
+    base = "https://mail.google.com/mail/?authuser=" + urllib.parse.quote(account_email, safe="@.")
+    mid = (message_id or "").strip().removeprefix("<").removesuffix(">").strip()
+    if mid:
+        return base + "#search/rfc822msgid:" + urllib.parse.quote(mid, safe="@.")
+    return base + "#all/" + urllib.parse.quote(str(thread_id or ""), safe="")
+
+
 def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     """One "Needs a reply" row for a threads.get(format=metadata) result, or None.
     vips: {lowercase email: name}. Bulk and automated mail is dropped unless the sender is a VIP.
@@ -233,8 +244,7 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
         return None
     text = _clip(subject, 120) if subject else '"' + _clip(snippet, 118) + '"'
     who = name.strip() or vips.get(addr) or addr or "Unknown sender"
-    link = ("https://mail.google.com/mail/u/" + urllib.parse.quote(account_email, safe="@.")
-            + "/#all/" + urllib.parse.quote(str(thread.get("id", "")), safe=""))
+    link = gmail_link(account_email, hdr.get("message-id", ""), thread.get("id", ""))
     return {"who": _clip(who, 60), "area": area, "source": "Mail", "text": text, "short": _clip(text, 40),
             "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
             "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s}

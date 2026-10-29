@@ -124,6 +124,21 @@ class ReplyRulesTest(unittest.TestCase):
         t = thread("c", "Someone <s@e.x>", "Q?", "sent from alias", now, labels=("SENT",))
         self.assertIsNone(self.row(t))
 
+    def test_gmail_link(self):
+        now = at(12)
+        t = thread("t/1", "X <x@e.x>", "Q?", "ok?", now - dt.timedelta(hours=1),
+                   earlier=[("Y <y@e.x>", now - dt.timedelta(days=1), ("INBOX",))],
+                   headers={"Message-ID": " <CAB+a/b=c@mail.gmail.com> "})
+        self.assertEqual(self.row(t)["link"], "https://mail.google.com/mail/?authuser=me@example.com"
+                                              "#search/rfc822msgid:CAB%2Ba%2Fb%3Dc@mail.gmail.com")
+        t = thread("t/1", "X <x@e.x>", "Q?", "ok?", now - dt.timedelta(hours=1))
+        self.assertEqual(self.row(t)["link"], "https://mail.google.com/mail/?authuser=me@example.com#all/t%2F1")
+        t = thread("t2", "X <x@e.x>", "Q?", "ok?", now - dt.timedelta(hours=1), to="me+work@example.com",
+                   headers={"message-id": "<id1@x>"})
+        self.assertEqual(self.row(t, me="me+work@example.com")["link"],
+                         "https://mail.google.com/mail/?authuser=me%2Bwork@example.com#search/rfc822msgid:id1@x")
+        self.assertEqual(rules.gmail_link("a@b.c", "<>", "t9"), "https://mail.google.com/mail/?authuser=a@b.c#all/t9")
+
     def test_sort_vip_then_age(self):
         now = at(12)
         rows = [self.row(thread(i, f"{i} <{i}@e.x>", "?", "?", now - dt.timedelta(hours=h)),

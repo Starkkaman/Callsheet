@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- "Open in Gmail" links now pick the account with `?authuser=<email>` and find the message by its
+  Message-ID, so they work when several Google accounts are signed in to one browser (they used to
+  show Gmail's "account temporarily unavailable" page). Messages without a Message-ID open the thread.
+
 ## 0.3.0
 
 - Optional AI writer: a short summary at the top of the brief and a suggested reply per "Needs a reply"
