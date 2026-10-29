@@ -30,3 +30,5 @@
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
+- `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
+- `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).
