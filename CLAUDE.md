@@ -7,14 +7,19 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
 - **Read-only and drafts-only.** Nothing in this app sends mail, messages or replies. "Nothing was sent"
   is a fixed promise in the UI, not a setting.
 - **No external requests at runtime.** The page and server must work offline: fonts and assets are
-  bundled, no CDNs, no analytics. (Later collectors read the user's own accounts; that is the only
-  outbound traffic, and it needs the user's approval first.)
+  bundled, no CDNs, no analytics. Outbound traffic from the server goes only to Google (the user's own
+  accounts, read-only), `api.anthropic.com` (Claude writer, through the SDK) and the owner's configured
+  local model URL; each needs the user's setup first. The browser page itself never calls out.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
   absolute paths. `tests/test_server.py` checks this.
 - **Data is text.** Render data with `textContent` (see `h()` in app.js), never `innerHTML`.
-- Server: Python stdlib only (`http.server`), listens on 0.0.0.0:8099, accepts only the Supervisor
-  (172.30.32.2) and loopback.
+- Server: Python stdlib (`http.server`) plus exactly one pinned dependency, `anthropic` (installed in the
+  Dockerfile, imported lazily in `writer.py` so the app runs without it). Nothing else to add without the
+  user's go-ahead. Listens on 0.0.0.0:8099, accepts only the Supervisor (172.30.32.2) and loopback.
+- **AI output is text, never instructions.** Mail and calendar content goes to the writer inside the
+  untrusted `<data>` block; the writer has no tools; suggestions are shown with textContent and copied
+  by the user, never sent.
 - No accounts, secrets or user data in the repo. Never print secrets.
 
 ## Design
@@ -27,6 +32,7 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
 ## Test
 ```sh
 python3 -m unittest discover -s tests          # stdlib: routes, headers, 403, relative/offline URLs
+# Claude writer tests need the SDK: a uv venv with anthropic==2.3.0 (without it they are skipped)
 python3 callsheet/app/server.py --port 8099    # manual: http://127.0.0.1:8099/
 ```
 Visual checks (1280 and 400 px, every look x mode, fonts, overflow, contrast, no foreign requests)

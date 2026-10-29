@@ -33,7 +33,10 @@ MODELS = {
 DEFAULT_MODEL = "claude-opus-5-5"
 BETA = "server-side-fallback-2026-07-01"
 CLAUDE_TIMEOUT = 120.0
-LOCAL_TIMEOUT = 120
+LOCAL_TIMEOUT = 300       # a cold model load takes ~50 s on the owner's server, then the answer
+LOCAL_TEST_TIMEOUT = 20   # Test connection is only GET /models
+LOCAL_MAX_TOKENS = 16000  # thinking models spend part of this on reasoning before the answer
+LOCAL_CONTEXT = 32768     # the local server's context per request (llama.cpp --ctx-size)
 MAX_SUGGEST_ROWS = 8
 MAX_THREAD_MESSAGES = 3
 MAX_BODY = 4000
@@ -82,6 +85,10 @@ can't help with."""
 
 class WriterError(Exception):
     """The writer didn't produce a result. The message is a plain sentence for the UI and the log."""
+
+
+class _OutOfRoom(WriterError):
+    """The local model used all max_tokens (on thinking) before answering. Not retried."""
 
 
 class Refused(WriterError):
@@ -320,7 +327,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _local(method, base, path, key, body=None):
+def _local(method, base, path, key, body=None, timeout=LOCAL_TIMEOUT):
     """One request to {base}{path}; only /models (GET) and /chat/completions (POST) are allowed."""
     if (method, path) not in (("GET", "/models"), ("POST", "/chat/completions")) or not base:
         raise WriterError("Callsheet doesn't make that request.")
@@ -332,7 +339,7 @@ def _local(method, base, path, key, body=None):
     if key:
         req.add_header("Authorization", "Bearer " + key)
     try:
-        with _opener.open(req, timeout=LOCAL_TIMEOUT) as resp:
+        with _opener.open(req, timeout=timeout) as resp:
             raw = resp.read(4_000_000)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
@@ -357,7 +364,10 @@ def local_write(base, model, key, payload_text, ids):
     """Returns {summary, replies, by, model, input_tokens, output_tokens}. One retry on bad JSON."""
     if not base or not model:
         raise WriterError("Add the local model's server address and model name in Setup.")
-    body = {"model": model, "stream": False, "response_format": {"type": "json_object"},
+    # Leave the answer as much room as the server's context allows (rough estimate: 3 chars per token).
+    room = LOCAL_CONTEXT - (len(SYSTEM_PROMPT) + len(payload_text)) // 3 - 1024
+    body = {"model": model, "stream": False, "max_tokens": max(2048, min(LOCAL_MAX_TOKENS, room)),
+            "response_format": {"type": "json_object"},
             "messages": [{"role": "system",
                           "content": SYSTEM_PROMPT + "\n\nJSON schema of your answer:\n" + json.dumps(SCHEMA)},
                          {"role": "user", "content": payload_text}]}
@@ -369,11 +379,17 @@ def local_write(base, model, key, payload_text, ids):
             tin += int(usage.get("prompt_tokens") or 0)
             tout += int(usage.get("completion_tokens") or 0)
         try:
-            content = res["choices"][0]["message"]["content"]
+            choice = res["choices"][0]
+            # Only the answer: thinking models (llama.cpp) put their reasoning in reasoning_content.
+            content = choice["message"].get("content")
+            if not (isinstance(content, str) and content.strip()) and choice.get("finish_reason") == "length":
+                raise _OutOfRoom("The local model ran out of room; try again.")
             if isinstance(content, str):
                 content = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", content)
             result = parse_output(json.loads(content), ids)
-        except (KeyError, IndexError, TypeError, ValueError, WriterError):
+        except _OutOfRoom:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError, WriterError):
             if attempt == 0:
                 continue
             raise WriterError("The local model didn't send usable JSON, twice.") from None
@@ -385,7 +401,7 @@ def local_write(base, model, key, payload_text, ids):
 def local_test(base, key):
     if not base:
         raise WriterError("Add the local model's server address first.")
-    res = _local("GET", base, "/models", key)
+    res = _local("GET", base, "/models", key, timeout=LOCAL_TEST_TIMEOUT)
     items = res.get("data") if isinstance(res, dict) else None
     if not isinstance(items, list):
         items = res.get("models") if isinstance(res, dict) else None

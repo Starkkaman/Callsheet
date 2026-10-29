@@ -51,6 +51,11 @@ class NotFound(LookupError):
     """Unknown id (HTTP 404). The message is a plain sentence."""
 
 
+class StoreError(RuntimeError):
+    """The existing database can't be opened or brought up to date. The server stops instead of
+    starting with a fresh, empty database; the file is left as it is."""
+
+
 def default_timezone():
     tz = os.environ.get("TZ", "").strip()
     if tz:
@@ -98,7 +103,9 @@ def default_writer():
     return {"provider": "off",
             "claude": {"api_key": None, "model": writer.DEFAULT_MODEL},
             "local": {"base_url": "", "model": "", "api_key": None},
-            "fallback_to_claude": False, "suggest_replies": True}
+            "fallback_to_claude": False, "suggest_replies": True,
+            # set on any change through the API: from then on the app options never touch the writer
+            "configured_by_owner": False}
 
 
 def _slug(name):
@@ -118,16 +125,28 @@ class Store:
         self.lock = threading.RLock()
         self.db = sqlite3.connect(str(self.path), check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
-        with self.lock:
-            self.db.execute("PRAGMA journal_mode=WAL")
-            self.db.executescript(_SCHEMA)
-            row = self.db.execute("SELECT version FROM schema_version").fetchone()
-            if row is None:
-                self.db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            if self.db.execute("SELECT 1 FROM areas WHERE id='personal'").fetchone() is None:
-                self.db.execute(
-                    "INSERT INTO areas (id, name, colour, reads, fixed, position) VALUES (?,?,?,?,1,0)",
-                    ("personal", "Personal", 1, json.dumps({k: True for k in READ_KEYS})))
+        # Upgrades are additive only: CREATE ... IF NOT EXISTS, new meta keys read with defaults
+        # (0.3.0's writer settings live in meta). Nothing is dropped or recreated.
+        try:
+            with self.lock:
+                self.db.execute("PRAGMA journal_mode=WAL")
+                self.db.executescript(_SCHEMA)
+                row = self.db.execute("SELECT version FROM schema_version").fetchone()
+                if row is None:
+                    self.db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+                elif row["version"] > SCHEMA_VERSION:
+                    raise StoreError(f"{self.path} was written by a newer Callsheet (database version "
+                                     f"{row['version']}, this one knows {SCHEMA_VERSION}).")
+                if self.db.execute("SELECT 1 FROM areas WHERE id='personal'").fetchone() is None:
+                    self.db.execute(
+                        "INSERT INTO areas (id, name, colour, reads, fixed, position) VALUES (?,?,?,?,1,0)",
+                        ("personal", "Personal", 1, json.dumps({k: True for k in READ_KEYS})))
+        except sqlite3.Error as e:
+            self.db.close()
+            raise StoreError(f"Couldn't open or update {self.path} ({type(e).__name__}: {e}).") from None
+        except StoreError:
+            self.db.close()
+            raise
         for extra in ("-wal", "-shm"):
             p = self.path.with_name(self.path.name + extra)
             if p.exists():
@@ -576,6 +595,7 @@ class Store:
                     w[key] = val
                 else:
                     raise InputError(f"The writer can't change {str(key)[:40]}.")
+            w["configured_by_owner"] = True
             self._set_meta("writer", w)
         return self.writer_public()
 
@@ -583,8 +603,27 @@ class Store:
         with self.lock:
             w = self.writer_config()
             w["claude"]["api_key"] = None
+            w["configured_by_owner"] = True
             self._set_meta("writer", w)
         return self.writer_public()
+
+    def seed_local_writer(self, base_url, model):
+        """From the app options (Home Assistant's Options tab): turn on the local writer with this
+        server and model, unless the owner has set up the writer in Callsheet. Empty values change
+        nothing. Returns True when applied; raises InputError for a bad address or model name."""
+        if not (isinstance(base_url, str) and base_url.strip() and isinstance(model, str) and model.strip()):
+            return False
+        with self.lock:
+            w = self.writer_config()
+            if w["configured_by_owner"]:
+                return False
+            base_url = self._check_base_url(base_url)
+            if len(model.strip()) > 120 or re.search(r"[\x00-\x1f]", model):
+                raise InputError("The model name must be text of at most 120 characters.")
+            w["provider"] = "local"
+            w["local"]["base_url"], w["local"]["model"] = base_url, model.strip()
+            self._set_meta("writer", w)
+        return True
 
     def last_writer(self):
         return self._get_meta("last_writer", {"at": None, "ok": None, "by": None, "input_tokens": 0,

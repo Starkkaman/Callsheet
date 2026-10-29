@@ -95,12 +95,14 @@ class FakeAnthropic(_Fake):
 
 class FakeLocal(_Fake):
     """OpenAI-compatible: GET /v1/models, POST /v1/chat/completions. .contents: queue of message contents
-    (the last one repeats). .status: error status for every request."""
+    (the last one repeats). .status: error status for every request. Like llama.cpp with a thinking model,
+    every answer also carries message.reasoning_content; .finish: finish_reason."""
 
     def __init__(self):
         self.contents = ['{"summary": "Local summary.", "replies": []}']
         self.models = ["qwen3-coder"]
         self.status = 200
+        self.finish = "stop"
         super().__init__()
 
     @property
@@ -118,7 +120,8 @@ class FakeLocal(_Fake):
         if req["method"] == "POST" and req["path"] == "/v1/chat/completions":
             content = self.contents.pop(0) if len(self.contents) > 1 else self.contents[0]
             return 200, {"id": "c1", "object": "chat.completion", "model": (req["body"] or {}).get("model"),
-                         "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
-                                      "finish_reason": "stop"}],
+                         "choices": [{"index": 0, "message": {"role": "assistant", "content": content,
+                                                              "reasoning_content": '{"summary": "THINKING"}'},
+                                      "finish_reason": self.finish}],
                          "usage": {"prompt_tokens": 900, "completion_tokens": 120}}, None
         return 404, {"error": {"message": "not found"}}, None

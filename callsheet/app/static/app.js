@@ -81,6 +81,24 @@
   function safeHttps(u) { return typeof u === 'string' && /^https:/i.test(u) ? u : null; }
   function cssq(s) { return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
 
+  /* Copy for "Suggested reply": the Clipboard API inside the click; without it (plain http) select the text
+     and try the legacy copy command, else leave it selected for Ctrl+C. */
+  function copyText(s, el, b) {
+    function said(t) { b.textContent = t; setTimeout(function () { b.textContent = 'Copy'; }, 2000); }
+    function selectIt() {
+      var ok = false;
+      try {
+        var rg = document.createRange(); rg.selectNodeContents(el);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+        ok = document.execCommand && document.execCommand('copy');
+      } catch (e) { ok = false; }
+      said(ok ? 'Copied' : 'Selected: press Ctrl+C');
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(s).then(function () { said('Copied'); }, selectIt);
+    } else selectIt();
+  }
+
   /* ---------- api: JSON in and out; mutations carry X-Callsheet: 1 ---------- */
   function api(method, path, body) {
     var opt = { method: method, cache: 'no-store', headers: { Accept: 'application/json' } };
@@ -244,6 +262,20 @@
       var rs = Array.isArray(r.reasons) ? r.reasons : [];
       return rs.length ? h('span', { class: 'reasons' }, rs.map(function (x) { return h('span', { class: 'reason' }, String(x)); })) : null;
     }
+    /* "Suggested reply" disclosure: the text (pre-wrap), Copy, and the Open link. Nothing is sent. */
+    var sugN = 0;
+    function suggestion(r) {
+      if (!r.suggestion || typeof r.suggestion !== 'string') return null;
+      var id = 'sug-' + (++sugN), text = h('p', { class: 'sugtext' }, r.suggestion), link = safeHttps(r.link);
+      var copy = btn('act', 'Copy', null, function () { copyText(r.suggestion, text, copy); });
+      var panel = h('div', { class: 'sugp', id: id, hidden: true }, [text, h('div', { class: 'btns' }, [copy,
+        link ? h('a', { class: 'tbtn', href: link, target: '_blank', rel: 'noopener noreferrer' }, ['Open', h('span', { class: 'sr' }, ' in Gmail')]) : null])]);
+      var tog = btn('tbtn disc', 'Suggested reply', { 'aria-expanded': 'false', 'aria-controls': id }, function () {
+        var open = tog.getAttribute('aria-expanded') !== 'true';
+        tog.setAttribute('aria-expanded', String(open)); panel.hidden = !open;
+      });
+      return h('div', { class: 'sug' }, [tog, panel]);
+    }
     function who(r, tagName) {
       var link = safeHttps(r.link);
       if (!link) return h(tagName, { class: 'who' }, r.who);
@@ -324,7 +356,7 @@
       h('thead', null, h('tr', null, [h('th', null, 'Who / what'), h('th', null, 'Age'), h('th', null, h('span', { class: 'sr' }, 'Action'))])),
       h('tbody', null, replies.map(function (r) {
         return h('tr', { 'data-area': r.area }, [
-          h('td', null, [who(r, 'span'), ' ', tag(r.area, r), ' ', h('span', { class: 'src' }, r.source), h('br'), r.text, reasons(r)]),
+          h('td', null, [who(r, 'span'), ' ', tag(r.area, r), ' ', h('span', { class: 'src' }, r.source), h('br'), r.text, reasons(r), suggestion(r)]),
           h('td', { class: 'age' }, r.age),
           h('td', null, !r.action ? null : safeHttps(r.link)
             ? h('a', { class: 'act', href: safeHttps(r.link), target: '_blank', rel: 'noopener noreferrer', tabindex: '-1', 'aria-hidden': 'true' }, r.action)
@@ -335,7 +367,7 @@
         h('div', { class: 'tm' }, r.age),
         h('div', null, [who(r, 'b'), ' · ', r.short || r.text,
           h('div', { class: 'sm' }, [r.source, area(r.area, r).name, String(r.action || '').toLowerCase()].filter(Boolean).join(' · ')),
-          reasons(r)])]);
+          reasons(r), suggestion(r)])]);
     }));
     var secReply = h('section', { class: 'slab s-reply', id: 'sec-replies', 'aria-labelledby': 'h-replies' }, [
       h('h2', { class: 'sec-h', id: 'h-replies' }, ['Needs a reply', sampleTag('replies'), sources.length ? h('span', { class: 'n d-only' }, sources.join(' · ')) : null]),
@@ -374,9 +406,14 @@
       projects.length || order.length ? cards : null,
       projects.length ? projList : h('p', { class: 'muted' }, 'No projects tracked yet.')]);
 
+    /* AI writer summary band (only when the writer ran) */
+    var sum = d.summary && typeof d.summary.text === 'string' && d.summary.text ? h('section', { class: 'summary', 'aria-label': 'Summary' }, [
+      h('p', { class: 'stext' }, d.summary.text),
+      h('p', { class: 'sby' }, ['Written by ', d.summary.by || 'the AI writer', d.summary.at ? ' · ' + fmtWhen(d.summary.at) : ''])]) : null;
+
     var foot = h('div', { class: 'foot' }, [h('span', null, d.sources || ''), h('span', null, 'Nothing was sent. Drafts wait for you.')]);
 
-    var sheet = h('div', { class: 'sheet brief' }, [mast, phTop, chips, h('div', { class: 'grid2' }, [secToday, secReply]), callout, secProj, foot]);
+    var sheet = h('div', { class: 'sheet brief' }, [mast, phTop, sum, chips, h('div', { class: 'grid2' }, [secToday, secReply]), callout, secProj, foot]);
     var tabs = h('nav', { class: 'tabs p-only', 'aria-label': 'Sections' }, [
       h('button', { type: 'button', 'data-target': 'sec-today', 'aria-current': 'true' }, 'Today'),
       h('button', { type: 'button', 'data-target': 'sec-replies' }, 'Replies'),
@@ -684,11 +721,11 @@
   function areaCard(a) {
     var c = clampColour(a.colour), reads = a.reads || {}, err = errBox();
     function readChip(key, label) {
-      var b = btn('chip', label, { 'aria-pressed': String(!!reads[key]) }, function () {
+      var b = btn('chip', label, { 'aria-pressed': String(key === 'writer' ? reads[key] !== false : !!reads[key]) }, function () {
         var next;
         run([b], err, function () {
-          next = { calendar: !!reads.calendar, mail: !!reads.mail, chat: !!reads.chat, tasks: !!reads.tasks };
-          next[key] = !reads[key];
+          next = { calendar: !!reads.calendar, mail: !!reads.mail, chat: !!reads.chat, tasks: !!reads.tasks, writer: reads.writer !== false };
+          next[key] = !next[key];
           return api('PATCH', 'api/areas/' + encodeURIComponent(a.id), { reads: next });
         }, function () {
           reads[key] = next[key]; a.reads = reads; b.setAttribute('aria-pressed', String(next[key]));
@@ -703,7 +740,7 @@
       accts.length ? h('div', { class: 'accts' }, accts.map(function (x) { return accountRow(a, x); })) : h('p', { class: 'note none' }, 'No Google account yet.'),
       connectBlock(a),
       h('div', { class: 'reads' }, [h('div', { class: 'q', id: 'q-' + a.id }, 'What may the brief read?'),
-        h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'), later('Chat'), later('Tasks')]),
+        h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'), readChip('writer', 'AI writer'), later('Chat'), later('Tasks')]),
         err]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
@@ -845,8 +882,139 @@
       h('div', { class: 'opts' }, [
         row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
         row(false, 'Phone push', 'via the Home Assistant app', 'Coming later')]),
-      h('div', { class: 'where' }, [h('h2', { class: 'h3' }, 'Writer'),
-        h('p', { class: 'note' }, 'Rules only for now. Claude or a local model comes in a later version.')])];
+      writerBlock()];
+  }
+
+  /* step 5: the AI writer. Off / Claude / Local model; keys are write-only (the server returns hints). */
+  var CLAUDE_MODELS = [
+    ['claude-opus-5-5', 'Claude Opus 5.5', '$4 in / $20 out'],
+    ['claude-sonnet-5-5', 'Claude Sonnet 5.5', '$2 in / $10 out'],
+    ['claude-haiku-5-5', 'Claude Haiku 5.5', '$0.10 in / $0.50 out']];
+  var LOCAL_URL_EG = 'http://192.168.10.157:8080/v1', LOCAL_MODEL_EG = 'gemma-4-26b-a4b-it-qat-q4_0';
+  function writerOf() {
+    var w = S.writer || {};
+    w.claude = w.claude || {}; w.local = w.local || {};
+    return w;
+  }
+  function writerName(w) {
+    if (w.provider === 'claude') {
+      var m = CLAUDE_MODELS.filter(function (x) { return x[0] === w.claude.model; })[0];
+      return m ? m[1] : 'Claude';
+    }
+    if (w.provider === 'local') return 'Local model' + (w.local.model ? ' · ' + w.local.model : '');
+    return 'rules only';
+  }
+  function fmtNum(n) { n = Number(n) || 0; return n.toLocaleString('en-US'); }
+  function lastWriterLine() {
+    var lw = S.last_writer || {};
+    if (!lw.at) return 'The writer hasn\u2019t run yet.';
+    if (lw.ok) return 'Last run ' + fmtWhen(lw.at, true) + ' · ' + (lw.by || 'AI writer') + ' · ' +
+      fmtNum(lw.input_tokens) + ' in / ' + fmtNum(lw.output_tokens) + ' out tokens';
+    return 'Last run ' + fmtWhen(lw.at, true) + ' didn\u2019t work: ' + (lw.error || 'unknown problem.');
+  }
+  function writerBlock() {
+    var w = writerOf(), err = errBox();
+    function patchWriter(body, e, btns, ok, focusKey) {
+      return run(btns || [], e || err, function () { return api('PATCH', 'api/writer', typeof body === 'function' ? body() : body); }, function (r) {
+        S.writer = r || S.writer;
+        if (ok) ok(r);
+        if (focusKey) renderSetup('[data-fk="' + cssq(focusKey) + '"]');
+      });
+    }
+    function choice(val, t, sub) {
+      var sel = (w.provider || 'off') === val;
+      return btn('opt' + (sel ? ' sel' : ''), [h('span', { class: 'cb' + (sel ? ' sel' : ''), 'aria-hidden': 'true' }),
+        h('span', null, [h('span', { class: 't' }, t), h('span', { class: 's' }, sub)]),
+        h('span', { class: 'state' }, sel ? 'Selected' : '')], { role: 'radio', 'aria-checked': String(sel), 'data-fk': 'wp:' + val }, function (e) {
+        if (sel) return;
+        patchWriter({ provider: val }, err, [e.currentTarget], null, 'wp:' + val);
+      });
+    }
+    var opts = h('div', { class: 'opts', role: 'radiogroup', 'aria-label': 'Who writes the brief' }, [
+      choice('off', 'Off', 'The brief from the rules only, as before'),
+      choice('claude', 'Claude (cloud)', 'Anthropic API key · only the brief\u2019s inputs are sent'),
+      choice('local', 'Local model', 'Any OpenAI-compatible server on your network: llama.cpp, Ollama, LM Studio')]);
+
+    /* Claude: key + model */
+    var cErr = errBox(), cKeyHint = w.claude.key_hint;
+    var cKey = h('input', { class: 'inp', type: 'password', id: 'w-ckey', autocomplete: 'off', spellcheck: 'false',
+      placeholder: cKeyHint ? 'Saved key ' + cKeyHint : 'sk-ant-…', 'data-fk': 'w-ckey' });
+    var cSave = btn('btn', 'Save key', { 'data-fk': 'w-csave' }, function () {
+      var v = cKey.value.trim();
+      if (!v) { cErr.textContent = 'Paste your Anthropic API key first.'; return; }
+      patchWriter(function () { return { claude: { api_key: v } }; }, cErr, [cSave], function () { cKey.value = ''; }, 'w-csave');
+    });
+    var cDel = cKeyHint ? btn('tbtn', 'Remove key', { 'data-fk': 'w-cdel' }, function () {
+      run([cDel], cErr, function () { return api('DELETE', 'api/writer/claude-key'); }, function (r) { S.writer = r || S.writer; renderSetup('[data-fk="w-ckey"]'); });
+    }) : null;
+    var cModel = on(h('select', { class: 'inp', id: 'w-cmodel' }, CLAUDE_MODELS.map(function (m) {
+      return h('option', { value: m[0], selected: m[0] === (w.claude.model || 'claude-opus-5-5') }, m[1] + ' · ' + m[2]);
+    })), 'change', function () { patchWriter({ claude: { model: cModel.value } }, cErr, [cModel]); });
+    var cTest = btn('act', 'Test key', { 'data-fk': 'w-ctest' }, function () { testWriter('claude', cTest, cRes, cErr); });
+    var cRes = h('span', { class: 'testres', role: 'status' });
+    var claude = h('div', { class: 'wpanel' + (w.provider === 'claude' ? '' : ' off'), role: 'group', 'aria-labelledby': 'w-ch' }, [
+      h('h3', { class: 'label wh', id: 'w-ch' }, 'Claude'),
+      h('div', { class: 'lm' }, [
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'w-ckey' }, cKeyHint ? 'Anthropic API key (saved ' + cKeyHint + ')' : 'Anthropic API key'), cKey,
+          h('div', { class: 'btns kb' }, [cSave, cDel])]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'w-cmodel' }, 'Model · USD per million tokens'), cModel]),
+        h('div', { class: 'testrow' }, [cTest, cRes])]),
+      cErr,
+      h('p', { class: 'note' }, 'Get a key at console.anthropic.com. API use is billed by Anthropic separately from Claude subscriptions (Pro, Max).')]);
+
+    /* Local model: URL, model, optional key, Test connection */
+    var lErr = errBox(), lKeyHint = w.local.key_hint;
+    var lUrl = on(h('input', { class: 'inp', type: 'url', id: 'w-lurl', value: w.local.base_url || '', placeholder: LOCAL_URL_EG, autocomplete: 'off', spellcheck: 'false' }), 'change', function () {
+      patchWriter({ local: { base_url: lUrl.value.trim() } }, lErr, [], function (r) { lUrl.value = (r && r.local && r.local.base_url) || ''; });
+    });
+    var lModel = on(h('input', { class: 'inp', type: 'text', id: 'w-lmodel', value: w.local.model || '', placeholder: LOCAL_MODEL_EG, autocomplete: 'off', spellcheck: 'false' }), 'change', function () {
+      patchWriter({ local: { model: lModel.value.trim() } }, lErr, []);
+    });
+    var lKey = on(h('input', { class: 'inp', type: 'password', id: 'w-lkey', autocomplete: 'off', spellcheck: 'false', placeholder: lKeyHint ? 'Saved key ' + lKeyHint : 'none' }), 'change', function () {
+      var v = lKey.value.trim();
+      if (!v) return;
+      patchWriter({ local: { api_key: v } }, lErr, [], function () { lKey.value = ''; }, 'w-lkey');
+    });
+    var lDel = lKeyHint ? btn('tbtn', 'Remove key', { 'data-fk': 'w-ldel' }, function () {
+      patchWriter({ local: { api_key: '' } }, lErr, [lDel], null, 'w-lkey');
+    }) : null;
+    var lTest = btn('act', 'Test connection', { 'data-fk': 'w-ltest' }, function () { testWriter('local', lTest, lRes, lErr); });
+    var lRes = h('span', { class: 'testres', role: 'status' });
+    var local = h('div', { class: 'wpanel' + (w.provider === 'local' ? '' : ' off'), role: 'group', 'aria-labelledby': 'w-lh' }, [
+      h('h3', { class: 'label wh', id: 'w-lh' }, 'Local model'),
+      h('div', { class: 'lm' }, [
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'w-lurl' }, 'Server URL'), lUrl]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'w-lmodel' }, 'Model'), lModel]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'w-lkey' }, lKeyHint ? 'API key (optional, saved ' + lKeyHint + ')' : 'API key (optional)'), lKey,
+          lDel ? h('div', { class: 'btns kb' }, lDel) : null]),
+        h('div', { class: 'testrow' }, [lTest, lRes])]),
+      lErr,
+      h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.')]);
+
+    var fbErr = errBox(), sgErr = errBox();
+    var fb = sw(w.fallback_to_claude, 'If the local model fails, use Claude instead', function () {
+      patchWriter(function () { return { fallback_to_claude: !writerOf().fallback_to_claude }; }, fbErr, [fb], function (r) { fb.setAttribute('aria-pressed', String(!!r.fallback_to_claude)); });
+    });
+    var sg = sw(w.suggest_replies !== false, 'Suggest replies', function () {
+      patchWriter(function () { return { suggest_replies: writerOf().suggest_replies === false }; }, sgErr, [sg], function (r) { sg.setAttribute('aria-pressed', String(r.suggest_replies !== false)); });
+    });
+    var lw = S.last_writer || {};
+    return h('div', { class: 'where writer' }, [
+      h('h2', { class: 'h3' }, 'Writer'),
+      h('p', { class: 'note' }, 'The rules decide what is in the brief. The writer adds a short summary and suggested replies you can copy. Nothing is ever sent.'),
+      opts, err, claude, local,
+      h('div', { class: 'swrow' }, [fb, h('span', { 'aria-hidden': 'true' }, 'If the local model fails, use Claude instead')]), fbErr,
+      h('p', { class: 'note' }, 'Off keeps your data on your network.'),
+      h('div', { class: 'swrow' }, [sg, h('span', { 'aria-hidden': 'true' }, 'Suggest replies')]), sgErr,
+      h('p', { class: 'note' }, 'Reads the last few messages of up to 8 threads that need a reply. Areas can opt out in step 2 (AI writer).'),
+      h('p', { class: 'syncst' + (lw.at && !lw.ok ? ' bad' : ''), role: 'status' }, lastWriterLine())]);
+  }
+  function testWriter(provider, b, res, err) {
+    res.textContent = 'Testing…';
+    run([b], err, function () { return api('POST', 'api/writer/test', { provider: provider }); }, function (r) {
+      res.textContent = '';
+      add(res, [h('span', { class: 'st' + (r && r.ok ? '' : ' warn') }, r && r.ok ? 'Works' : 'Didn\u2019t work'), ' ', (r && r.message) || '']);
+    }).then(function () { if (res.textContent === 'Testing…') res.textContent = ''; });
   }
 
   /* step 6: review */
@@ -870,7 +1038,7 @@
         S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet'].join(' · '),
       plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days'),
       timesSum,
-      'Sidebar page in Home Assistant · Writer: rules only'];
+      'Sidebar page in Home Assistant · Writer: ' + writerName(writerOf())];
     var ls = S.last_sync || {};
     var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () {
       run([refresh, goB], err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="sync"]'); });

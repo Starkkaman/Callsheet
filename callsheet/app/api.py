@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import pathlib
 import re
+import sys
 import time
 
 import writer
@@ -39,6 +40,7 @@ class App:
     def __init__(self, data_dir, clock=time.time):
         self.clock = clock
         self.store = Store(data_dir)
+        self._apply_options(data_dir)
         self.flows = OAuthFlows(self.store, clock=clock)
         self.syncer = Syncer(self.store, clock=clock)
         self.scheduler = Scheduler(self.store, self.syncer, clock=clock)
@@ -62,6 +64,21 @@ class App:
             ("DELETE", r"writer/claude-key", self.delete_claude_key),
             ("POST", r"writer/test", self.test_writer),
         ]
+
+    def _apply_options(self, data_dir):
+        """Home Assistant writes the app options to <data>/options.json. writer_local_url and
+        writer_local_model seed the local writer until the owner changes the writer in Callsheet."""
+        try:
+            opts = json.loads((pathlib.Path(data_dir) / "options.json").read_text())
+        except (OSError, ValueError):
+            return
+        if not isinstance(opts, dict):
+            return
+        try:
+            if self.store.seed_local_writer(opts.get("writer_local_url"), opts.get("writer_local_model")):
+                print("Callsheet writer: local model set from the app options.", file=sys.stderr, flush=True)
+        except InputError as e:
+            print(f"Callsheet writer: app options not used: {e}", file=sys.stderr, flush=True)
 
     def close(self):
         self.scheduler.stop()

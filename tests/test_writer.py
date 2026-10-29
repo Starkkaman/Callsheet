@@ -357,6 +357,8 @@ class LocalWriterTest(WriterBase):
         self.assertEqual(b["replies"][1]["suggestion"], "Sure.")
         req = self.loc.chats()[0]
         self.assertEqual(req["body"]["response_format"], {"type": "json_object"})
+        self.assertEqual(req["body"]["model"], "qwen3-coder")
+        self.assertGreaterEqual(req["body"]["max_tokens"], 4096)
         self.assertEqual(req["headers"]["authorization"], "Bearer " + LOCAL_KEY)
         self.assertIn("JSON schema", req["body"]["messages"][0]["content"])
         self.assertIn("<data>", req["body"]["messages"][1]["content"])
@@ -380,6 +382,18 @@ class LocalWriterTest(WriterBase):
         self.assertNotIn("summary", b)
         self.assertIn("The AI writer didn't run: The local model didn't send usable JSON, twice.", b["heads_up"])
         self.assertEqual(len(self.loc.chats()), 2)
+
+    def test_reasoning_is_ignored_and_out_of_room_fails_without_retry(self):
+        self.seed()
+        self.local_on()
+        self.loc.contents = ['{"summary": "The answer.", "replies": []}']
+        self.assertEqual(self.sync_brief()["summary"]["text"], "The answer.")
+        n = len(self.loc.chats())
+        self.loc.contents, self.loc.finish = [""], "length"
+        b = self.sync_brief()
+        self.assertNotIn("summary", b)
+        self.assertIn("The AI writer didn't run: The local model ran out of room; try again.", b["heads_up"])
+        self.assertEqual(len(self.loc.chats()), n + 1)
 
     def test_offline_without_and_with_fallback(self):
         self.seed()
@@ -416,6 +430,47 @@ class NoSdkTest(WriterBase):
             self.assertEqual(len(b["schedule"]), 2)
             self.assertEqual(self.ok("POST", "/api/writer/test", {"provider": "claude"}),
                              {"ok": False, "message": "The Claude writer isn't available in this build."})
+
+
+class OptionsSeedTest(unittest.TestCase):
+    """writer_local_url / writer_local_model from Home Assistant's options.json seed the local writer."""
+
+    def app(self, opts):
+        import api
+        if opts is not None:
+            (pathlib.Path(self.dir.name) / "options.json").write_text(json.dumps(opts))
+        a = api.App(self.dir.name)
+        self.addCleanup(a.close)
+        return a
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.opts = {"writer_local_url": "http://192.168.10.157:8080/v1/",
+                     "writer_local_model": "gemma-4-26b-a4b-it-qat-q4_0"}
+
+    def test_seed_on_fresh_store(self):
+        w = self.app(self.opts).store.writer_public()
+        self.assertEqual((w["provider"], w["local"]["base_url"], w["local"]["model"]),
+                         ("local", "http://192.168.10.157:8080/v1", "gemma-4-26b-a4b-it-qat-q4_0"))
+        self.assertNotIn("configured_by_owner", w)
+
+    def test_owner_change_wins(self):
+        a = self.app(self.opts)
+        a.patch_writer({"provider": "off"})
+        a.close()
+        self.opts["writer_local_model"] = "qwen3.8-27b-q3_k_m"
+        w = self.app(self.opts).store.writer_public()
+        self.assertEqual((w["provider"], w["local"]["model"]), ("off", "gemma-4-26b-a4b-it-qat-q4_0"))
+
+    def test_empty_or_missing_or_bad_options_change_nothing(self):
+        for opts in (None, {}, {"writer_local_url": "", "writer_local_model": ""},
+                     {"writer_local_url": "http://x:8080/v1", "writer_local_model": ""},
+                     {"writer_local_url": "ftp://x", "writer_local_model": "m"}, ["x"]):
+            a = self.app(opts)
+            self.assertEqual(a.store.writer_public()["provider"], "off", opts)
+            a.close()
 
 
 class UnitTest(unittest.TestCase):

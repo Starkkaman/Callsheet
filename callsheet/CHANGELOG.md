@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- Optional AI writer: a short summary at the top of the brief and a suggested reply per "Needs a reply"
+  row, with Copy. The rules still decide what is in the brief; nothing is ever sent.
+- Writers: Claude (Opus 5.5, Sonnet 5.5 or Haiku 5.5, your own Anthropic API key, billed separately from
+  Claude subscriptions) or a local OpenAI-compatible server (llama.cpp, Ollama, LM Studio) with Test
+  connection. Optional fallback from the local model to Claude (off by default).
+- Setup step 5 has the Writer block (with the last run and its token counts); area cards get an
+  "AI writer" chip to keep an area out of the writer's input.
+- A writer failure never breaks the brief: Heads up says why it didn't run.
+- App options `writer_local_url` and `writer_local_model` can turn on the local writer until it is
+  changed in setup.
+- Upgrades keep the 0.2.0 database as it is (only new settings are added); if the database can't be
+  opened, the app stops with a log line instead of starting empty.
+- Image adds the `anthropic` Python package (2.3.0, pinned).
+
 ## 0.2.0
 
 - Connect your own Google accounts, read-only, with your own Google Cloud OAuth client (Desktop app,

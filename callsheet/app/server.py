@@ -22,7 +22,7 @@ import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import api  # noqa: E402
-from store import InputError, NotFound  # noqa: E402
+from store import InputError, NotFound, StoreError  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -195,7 +195,13 @@ def main(argv=None):
     ap.add_argument("--no-scheduler", action="store_true", help="don't sync at call times (testing)")
     args = ap.parse_args(argv)
     os.umask(0o077)  # the data dir holds secrets: new files are private
-    httpd = make_server(args.host, args.port, args.allow)
+    try:
+        httpd = make_server(args.host, args.port, args.allow)
+    except StoreError as e:
+        # Never start on a fresh, empty database in place of one that didn't open: the file is untouched.
+        print(f"Callsheet can't start: {e} The database was left unchanged. "
+              "Restore a backup or report this.", file=sys.stderr, flush=True)
+        sys.exit(1)
     if not args.no_scheduler:
         httpd.app.scheduler.start()
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)

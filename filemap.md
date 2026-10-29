@@ -5,23 +5,24 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.2.0, ingress on 8099, sidebar icon/title).
-- `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata; copies app/ and run.sh.
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.0, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
-- `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, data, troubleshooting.
+- `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
-- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors.
-- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync).
-- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version, settings defaults and validation, areas, accounts and tokens, VIPs, last sync, cached brief.
-- `callsheet/app/google.py`: the only network code: Google OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
+- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors; refuses to start if the database can't be opened.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync, writer); seeds the local writer from `options.json`.
+- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, last sync, last writer run, cached brief.
+- `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
+- `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and output schema, HTML to text, Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons, call times, brief composition.
-- `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors), caches the brief, one counts-only log line.
+- `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
 - `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
 - `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
 - `callsheet/app/static/index.html`: page shell: header (wordmark, sample tag, look picker) and main.
 - `callsheet/app/static/app.css`: theme tokens (from themes.css) + Daily Brief styles, phone under 700px.
-- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief, look/mode, area filter, tabs.
+- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block.
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, 403 for other clients, relative and offline URLs.
@@ -29,6 +30,10 @@
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
+- `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content) for tests; record requests.
+- `tests/test_writer.py`: AI writer end to end against the fakes (Claude tests skip without the `anthropic` package): settings, payload minimisation, injection, errors, local JSON mode, fallback, app options seeding.
+- `tests/test_upgrade.py`: a 0.2.0 database opens unchanged with 0.3.0 code; options seeding writes only the writer; an unreadable or newer database stops the app.
+- `tests/fixtures/store_0_2_0.py`: frozen 0.2.0 `store.py`, used to build the 0.2.0 database.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
 - `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
 - `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).

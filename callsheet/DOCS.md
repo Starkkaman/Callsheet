@@ -6,12 +6,12 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.2.0)
+## What it does today (0.3.0)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
   OAuth client that you create yourself. Each account belongs to an area.
-- Builds the brief with plain rules (no AI yet):
+- Builds the brief with plain rules:
   - **Schedule**: today's events from the calendars you pick. Free, cancelled and declined events are
     left out. Invitations you haven't answered and overlapping events are flagged. All-day events go to
     Heads up.
@@ -24,6 +24,8 @@ Callsheet only reads. It never sends, replies, deletes or changes anything in yo
 - Reads your accounts at the morning brief and check-in times (06:30, 12:30 and 17:00 by default, in your
   time zone; check-ins are skipped on days off), when the app starts if the last read is older than
   30 minutes, and when you ask for it.
+- Optionally an **AI writer** (Claude or a model on your own network) adds a short summary at the top and
+  a suggested reply per "Needs a reply" row. The rules still decide what is in the brief.
 - Until an account is connected, the page shows sample data with a "Sample data" tag.
 
 ## Set up your Google client (once)
@@ -66,13 +68,64 @@ To connect the same account again (for example after "needs to be connected agai
 steps; Callsheet updates the existing account. Removing an account also withdraws Callsheet's access at
 Google. You can check or remove access any time at <https://myaccount.google.com/permissions>.
 
+## AI writer (optional)
+
+Off by default: the brief then looks exactly as in 0.2.0. Turn it on in **Setup → Delivery → Writer**.
+After each read (scheduled or **Refresh**) the writer gets the brief's facts (schedule, heads-ups, the
+replies due) plus, with **Suggest replies** on, the last up to 3 messages of at most 8 threads that need a
+reply (VIPs first, then the oldest; each message cut at 4,000 characters). Mail bodies are not stored;
+only the suggestions are. It adds:
+
+- a summary band under the date ("Written by Claude Opus 5.5" or "Written by Local · <model>");
+- a **Suggested reply** under each reply row it could help with: open it, **Copy**, then paste the text
+  into your reply in Gmail. Placeholders in [square brackets] are facts only you know. Nothing is sent.
+
+If the writer fails, the brief still shows (rules only) and Heads up says "The AI writer didn't run" and
+why. Setup shows the last run with its token counts. Per area, the **AI writer** chip in step 2 decides
+whether that area's events and mail go to the writer at all (on by default); with it off, the area's
+items still show in the brief, without suggestions.
+
+### Claude
+
+1. Create an API key at <https://console.anthropic.com> (Settings → API keys).
+2. Paste it under **Claude**, **Save key**, pick a model and select **Claude (cloud)**.
+
+API use is billed by Anthropic per token, **separately from any Claude subscription** (Pro, Max): a
+subscription does not cover it. Prices per million tokens (input / output, USD): Opus 5.5 4 / 20,
+Sonnet 5.5 2 / 10, Haiku 5.5 0.10 / 0.50. Callsheet never switches model for you. The key is stored in
+`callsheet.db` and only its last 4 characters are ever shown. **Test key** sends a one-line request.
+
+### Local model
+
+Any OpenAI-compatible server on your network works: llama.cpp (`llama-server`), Ollama, LM Studio.
+
+1. Start the server so Home Assistant can reach it, for example `http://192.168.10.157:8080/v1`.
+2. Under **Local model**, enter the **Server URL** (ending in `/v1`), the **Model** exactly as the server
+   lists it (for example `gemma-4-26b-a4b-it-qat-q4_0`) and an API key only if the server needs one.
+3. **Test connection** lists the models the server offers (`GET /models`; it doesn't load a model).
+4. Select **Local model**.
+
+Callsheet asks for JSON (`response_format: json_object`) with up to 8,192 tokens, so thinking models have
+room to think before they answer; it reads only the answer, not the thinking. The first run after the
+server starts can take about a minute while the model loads; Callsheet waits up to 5 minutes. With
+**If the local model fails, use Claude instead** on (off by default), a failed local run is sent to Claude
+if a Claude key is saved; off keeps your data on your network.
+
+### App options
+
+The app's **Configuration** tab in Home Assistant has two optional fields, `writer_local_url` and
+`writer_local_model`. When both are filled and the writer was never changed in Callsheet's setup, the app
+turns on the local writer with that server and model at start-up. Once you change the writer in setup,
+setup wins and these options are ignored. Empty fields change nothing.
+
 ## Your data
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable
   only by the app): your settings, areas, VIPs, the Google client secret, the account sign-in tokens and
   the latest brief. Nothing is sent anywhere else.
 - Home Assistant backups of this app include that file, so treat backups as private.
-- The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs.
+- The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs, and, when you
+  turn on the AI writer, to `api.anthropic.com` (Claude) or the local model server you entered.
 
 ## Troubleshooting
 
@@ -82,4 +135,9 @@ Google. You can check or remove access any time at <https://myaccount.google.com
 - An account says it needs to be connected again: Google ended the sign-in (password change, access
   removed, or the client still in Testing mode). Connect it again.
 - "Google said no access": check that both APIs are enabled in your Google Cloud project (step 2).
+- "The local model ran out of room; try again": the model spent all its tokens thinking. Refresh again,
+  or pick a model that thinks less.
+- "Couldn't reach the local model": check the Server URL and that the server is running; **Test
+  connection** should list your model.
+- "The Anthropic API key was refused": create a new key and save it again.
 - The app only answers the Home Assistant ingress proxy. It has no port of its own on purpose.
