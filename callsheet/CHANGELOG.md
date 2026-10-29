@@ -12,6 +12,7 @@
   shorter messages instead.
 - Claude writer: uses the same schema with replies keyed by row id, so both writers share one reader.
   Everything else about the Claude call is unchanged.
+- Every flagged reply now gets a suggestion; the writer can no longer leave one blank.
 - Mail sent to the writer leaves out quoted history, signatures, "Sent from my …" footers and long legal
   disclaimers: about half the prompt and half the wait on a local model.
 - The writer is told never to state approvals, payments or decisions, and each draft is checked: one that

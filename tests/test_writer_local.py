@@ -37,7 +37,7 @@ class SchemaTest(unittest.TestCase):
         rep = writer.build_schema(ids)["properties"]["replies"]
         self.assertEqual(rep["required"], ids)
         self.assertEqual(list(rep["properties"]), ids)
-        self.assertTrue(all(v == {"type": "string"} for v in rep["properties"].values()))
+        self.assertTrue(all(v == {"type": "string", "minLength": 1} for v in rep["properties"].values()))
         self.assertIs(rep["additionalProperties"], False)
         self.assertEqual(writer.build_schema(set(ids))["properties"]["replies"]["required"], sorted(ids))
 
@@ -45,6 +45,7 @@ class SchemaTest(unittest.TestCase):
         text = writer.local_system(["r1", "r2"])
         self.assertIn(json.dumps(writer.build_schema(["r1", "r2"])), text)
         self.assertIn("an object keyed by row id", text)
+        self.assertNotIn("empty string", writer.SYSTEM_PROMPT)  # every flagged row must get a suggestion
         self.assertIn("Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, "
                       "and never commit the owner to an amount, date or decision. Where a reply needs any of these, "
                       "write a [placeholder] for the owner to fill in.", " ".join(writer.SYSTEM_PROMPT.split()))
@@ -283,6 +284,7 @@ class LocalRunTest(LocalBase):
     def test_empty_suggestions_are_counted(self):
         self.seed()
         self.local_on()
+        # a server that ignores minLength: the blank one is dropped and counted
         self.loc.contents = ['{"summary": "Two wait.", "replies": {"r1": "  ", "r2": "Sure."}}']
         b = self.sync_brief()
         self.assertEqual([r.get("suggestion") for r in b["replies"]], [None, "Sure."])

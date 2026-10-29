@@ -48,7 +48,8 @@ omissions can't happen. Claude gets it as `output_config.format.json_schema`; th
 `response_format.json_schema` and, with the prompt, in the system message.
 - Suggestions: the reply body only, in the owner's voice, short, same language as the thread, no subject
   line, no sign-off name unless the thread uses one. Facts the owner must supply go in [square brackets].
-  An empty string = no suggestion.
+  Every id must get a non-empty string (`minLength: 1`); a blank one from a server that ignores it is dropped
+  and counted (`empty_suggestions`).
 - `parse_output` reads the object form and the 0.3.0 array form (`[{"id", "suggestion"}]`). Unknown ids and
   empty strings are dropped. Clip summary to 600 chars, suggestions to 1500 chars.
 - System prompt also says: "Never write that anything has been approved, paid, sent, signed, booked, agreed

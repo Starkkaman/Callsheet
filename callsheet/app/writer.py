@@ -70,7 +70,7 @@ def build_schema(ids):
         "type": "object",
         "properties": {
             "summary": {"type": "string"},
-            "replies": {"type": "object", "properties": {i: {"type": "string"} for i in ids},
+            "replies": {"type": "object", "properties": {i: {"type": "string", "minLength": 1} for i in ids},
                         "required": ids, "additionalProperties": False},
         },
         "required": ["summary", "replies"],
@@ -94,8 +94,7 @@ waiting). No greeting, no sign-off, no lists, no markdown.
 replies: an object keyed by row id, with exactly one entry for each reply row that has "suggest": true and \
 no others. The value is the reply body only, in the owner's voice, short, in the same language as the \
 thread. No subject line, and no sign-off name unless the thread uses one. If the reply needs facts only the \
-owner knows, write a placeholder in square brackets, for example "[time that suits you]". If you can't help \
-with a row, use an empty string.
+owner knows, write a placeholder in square brackets, for example "[time that suits you]".
 
 Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, and never commit \
 the owner to an amount, date or decision. Where a reply needs any of these, write a [placeholder] for the \
