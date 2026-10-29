@@ -9,13 +9,14 @@ import re
 import sys
 import time
 
+import evaluate
 import writer
 
 import google
 import rules
 from oauth import OAuthFlows
 from scheduler import Scheduler
-from store import InputError, NotFound, Store
+from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -24,6 +25,13 @@ SAMPLE = HERE / "sample_brief.json"
 
 class MethodNotAllowed(Exception):
     pass
+
+
+class Download:
+    """A file response (not JSON): server.py sends it as an attachment."""
+
+    def __init__(self, body, content_type, filename):
+        self.body, self.content_type, self.filename = body, content_type, filename
 
 
 def load_sample():
@@ -44,6 +52,7 @@ class App:
         self.flows = OAuthFlows(self.store, clock=clock)
         self.syncer = Syncer(self.store, clock=clock)
         self.scheduler = Scheduler(self.store, self.syncer, clock=clock)
+        self.evaluator = evaluate.Evaluator(self.store, self.syncer, clock=clock)
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -63,6 +72,12 @@ class App:
             ("PATCH", r"writer", self.patch_writer),
             ("DELETE", r"writer/claude-key", self.delete_claude_key),
             ("POST", r"writer/test", self.test_writer),
+            ("PATCH", r"eval/settings", self.patch_eval),
+            ("GET", r"eval/status", self.eval_status),
+            ("POST", r"eval/run", self.eval_run),
+            ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
+            ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
+            ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
         ]
 
     def _apply_options(self, data_dir):
@@ -118,6 +133,7 @@ class App:
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
+                "eval": self.store.eval_settings(),
                 "setup_done": self.store.setup_done() or (client["configured"] and bool(accounts))}
 
     # --- Google client ----------------------------------------------------
@@ -199,3 +215,44 @@ class App:
         except writer.WriterError as e:
             return {"ok": False, "message": str(e)}
         return {"ok": True, "message": message}
+
+    # --- writer evaluation (owner-run; evaluate.py) -------------------------
+    def patch_eval(self, body):
+        return self.store.update_eval(_obj(body))
+
+    def _eval_on(self):
+        if not self.store.eval_settings()["enabled"]:
+            raise NotFound(evaluate.OFF)
+        return self.evaluator
+
+    def eval_status(self, _body=None):
+        return self._eval_on().status()
+
+    def eval_run(self, _body):
+        try:
+            return self._eval_on().start()
+        except evaluate.Refused as e:
+            raise Conflict(str(e)) from None
+
+    def _found(self, value):
+        if value is None:
+            raise NotFound("That evaluation run doesn't exist.")
+        return value
+
+    def eval_view(self, _body, run_id):
+        return self._found(self._eval_on().view(run_id))
+
+    def eval_choices(self, body, run_id):
+        try:
+            return self._found(self._eval_on().choose(run_id, _obj(body)))
+        except evaluate.Refused as e:
+            raise Conflict(str(e)) from None
+        except InputError:
+            raise
+        except ValueError as e:
+            raise InputError(str(e)) from None
+
+    def eval_export(self, _body, run_id):
+        text = self._found(self._eval_on().export(run_id))
+        return Download(text.encode("utf-8"), "application/x-ndjson; charset=utf-8",
+                        f"callsheet-writer-eval-{run_id}.jsonl")

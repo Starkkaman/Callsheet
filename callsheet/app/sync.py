@@ -77,7 +77,10 @@ class Syncer:
         return fn(self._token(acc, client, force=True), *args)
 
     # --- one sync ---------------------------------------------------------
-    def _run(self):
+    def _read(self, live=True):
+        """The Google read path and the rules: returns the brief and what the writer input needs. With
+        live=False (the owner-run writer evaluation) account status is not changed; refreshed access
+        tokens are still saved, as in a sync."""
         t0 = self.clock()
         self._deadline = t0 + DEADLINE_S
         settings = self.store.settings()
@@ -105,7 +108,8 @@ class Syncer:
             if not client:
                 n["failed"] += 1
                 msg = "the Google client ID and secret are missing. Add them again."
-                self.store.set_status(acc["id"], "error", msg[0].upper() + msg[1:])
+                if live:
+                    self.store.set_status(acc["id"], "error", msg[0].upper() + msg[1:])
                 errors.append(f"Couldn't read {acc['email']}: {msg}")
                 continue
             problems, reconnect = [], False
@@ -142,12 +146,13 @@ class Syncer:
                         problems.append(str(e) + " Reconnect the account.")
                         break
                     problems.append(f"{part}: {e}")
-            if reconnect:
-                self.store.set_status(acc["id"], "needs_reconnect", problems[-1])
-            elif problems:
-                self.store.set_status(acc["id"], "error", "; ".join(problems))
-            else:
-                self.store.set_status(acc["id"], "connected", None)
+            if live:  # the evaluation's read leaves account status as it is
+                if reconnect:
+                    self.store.set_status(acc["id"], "needs_reconnect", problems[-1])
+                elif problems:
+                    self.store.set_status(acc["id"], "error", "; ".join(problems))
+                else:
+                    self.store.set_status(acc["id"], "connected", None)
             if problems:
                 n["failed"] += 1
                 errors.append(f"Couldn't read {acc['email']}: {'; '.join(problems)}")
@@ -178,6 +183,14 @@ class Syncer:
             "schedule": schedule, "replies": replies, "heads_up": heads_up,
             "sources": f"Written {rules.hhmm(now)} from {mailboxes} mailbox{'es' if mailboxes != 1 else ''}, "
                        f"{n['calendars']} calendar{'s' if n['calendars'] != 1 else ''}"}
+        return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
+                "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
+
+    def _run(self):
+        r = self._read()
+        t0, brief, errors, n, schedule, replies = r["t0"], r["brief"], r["errors"], r["n"], r["schedule"], \
+            r["brief"]["replies"]
+        written = brief["written_at"]
         self.store.set_cached_brief(brief)
         last = {"at": written, "ok": not errors, "errors": errors}
         self.store.set_last_sync(last)
@@ -186,8 +199,17 @@ class Syncer:
                  f"{len(schedule)} on schedule, {len(replies)} need a reply, {self.clock() - t0:.1f}s")
         wcfg = self.store.writer_config()
         if wcfg["provider"] != "off":
-            self._write(wcfg, brief, refs, events, areas, settings, tz, day, client)
+            self._write(wcfg, brief, r["refs"], r["events"], r["areas"], r["settings"], r["tz"], r["day"], r["client"])
         return last
+
+    def writer_data(self, wcfg):
+        """For the owner-run writer evaluation (evaluate.py): the writer input a sync would build right now
+        (same Google reads, rules, stripping and row ids) without storing anything: no cached brief, last
+        sync, account status or last writer. The caller holds self.lock. Returns (data, ids, read_errors)."""
+        r = self._read(live=False)
+        data, ids = self._writer_input(wcfg, r["brief"], r["refs"], r["events"], r["areas"], r["settings"],
+                                       r["tz"], r["day"], r["client"])
+        return data, ids, len(r["errors"])
 
     # --- the AI writer ----------------------------------------------------
     def _writer_input(self, wcfg, brief, refs, events, areas, settings, tz, day, client):

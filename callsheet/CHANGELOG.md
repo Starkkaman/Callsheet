@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.3
+
+- **Writer evaluation** (for the owner, off by default): compare local model setups on today's real brief
+  data, blind. Turn on **Show the evaluation tools** under Setup, Delivery, Local model, **Advanced**, then
+  open **Writer evaluation**.
+- It only runs when you press **Run evaluation**: never on a schedule, and not within 10 minutes of a
+  brief or check-in, while a refresh runs, or while another evaluation runs.
+- It reads your mail and calendar the same read-only way a refresh does, and never changes the live brief,
+  the last refresh or the last writer run.
+- It sends the real brief data only to the local model server you configured: Gemma with thinking off (as
+  the brief uses it), then Qwen with a little and with more thinking, then one tiny request so Gemma is
+  loaded again. Model names can be changed under the evaluation's **Advanced**.
+- You compare two pairs of answers as A and B without names, pick the better one, and only then see which
+  setup wrote which and the numbers (valid JSON, tokens, time, empty or flagged drafts, placeholders).
+- Results stay in the app's storage (the last 5 runs, readable only by the app) until you download them
+  with **Download results** (one JSON line per setup, plus your choices).
+
 ## 0.3.2
 
 - 0.3.1 (direct "Open in Gmail" links) is a separate branch that is not merged yet; this release is built

@@ -127,3 +127,18 @@ the original text is kept.
 - Brief: a summary band under the date header (`summary.text`, small "Written by <by>" line). Each reply row with
   a suggestion gets a "Suggested reply" disclosure: the text (pre-wrap), a Copy button (navigator.clipboard in
   the click handler, fall back to selecting the text), and the existing Open link. Copy says "Copied".
+
+## Writer evaluation (since 0.3.3)
+Owner-run, off by default (`Show the evaluation tools` under Delivery → Local model → Advanced; when off,
+`api/eval/*` answers 404). `POST api/eval/run` (409 within 10 min of an enabled call time, while a sync or
+another run is going, or without a local base URL) reads Google through `Syncer.writer_data` (same reads,
+`_writer_input`, stripping and ids; no cached brief, last_sync, last_writer or account status written), fits
+one payload for the largest answer room, then sends G0 (production request, thinking off), Q-low
+(`enable_thinking` true, `reasoning_effort` low, `reasoning_budget_tokens` 2048, max_tokens 6144, 450 s),
+Q-med (medium, 4096, 8192, 450 s) and a Gemma reload (max_tokens 8) to the configured local server, one at
+a time, with the usual retry while loading. Each setup is gated by the call-time window again. Files in
+`<data>/writer-eval/<UTC>/` (payload.txt, data.json, responses.jsonl, metrics.json, run.json, choices.json;
+0700/0600, last 5 kept). Metrics from `evalscore.py` and `states_decision`. `GET api/eval/<run>` returns the
+two blind pairs (G0 vs Q-med, Q-low vs Q-med; order seeded per run) without names until `POST
+api/eval/<run>/choices`; `GET api/eval/<run>/export` is an NDJSON attachment. Model ids: `PATCH
+api/eval/settings {gemma_model?, qwen_model?}`. See `evaluate.py`.

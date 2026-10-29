@@ -15,6 +15,7 @@ import threading
 import urllib.parse
 import zoneinfo
 
+import evaluate
 import writer
 
 SCHEMA_VERSION = 1
@@ -49,6 +50,10 @@ class InputError(ValueError):
 
 class NotFound(LookupError):
     """Unknown id (HTTP 404). The message is a plain sentence."""
+
+
+class Conflict(RuntimeError):
+    """The request can't run right now (HTTP 409), e.g. a sync is running. The message is a plain sentence."""
 
 
 class StoreError(RuntimeError):
@@ -639,6 +644,33 @@ class Store:
             w["local"]["base_url"], w["local"]["model"] = base_url, model.strip()
             self._set_meta("writer", w)
         return True
+
+    # --- writer evaluation (owner-run, see evaluate.py) -------------------
+    def eval_settings(self):
+        """{enabled (default off), gemma_model, qwen_model}: model ids the evaluation sends to the local server."""
+        e = {"enabled": False, "gemma_model": evaluate.GEMMA_MODEL, "qwen_model": evaluate.QWEN_MODEL}
+        saved = self._get_meta("eval", {})
+        e.update({k: v for k, v in (saved if isinstance(saved, dict) else {}).items() if k in e})
+        return e
+
+    def update_eval(self, patch):
+        if not isinstance(patch, dict):
+            raise InputError("Send the evaluation settings as a JSON object.")
+        with self.lock:
+            e = self.eval_settings()
+            for key, val in patch.items():
+                if key == "enabled":
+                    if not isinstance(val, bool):
+                        raise InputError("enabled must be true or false.")
+                    e["enabled"] = val
+                elif key in ("gemma_model", "qwen_model"):
+                    if not isinstance(val, str) or len(val.strip()) > 120 or re.search(r"[\x00-\x1f]", val):
+                        raise InputError("The model name must be text of at most 120 characters.")
+                    e[key] = val.strip() or (evaluate.GEMMA_MODEL if key == "gemma_model" else evaluate.QWEN_MODEL)
+                else:
+                    raise InputError(f"The evaluation settings can't change {str(key)[:40]}.")
+            self._set_meta("eval", e)
+        return e
 
     def last_writer(self):
         return self._get_meta("last_writer", {"at": None, "ok": None, "by": None, "input_tokens": 0,

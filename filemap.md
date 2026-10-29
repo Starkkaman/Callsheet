@@ -5,24 +5,26 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.2, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.3, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
 - `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
-- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors; refuses to start if the database can't be opened.
-- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync, writer); seeds the local writer from `options.json`.
-- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, last sync, last writer run, cached brief.
+- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors (409 for conflicts), attachment downloads; refuses to start if the database can't be opened.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync, writer, writer evaluation); seeds the local writer from `options.json`.
+- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
 - `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
+- `callsheet/app/evaluate.py`: owner-run writer evaluation (0.3.3): refusal checks (call-time window, sync or run busy, no local server), builds the writer input like a sync without storing anything live, G0 / Q-low / Q-med requests and the Gemma reload to the local server, per-setup metrics, `writer-eval/<UTC time>/` files (0700/0600, last 5 kept), blind A/B pairs seeded per run, choices and the NDJSON export.
+- `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons, call times, brief composition.
-- `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
+- `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors; the read path is shared with the writer evaluation), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
 - `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
 - `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
 - `callsheet/app/static/index.html`: page shell: header (wordmark, sample tag, look picker) and main.
 - `callsheet/app/static/app.css`: theme tokens (from themes.css) + Daily Brief styles, phone under 700px.
-- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block.
+- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block; the Writer evaluation page (#eval).
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, 403 for other clients, relative and offline URLs.
@@ -33,6 +35,7 @@
 - `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content and timings, "Loading model" 500s, dropped connections) for tests; record requests.
 - `tests/test_writer.py`: AI writer end to end against the fakes (Claude tests skip without the `anthropic` package): settings, payload minimisation, injection, errors, local JSON mode, fallback, app options seeding.
 - `tests/test_writer_local.py`: writer fixes (0.3.2) against the fakes: per-request schema (replies keyed by row id, both writers, legacy array), quote and signature stripping, decision/payment post-check and its warning, thinking off/on request body, retry while the model loads, answer rescued from the thinking channel, counts-only logs, local settings validation.
+- `tests/test_eval.py`: writer evaluation against fake Google and a fake local server that answers per model id (and 503 "Loading model"): toggle off, call-time window, concurrency, live brief unchanged, request order and bodies, storage and retention, metrics, blind pairs, choices, export.
 - `tests/test_upgrade.py`: a 0.2.0 database opens unchanged with 0.3.0 code and a 0.3.0 database with 0.3.2 code; options seeding writes only the writer; an unreadable or newer database stops the app.
 - `tests/fixtures/store_0_2_0.py`: frozen 0.2.0 `store.py`, used to build the 0.2.0 database.
 - `tests/fixtures/store_0_3_0.py`: frozen 0.3.0 `store.py`, used to build the 0.3.0 database.

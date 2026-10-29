@@ -22,7 +22,7 @@ import urllib.parse
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import api  # noqa: E402
-from store import InputError, NotFound, StoreError  # noqa: E402
+from store import Conflict, InputError, NotFound, StoreError  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -139,6 +139,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json({"error": str(e)}, head, 400)
         except NotFound as e:
             return self._send_json({"error": str(e)}, head, 404)
+        except Conflict as e:
+            return self._send_json({"error": str(e)}, head, 409)
         except api.MethodNotAllowed:
             return self._send_json({"error": "That action isn't possible here."}, head, 405)
         except Exception:
@@ -146,9 +148,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             sys.stderr.write(traceback.format_exc())
             return self._send_json({"error": "Something went wrong inside Callsheet. Check the app log."},
                                    head, 500)
+        if isinstance(data, api.Download):
+            return self._send_file(data, head)
         return self._send_json(data, head)
 
     # --- responses -----------------------------------------------------
+    def _send_file(self, dl, head):
+        """An attachment download (the writer evaluation export). The filename is built by api.py from a
+        checked run id, so it needs no escaping."""
+        self.send_response(200)
+        self.send_header("Content-Type", dl.content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{dl.filename}"')
+        self.send_header("Content-Length", str(len(dl.body)))
+        self.end_headers()
+        if not head:
+            self.wfile.write(dl.body)
+        return True
+
     def _send_json(self, data, head, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)

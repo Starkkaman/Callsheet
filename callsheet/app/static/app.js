@@ -1,5 +1,6 @@
 /* Callsheet: Daily Brief page + Setup.
-   Hash routes: #brief (default) and #setup (the step lives in memory).
+   Hash routes: #brief (default), #setup (the step lives in memory) and #eval (the owner-run writer evaluation,
+   only when its tools are turned on in Setup, Delivery, Advanced).
    Fetches api/brief and api/state (relative URLs: works under the HA ingress prefix). Brief: v3 frame A on desktop,
    v3 frame B's structure and order under 700px. Setup: v3 setup view, six steps wired to the step-2 API.
    Data is only ever inserted as text (textContent), never as HTML. */
@@ -467,14 +468,16 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : 'brief';
+    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : 'brief';
     var changed = v !== ui.view;
     ui.view = v;
-    setupBtn.hidden = v === 'setup'; backBtn.hidden = v !== 'setup'; fresh.hidden = v !== 'brief';
+    setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief';
+    if (v !== 'eval') stopEvalPoll();
     refreshErr.textContent = '';
     if (!changed && main.querySelector('.sheet')) return;
     window.scrollTo(0, 0);
     if (v === 'setup') { ui.confirm = null; loadState().then(function () { return showSetup(); }, function () { return showSetup(); }); }
+    else if (v === 'eval') showEval();
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -997,10 +1000,22 @@
       });
       return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
     }
-    var advP = h('div', { class: 'lm', id: 'w-adv', hidden: !ui.writerAdv }, [
-      numField('w-lmax', 'max_tokens', 'Max tokens for the answer', 512, 32768),
-      numField('w-lctx', 'context', 'Context size of the server (tokens)', 2048, 1048576),
-      numField('w-ltime', 'timeout', 'Timeout (seconds)', 30, 1800)]);
+    /* evaluation tools (off by default): a switch, and the way to the Writer evaluation page */
+    var ev = S.eval || {}, evErr = errBox();
+    var evSw = sw(ev.enabled === true, 'Show the evaluation tools', function () {
+      run([evSw], evErr, function () { return api('PATCH', 'api/eval/settings', { enabled: !(S.eval && S.eval.enabled) }); }, function (r) {
+        S.eval = r || S.eval; renderSetup('[data-fk="ev-sw"]');
+      });
+    });
+    evSw.setAttribute('data-fk', 'ev-sw');
+    var advP = h('div', { id: 'w-adv', hidden: !ui.writerAdv }, [
+      h('div', { class: 'lm' }, [
+        numField('w-lmax', 'max_tokens', 'Max tokens for the answer', 512, 32768),
+        numField('w-lctx', 'context', 'Context size of the server (tokens)', 2048, 1048576),
+        numField('w-ltime', 'timeout', 'Timeout (seconds)', 30, 1800)]),
+      h('div', { class: 'swrow' }, [evSw, h('span', { 'aria-hidden': 'true' }, 'Show the evaluation tools')]), evErr,
+      h('p', { class: 'note' }, 'Compare local model setups on today\u2019s data, side by side and without names. It only runs when you press its button.'),
+      ev.enabled ? h('div', { class: 'testrow' }, btn('act', 'Writer evaluation', { 'data-fk': 'ev-open' }, function () { location.hash = 'eval'; })) : null]);
     var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(!!ui.writerAdv), 'aria-controls': 'w-adv', 'data-fk': 'w-adv' }, function () {
       ui.writerAdv = !ui.writerAdv;
       adv.setAttribute('aria-expanded', String(ui.writerAdv)); advP.hidden = !ui.writerAdv;
@@ -1088,6 +1103,154 @@
       err,
       h('p', { class: 'syncst', role: 'status' }, ls.at ? 'Last refreshed ' + fmtWhen(ls.at, true) + (ls.ok === false ? ', with problems:' : '.') : 'Not refreshed yet.'),
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+
+  /* ---------- writer evaluation (#eval): owner-run, blind A/B, from Setup, Delivery, Advanced ---------- */
+  var EV = { status: null, run: null, picks: {}, adv: false, timer: null, seq: 0 };
+  var EVSTATUS = { running: 'Running', done: 'Finished', stopped: 'Stopped early', failed: 'Didn’t work', interrupted: 'Interrupted (Callsheet restarted)', unreadable: 'Can’t be read' };
+  var METRICS = [
+    ['valid_json', 'Valid JSON'], ['schema_valid', 'Matches the answer format'], ['finish_reason', 'Finish reason'],
+    ['wall_s', 'Time (seconds)'], ['prompt_tokens', 'Prompt tokens'], ['completion_tokens', 'Answer tokens'],
+    ['prompt_n', 'Prompt tokens processed'], ['cache_n', 'Prompt tokens from cache'], ['predicted_per_second', 'Tokens per second'],
+    ['reasoning_chars', 'Thinking (characters)'], ['ids_returned', 'Drafts returned'], ['ids_expected', 'Drafts asked for'],
+    ['empties', 'Empty drafts'], ['flagged', 'Flagged drafts'], ['placeholder_used', 'Drafts with a [placeholder]'],
+    ['placeholder_needed', 'Threads that need one'], ['invented_when_needed', 'Made-up answer where one was needed'], ['error', 'Problem']];
+  function stopEvalPoll() { if (EV.timer) { clearTimeout(EV.timer); EV.timer = null; } }
+  function fmtSecs(n) { n = Math.max(0, Math.round(Number(n) || 0)); return n < 60 ? n + ' s' : Math.floor(n / 60) + ' min ' + (n % 60) + ' s'; }
+  function showEval() {
+    var seq = ++EV.seq;
+    stopEvalPoll();
+    var st = S ? Promise.resolve(S) : loadState();
+    return st.then(function () { return api('GET', 'api/eval/status'); }).then(function (r) {
+      if (seq !== EV.seq || ui.view !== 'eval') return;
+      EV.status = r;
+      if (!EV.run || !r.runs.some(function (x) { return x.id === EV.run.id; })) EV.run = null;
+      var open = EV.run ? api('GET', 'api/eval/' + encodeURIComponent(EV.run.id)) : Promise.resolve(null);
+      return open.then(function (v) {
+        if (seq !== EV.seq || ui.view !== 'eval') return;
+        if (v) EV.run = v;
+        renderEval();
+        if (r.running) EV.timer = setTimeout(showEval, 3000);
+      });
+    }).catch(function (e) { if (seq === EV.seq && ui.view === 'eval') status('Could not load the writer evaluation (' + e.message + ')'); });
+  }
+  function openRun(id) {
+    run([], document.getElementById('ev-err'), function () { return api('GET', 'api/eval/' + encodeURIComponent(id)); }, function (v) {
+      EV.run = v; EV.picks = {}; renderEval('#ev-run');
+    });
+  }
+  function renderEval(focusSel) {
+    var r = EV.status || {}, err = h('p', { class: 'err', id: 'ev-err', role: 'alert' });
+    var models = r.models || {};
+    function modelField(id, key, label, value) {
+      var inp = on(h('input', { class: 'inp', type: 'text', id: id, value: value || '', autocomplete: 'off', spellcheck: 'false' }), 'change', function () {
+        var body = {}; body[key] = inp.value.trim();
+        run([], err, function () { return api('PATCH', 'api/eval/settings', body); }, function (s) {
+          S.eval = s; models[key === 'gemma_model' ? 'gemma' : 'qwen'] = s[key]; inp.value = s[key];
+        });
+      });
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+    }
+    var advP = h('div', { class: 'lm', id: 'ev-adv', hidden: !EV.adv }, [
+      modelField('ev-gemma', 'gemma_model', 'Gemma model name on the server', models.gemma),
+      modelField('ev-qwen', 'qwen_model', 'Qwen model name on the server', models.qwen)]);
+    var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(EV.adv), 'aria-controls': 'ev-adv' }, function () {
+      EV.adv = !EV.adv; adv.setAttribute('aria-expanded', String(EV.adv)); advP.hidden = !EV.adv;
+    });
+    var runB = btn('btn primary', 'Run evaluation', { disabled: r.reason ? true : null, 'data-fk': 'ev-run' }, function () {
+      run([runB], err, function () { return api('POST', 'api/eval/run', {}); }, function () { EV.run = null; showEval(); });
+    });
+    var p = r.progress, last = r.last;
+    var line = p ? 'Running: step ' + p.step + ' of ' + p.steps + ' · ' + p.config + ' · ' + fmtSecs(p.elapsed_s) :
+      last ? 'Last run: ' + (EVSTATUS[last.status] || last.status) + '.' : 'No runs yet.';
+    var runs = r.runs || [];
+    var body = [
+      h('p', { class: 'intro' }, 'Compare local model setups on today’s real brief data, without knowing which is which.'),
+      h('p', { class: 'note' }, 'It runs only when you press the button. Callsheet reads your mail and calendar the way a refresh does and sends that data only to your local model server. Three setups answer one after another (Gemma, then Qwen thinking a little and thinking more), then Gemma is loaded again. This can take up to half an hour. Your brief is never changed, and results stay in Callsheet until you download them.'),
+      adv, advP,
+      h('div', { class: 'go' }, [runB]),
+      r.reason && !p ? h('p', { class: 'note' }, r.reason) : null,
+      err,
+      h('p', { class: 'syncst' + (last && !p && (last.status === 'failed' || last.status === 'interrupted') ? ' bad' : ''), role: 'status' }, line),
+      !p && last && last.errors && last.errors.length ? h('ul', { class: 'syncerr' }, last.errors.map(function (x) { return h('li', null, String(x)); })) : null,
+      h('h2', { class: 'h3 where' }, 'Past runs'),
+      runs.length ? h('ul', { class: 'review' }, runs.map(function (x, i) {
+        return h('li', null, [h('span', { class: 'num' }, String(i + 1)), h('span', { class: 'nm' }, fmtWhen(x.at, true) || x.id),
+          h('span', { class: 'sum' }, (EVSTATUS[x.status] || x.status) + (x.chosen ? ' · choices submitted' : '')),
+          x.status === 'running' ? h('span') : btn('tbtn', 'Open', { 'aria-label': 'Open the run from ' + (fmtWhen(x.at, true) || x.id) }, function () { openRun(x.id); })]);
+      })) : h('p', { class: 'note' }, 'Nothing yet.'),
+      EV.run ? evalRun(EV.run) : null];
+    var sheet = h('div', { class: 'sheet wiz' }, [
+      h('div', { class: 'mast two' }, [
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup · Advanced'), h('h1', { id: 'ev-title', tabindex: '-1' }, 'Writer evaluation')]),
+        h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Runs kept'), h('div', { class: 'disp' }, runs.length + ' / 5')])]),
+      h('section', { class: 'step', 'aria-labelledby': 'ev-title' }, body),
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { ui.step = 5; location.hash = 'setup'; })])]);
+    var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
+    main.textContent = '';
+    add(main, sheet);
+    press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
+    syncBg();
+    var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
+    if (f) f.focus({ preventScroll: !focusSel });
+  }
+  function evalRun(v) {
+    var pairs = v.pairs || [], rows = v.rows || [], revealed = !!v.revealed, err = errBox();
+    function textBox(label, t) {
+      return h('div', { class: 'field' }, [h('span', { class: 'label' }, label),
+        h('div', { class: 'sugp' }, h('p', { class: 'sugtext' }, t ? String(t) : 'No usable answer.'))]);
+    }
+    function nameOf(cfg) {
+      var m = (v.metrics || []).filter(function (x) { return x.config === cfg; })[0];
+      return cfg + (m && m.model ? ' · ' + m.model : '');
+    }
+    var submit = btn('btn primary', 'Submit choices', { 'data-fk': 'ev-submit' }, function () {
+      var picks = {}, missing = pairs.some(function (p) { picks[p.id] = EV.picks[p.id]; return !picks[p.id]; });
+      if (missing) { err.textContent = 'Pick A, B or Same for every comparison first.'; return; }
+      run([submit], err, function () { return api('POST', 'api/eval/' + encodeURIComponent(v.id) + '/choices', { picks: picks }); }, function (r) {
+        EV.run = r; EV.picks = {}; showEval();
+      });
+    });
+    var out = [
+      h('h2', { class: 'h3 where', id: 'ev-run', tabindex: '-1' }, 'Run from ' + (fmtWhen(v.at, true) || v.id)),
+      v.errors && v.errors.length ? h('ul', { class: 'syncerr' }, v.errors.map(function (x) { return h('li', null, String(x)); })) : null,
+      h('div', { class: 'btns' }, [h('a', { class: 'btn', href: 'api/eval/' + encodeURIComponent(v.id) + '/export', download: 'callsheet-writer-eval-' + v.id + '.jsonl' }, 'Download results')]),
+      h('p', { class: 'note' }, 'The download holds the brief data that was sent and every answer. Keep it private.')];
+    if (!pairs.length) { out.push(h('p', { class: 'note' }, 'This run has nothing to compare.')); return out; }
+    if (!revealed) out.push(h('p', { class: 'note' }, 'Read each comparison and pick the better one. Which setup wrote A or B is shown after you submit.'));
+    pairs.forEach(function (p, i) {
+      var pick = revealed ? p.pick : EV.picks[p.id];
+      function choice(val, t) {
+        var sel = pick === val;
+        return btn('opt' + (sel ? ' sel' : ''), [h('span', { class: 'cb' + (sel ? ' sel' : ''), 'aria-hidden': 'true' }),
+          h('span', null, h('span', { class: 't' }, t)), h('span', { class: 'state' }, sel ? 'Selected' : '')],
+          { role: 'radio', 'aria-checked': String(sel), disabled: revealed ? true : null, 'data-fk': 'ev:' + p.id + ':' + val }, function () {
+            EV.picks[p.id] = val; renderEval('[data-fk="' + cssq('ev:' + p.id + ':' + val) + '"]');
+          });
+      }
+      out.push(h('div', { class: 'wpanel', role: 'group', 'aria-labelledby': 'ev-h-' + p.id }, [
+        h('h3', { class: 'label wh', id: 'ev-h-' + p.id }, 'Comparison ' + (i + 1) + (revealed ? ': A = ' + nameOf(p.a_config) + ', B = ' + nameOf(p.b_config) : '')),
+        h('div', { class: 'lm' }, [textBox('Summary A', p.a && p.a.summary), textBox('Summary B', p.b && p.b.summary)]),
+        rows.map(function (row) {
+          var da = p.a && p.a.drafts ? p.a.drafts[row.id] : null, db = p.b && p.b.drafts ? p.b.drafts[row.id] : null;
+          return [h('p', { class: 'note' }, [h('b', null, String(row.who || '')), row.subject ? ' · ' + String(row.subject) : '']),
+            h('div', { class: 'lm' }, [textBox('Draft A', da), textBox('Draft B', db)])];
+        }),
+        h('div', { class: 'opts', role: 'radiogroup', 'aria-label': 'Comparison ' + (i + 1) + ': which is better' }, [
+          choice('A', 'A is better'), choice('B', 'B is better'), choice('same', 'Same')])]));
+    });
+    if (!revealed) { out.push(h('div', { class: 'go' }, submit), err); return out; }
+    var ms = v.metrics || [];
+    out.push(h('h3', { class: 'h3 where' }, 'Numbers per setup'),
+      h('table', null, [
+        h('thead', null, h('tr', null, [h('th', null, 'Measure')].concat(ms.map(function (m) { return h('th', null, m.config); })))),
+        h('tbody', null, METRICS.map(function (k) {
+          return h('tr', null, [h('td', null, k[1])].concat(ms.map(function (m) {
+            var x = (m.metrics || {})[k[0]];
+            return h('td', null, x === true ? 'Yes' : x === false ? 'No' : x == null ? '—' : String(x));
+          })));
+        }))]));
+    return out;
   }
 
   route();

@@ -6,7 +6,7 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.3.2)
+## What it does today (0.3.3)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
@@ -123,6 +123,30 @@ a minute while the model loads; if the server says it is still loading, Callshee
 seconds later. With **If the local model fails, use Claude instead** on (off by default), a failed local
 run is sent to Claude if a Claude key is saved; off keeps your data on your network.
 
+### Writer evaluation (optional, for comparing local models)
+
+Off by default. Under Setup, Delivery, Local model, open **Advanced** and turn on **Show the evaluation
+tools**, then press **Writer evaluation**. When the switch is off the page is hidden and Callsheet refuses
+its requests.
+
+- **Run evaluation** reads your mail and calendar the same read-only way a refresh does and builds the same
+  writer input, but it never changes your brief, the last refresh or the last writer run. It only runs
+  when you press the button; it is refused within 10 minutes before or after a brief or check-in, while a
+  refresh runs, while another evaluation runs, or when no local model server is set.
+- The data goes only to your local model server, one request at a time: **Gemma** with thinking off (as
+  the brief uses it), **Qwen** thinking a little (`reasoning_effort` low, 2,048-token budget) and thinking
+  more (medium, 4,096), each with up to 450 seconds, then one tiny request so Gemma is loaded again. If a
+  brief comes within 10 minutes before a setup starts, the run stops early. A run can take up to about half
+  an hour. Under the page's **Advanced** you can change the model names if your server calls them
+  differently.
+- When it has finished, **Open** a run: two comparisons (Gemma against Qwen medium, Qwen low against Qwen
+  medium) show the summary and each draft as A and B, in a random order. Pick **A is better**, **B is
+  better** or **Same** for each and press **Submit choices**; only then does the page show which setup was
+  A or B and a table of numbers per setup.
+- Results are kept in the app's data folder under `writer-eval/` (the last 5 runs, readable only by the
+  app). **Download results** saves a file with the data that was sent, each setup's answer and numbers and
+  your choices. It contains your real mail text: keep it private.
+
 ### App options
 
 The app's **Configuration** tab in Home Assistant has two optional fields, `writer_local_url` and
@@ -134,7 +158,8 @@ setup wins and these options are ignored. Empty fields change nothing.
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable
   only by the app): your settings, areas, VIPs, the Google client secret, the account sign-in tokens and
-  the latest brief. Nothing is sent anywhere else.
+  the latest brief. Nothing is sent anywhere else. If you use the writer evaluation, its last 5 runs
+  (including the mail text that was sent to your local model) are kept in `writer-eval/` too.
 - Home Assistant backups of this app include that file, so treat backups as private.
 - The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs, and, when you
   turn on the AI writer, to `api.anthropic.com` (Claude) or the local model server you entered.
