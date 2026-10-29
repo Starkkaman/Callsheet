@@ -99,10 +99,14 @@ def key_hint(key):
     return "…" + key[-4:] if key else None
 
 
+LOCAL_NUMBER_NAMES = {"reasoning_budget": "The thinking budget", "max_tokens": "Max tokens",
+                      "context": "The context size", "timeout": "The timeout (seconds)"}
+
+
 def default_writer():
     return {"provider": "off",
             "claude": {"api_key": None, "model": writer.DEFAULT_MODEL},
-            "local": {"base_url": "", "model": "", "api_key": None},
+            "local": dict({"base_url": "", "model": "", "api_key": None}, **writer.LOCAL_DEFAULTS),
             "fallback_to_claude": False, "suggest_replies": True,
             # set on any change through the API: from then on the app options never touch the writer
             "configured_by_owner": False}
@@ -522,8 +526,8 @@ class Store:
         w = self.writer_config()
         return {"provider": w["provider"],
                 "claude": {"key_hint": key_hint(w["claude"]["api_key"]), "model": w["claude"]["model"]},
-                "local": {"base_url": w["local"]["base_url"], "model": w["local"]["model"],
-                          "key_hint": key_hint(w["local"]["api_key"])},
+                "local": dict({"base_url": w["local"]["base_url"], "model": w["local"]["model"],
+                               "key_hint": key_hint(w["local"]["api_key"])}, **writer.local_options(w["local"])),
                 "fallback_to_claude": w["fallback_to_claude"], "suggest_replies": w["suggest_replies"]}
 
     @staticmethod
@@ -576,7 +580,8 @@ class Store:
                             raise InputError(f"claude can't change {str(k)[:40]}.")
                 elif key == "local":
                     if not isinstance(val, dict):
-                        raise InputError("local takes base_url, model and api_key.")
+                        raise InputError("local takes base_url, model, api_key, thinking, reasoning_budget, "
+                                         "max_tokens, context and timeout.")
                     for k, v in val.items():
                         if k == "base_url":
                             w["local"]["base_url"] = self._check_base_url(v)
@@ -587,6 +592,16 @@ class Store:
                         elif k == "api_key":
                             v = "" if v is None else v
                             w["local"]["api_key"] = self._check_key(v, "an API key") or None
+                        elif k == "thinking":
+                            if not isinstance(v, bool):
+                                raise InputError("thinking must be true or false.")
+                            w["local"]["thinking"] = v
+                        elif k in writer.LOCAL_LIMITS:
+                            lo, hi = writer.LOCAL_LIMITS[k]
+                            if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+                                raise InputError(f"{LOCAL_NUMBER_NAMES[k]} must be a whole number from "
+                                                 f"{lo:,} to {hi:,}.")
+                            w["local"][k] = v
                         else:
                             raise InputError(f"local can't change {str(k)[:40]}.")
                 elif key in ("fallback_to_claude", "suggest_replies"):

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.2
+
+- 0.3.1 (direct "Open in Gmail" links) is a separate branch that is not merged yet; this release is built
+  on 0.3.0 and does not include it.
+- Local model: thinking is off by default (it used all the room on big briefs, so the answer came back
+  empty). A **Thinking** switch turns it on with a 1,536-token budget; off is recommended.
+- Local model: the answer must match a JSON schema made for each run, with one suggestion per thread
+  sent (no duplicates, none missing), and has a fixed 4,096 tokens of room. **Advanced** sets max tokens,
+  the server's context size and the timeout. A brief too big for the context is sent with fewer or
+  shorter messages instead.
+- Claude writer: uses the same schema with replies keyed by row id, so both writers share one reader.
+  Everything else about the Claude call is unchanged.
+- Mail sent to the writer leaves out quoted history, signatures, "Sent from my …" footers and long legal
+  disclaimers: about half the prompt and half the wait on a local model.
+- The writer is told never to state approvals, payments or decisions, and each draft is checked: one that
+  says something was approved, paid, sent, signed, booked or agreed gets "Check this draft: it states an
+  approval, payment or agreement you may not have made." above it.
+- Local model: one retry 10 seconds later while the server is still loading the model; an answer put in
+  the thinking channel by mistake is used; the log shows tokens, cache use and time per run (no content).
+
 ## 0.3.0
 
 - Optional AI writer: a short summary at the top of the brief and a suggested reply per "Needs a reply"

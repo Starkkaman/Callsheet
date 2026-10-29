@@ -282,7 +282,8 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
                                 "at": hhmm(at) if at else None}
             brief["sections"]["summary"] = "live"
         if not writer_on:
-            brief["replies"] = [{k: v for k, v in r.items() if k != "suggestion"} for r in brief["replies"]]
+            brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
+                                for r in brief["replies"]]
     else:
         brief.update(date_fields(now.date()))
         brief.update(kind=kind_for(settings, now), written_at=None, schedule=[], replies=[],

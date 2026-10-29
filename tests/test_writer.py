@@ -93,7 +93,8 @@ class WriterSettingsTest(WriterBase):
         st = self.ok("GET", "/api/state")
         self.assertEqual(st["writer"], {
             "provider": "off", "claude": {"key_hint": None, "model": "claude-opus-5-5"},
-            "local": {"base_url": "", "model": "", "key_hint": None},
+            "local": {"base_url": "", "model": "", "key_hint": None, "thinking": False, "reasoning_budget": 1536,
+                      "max_tokens": 4096, "context": 32768, "timeout": 300},
             "fallback_to_claude": False, "suggest_replies": True})
         self.assertEqual(st["last_writer"]["ok"], None)
         self.seed()
@@ -115,7 +116,8 @@ class WriterSettingsTest(WriterBase):
                                              "fallback_to_claude": True, "suggest_replies": False})
         self.assertEqual(w["claude"], {"key_hint": "…abcd", "model": "claude-haiku-5-5"})
         self.assertEqual(w["local"], {"base_url": "http://192.168.10.157:8080/v1", "model": "qwen3",
-                                      "key_hint": "…5555"})
+                                      "key_hint": "…5555", "thinking": False, "reasoning_budget": 1536,
+                                      "max_tokens": 4096, "context": 32768, "timeout": 300})
         self.assertEqual((w["fallback_to_claude"], w["suggest_replies"]), (True, False))
         for bad in ({"provider": "gpt"}, {"claude": {"api_key": "hello"}}, {"claude": {"model": "gpt-4"}},
                     {"local": {"base_url": "ftp://x"}}, {"local": {"base_url": "http://u:p@host/v1"}},
@@ -141,8 +143,7 @@ class ClaudeWriterTest(WriterBase):
         self.seed()
         self.claude_on()
         self.ant.output = {"summary": "Two overlapping meetings before noon. Priya waits on the budget.",
-                           "replies": [{"id": "r1", "suggestion": "Yes, I'll sign it off by [day]."},
-                                       {"id": "r2", "suggestion": "Friday works."}]}
+                           "replies": {"r1": "Yes, I'll sign it off by [day].", "r2": "Friday works."}}
         b = self.sync_brief()
         self.assertEqual(b["summary"]["text"], "Two overlapping meetings before noon. Priya waits on the budget.")
         self.assertEqual(b["summary"]["by"], "Claude Opus 5.5")
@@ -161,7 +162,10 @@ class ClaudeWriterTest(WriterBase):
         body = req["body"]
         self.assertEqual((body["model"], body["max_tokens"], body["fallbacks"]), ("claude-opus-5-5", 16000, "default"))
         self.assertEqual(body["output_config"], {"effort": "medium",
-                                                 "format": {"type": "json_schema", "schema": writer.SCHEMA}})
+                                                 "format": {"type": "json_schema",
+                                                            "schema": writer.build_schema(["r1", "r2"])}})
+        self.assertEqual(body["output_config"]["format"]["schema"]["properties"]["replies"]["required"], ["r1", "r2"])
+        self.assertIn("Never write that anything has been approved", body["system"])
         self.assertIn("untrusted content", body["system"])
         for banned in ("thinking", "temperature", "top_p", "top_k", "budget_tokens", "betas", "tools"):
             self.assertNotIn(banned, body)
@@ -351,14 +355,21 @@ class LocalWriterTest(WriterBase):
     def test_local_writes_with_json_mode(self):
         self.seed()
         self.local_on()
-        self.loc.contents = ['{"summary": "Local summary.", "replies": [{"id": "r2", "suggestion": "Sure."}]}']
+        self.loc.contents = ['{"summary": "Local summary.", "replies": {"r1": "", "r2": "Sure."}}']
         b = self.sync_brief()
         self.assertEqual(b["summary"]["by"], "Local · qwen3-coder")
         self.assertEqual(b["replies"][1]["suggestion"], "Sure.")
+        self.assertNotIn("suggestion", b["replies"][0])  # an empty string is no suggestion
         req = self.loc.chats()[0]
-        self.assertEqual(req["body"]["response_format"], {"type": "json_object"})
+        self.assertEqual(req["body"]["response_format"], {
+            "type": "json_schema", "json_schema": {"name": "brief", "strict": True,
+                                                   "schema": writer.build_schema(["r1", "r2"])}})
+        self.assertEqual(req["body"]["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertNotIn("reasoning_budget_tokens", req["body"])
         self.assertEqual(req["body"]["model"], "qwen3-coder")
-        self.assertGreaterEqual(req["body"]["max_tokens"], 4096)
+        self.assertEqual(req["body"]["max_tokens"], 4096)
+        self.assertIn(json.dumps(writer.build_schema(["r1", "r2"])), req["body"]["messages"][0]["content"])
+        self.assertIn("an object keyed by row id", req["body"]["messages"][0]["content"])
         self.assertEqual(req["headers"]["authorization"], "Bearer " + LOCAL_KEY)
         self.assertIn("JSON schema", req["body"]["messages"][0]["content"])
         self.assertIn("<data>", req["body"]["messages"][1]["content"])

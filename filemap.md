@@ -5,7 +5,7 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.0, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.2, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
 - `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
@@ -14,7 +14,7 @@
 - `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync, writer); seeds the local writer from `options.json`.
 - `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, last sync, last writer run, cached brief.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
-- `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and output schema, HTML to text, Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
+- `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons, call times, brief composition.
 - `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
@@ -30,10 +30,12 @@
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
-- `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content) for tests; record requests.
+- `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content and timings, "Loading model" 500s, dropped connections) for tests; record requests.
 - `tests/test_writer.py`: AI writer end to end against the fakes (Claude tests skip without the `anthropic` package): settings, payload minimisation, injection, errors, local JSON mode, fallback, app options seeding.
-- `tests/test_upgrade.py`: a 0.2.0 database opens unchanged with 0.3.0 code; options seeding writes only the writer; an unreadable or newer database stops the app.
+- `tests/test_writer_local.py`: writer fixes (0.3.2) against the fakes: per-request schema (replies keyed by row id, both writers, legacy array), quote and signature stripping, decision/payment post-check and its warning, thinking off/on request body, retry while the model loads, answer rescued from the thinking channel, counts-only logs, local settings validation.
+- `tests/test_upgrade.py`: a 0.2.0 database opens unchanged with 0.3.0 code and a 0.3.0 database with 0.3.2 code; options seeding writes only the writer; an unreadable or newer database stops the app.
 - `tests/fixtures/store_0_2_0.py`: frozen 0.2.0 `store.py`, used to build the 0.2.0 database.
+- `tests/fixtures/store_0_3_0.py`: frozen 0.3.0 `store.py`, used to build the 0.3.0 database.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
 - `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
 - `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).

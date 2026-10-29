@@ -274,7 +274,9 @@
         var open = tog.getAttribute('aria-expanded') !== 'true';
         tog.setAttribute('aria-expanded', String(open)); panel.hidden = !open;
       });
-      return h('div', { class: 'sug' }, [tog, panel]);
+      /* the server's post-check: the draft states an approval or payment as done. Still just a draft. */
+      var warn = typeof r.suggestion_warning === 'string' && r.suggestion_warning ? h('p', { class: 'err sugwarn' }, r.suggestion_warning) : null;
+      return h('div', { class: 'sug' }, [warn, tog, panel]);
     }
     function who(r, tagName) {
       var link = safeHttps(r.link);
@@ -980,6 +982,29 @@
     }) : null;
     var lTest = btn('act', 'Test connection', { 'data-fk': 'w-ltest' }, function () { testWriter('local', lTest, lRes, lErr); });
     var lRes = h('span', { class: 'testres', role: 'status' });
+    /* Thinking (off by default) and Advanced: max tokens, context size, timeout */
+    var thErr = errBox();
+    var th = sw(w.local.thinking === true, 'Thinking', function () {
+      patchWriter(function () { return { local: { thinking: writerOf().local.thinking !== true } }; }, thErr, [th], function (r) { th.setAttribute('aria-pressed', String(!!(r.local && r.local.thinking))); });
+    });
+    var advErr = errBox();
+    function numField(id, key, label, min, max) {
+      var inp = on(h('input', { class: 'inp', type: 'number', id: id, min: String(min), max: String(max), step: '1', inputmode: 'numeric', value: w.local[key] != null ? String(w.local[key]) : '' }), 'change', function () {
+        var v = inp.value.trim();
+        if (!v) return;
+        var body = { local: {} }; body.local[key] = Number(v);
+        patchWriter(body, advErr, [], function (r) { if (r && r.local && r.local[key] != null) inp.value = String(r.local[key]); });
+      });
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+    }
+    var advP = h('div', { class: 'lm', id: 'w-adv', hidden: !ui.writerAdv }, [
+      numField('w-lmax', 'max_tokens', 'Max tokens for the answer', 512, 32768),
+      numField('w-lctx', 'context', 'Context size of the server (tokens)', 2048, 1048576),
+      numField('w-ltime', 'timeout', 'Timeout (seconds)', 30, 1800)]);
+    var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(!!ui.writerAdv), 'aria-controls': 'w-adv', 'data-fk': 'w-adv' }, function () {
+      ui.writerAdv = !ui.writerAdv;
+      adv.setAttribute('aria-expanded', String(ui.writerAdv)); advP.hidden = !ui.writerAdv;
+    });
     var local = h('div', { class: 'wpanel' + (w.provider === 'local' ? '' : ' off'), role: 'group', 'aria-labelledby': 'w-lh' }, [
       h('h3', { class: 'label wh', id: 'w-lh' }, 'Local model'),
       h('div', { class: 'lm' }, [
@@ -989,6 +1014,9 @@
           lDel ? h('div', { class: 'btns kb' }, lDel) : null]),
         h('div', { class: 'testrow' }, [lTest, lRes])]),
       lErr,
+      h('div', { class: 'swrow' }, [th, h('span', { 'aria-hidden': 'true' }, 'Thinking')]), thErr,
+      h('p', { class: 'note' }, 'Slower. Off is recommended for this model.'),
+      adv, advP, advErr,
       h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.')]);
 
     var fbErr = errBox(), sgErr = errBox();

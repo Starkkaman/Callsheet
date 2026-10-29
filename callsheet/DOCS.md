@@ -6,7 +6,7 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.3.0)
+## What it does today (0.3.2)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
@@ -73,12 +73,19 @@ Google. You can check or remove access any time at <https://myaccount.google.com
 Off by default: the brief then looks exactly as in 0.2.0. Turn it on in **Setup → Delivery → Writer**.
 After each read (scheduled or **Refresh**) the writer gets the brief's facts (schedule, heads-ups, the
 replies due) plus, with **Suggest replies** on, the last up to 3 messages of at most 8 threads that need a
-reply (VIPs first, then the oldest; each message cut at 4,000 characters). Mail bodies are not stored;
-only the suggestions are. It adds:
+reply (VIPs first, then the oldest). Each message is sent without its quoted history ("On … wrote:" and
+the quoted lines below it, forwarded or replied-to headers), signature, "Sent from my …" footer and long
+legal disclaimer, and is cut at 4,000 characters. Mail bodies are not stored; only the suggestions are.
+It adds:
 
 - a summary band under the date ("Written by Claude Opus 5.5" or "Written by Local · <model>");
 - a **Suggested reply** under each reply row it could help with: open it, **Copy**, then paste the text
   into your reply in Gmail. Placeholders in [square brackets] are facts only you know. Nothing is sent.
+- The writer is told never to say that something was approved, paid, sent, signed, booked, agreed or
+  decided, and to leave a [placeholder] instead. Mail can still talk it into it, so Callsheet checks each
+  draft: one that states an approval, payment or agreement as done gets the line "Check this draft: it
+  states an approval, payment or agreement you may not have made." above it. The draft is still only a
+  draft.
 
 If the writer fails, the brief still shows (rules only) and Heads up says "The AI writer didn't run" and
 why. Setup shows the last run with its token counts. Per area, the **AI writer** chip in step 2 decides
@@ -105,11 +112,16 @@ Any OpenAI-compatible server on your network works: llama.cpp (`llama-server`), 
 3. **Test connection** lists the models the server offers (`GET /models`; it doesn't load a model).
 4. Select **Local model**.
 
-Callsheet asks for JSON (`response_format: json_object`) with up to 8,192 tokens, so thinking models have
-room to think before they answer; it reads only the answer, not the thinking. The first run after the
-server starts can take about a minute while the model loads; Callsheet waits up to 5 minutes. With
-**If the local model fails, use Claude instead** on (off by default), a failed local run is sent to Claude
-if a Claude key is saved; off keeps your data on your network.
+Callsheet asks for JSON that matches a schema made for each run (a summary and one suggested reply per
+thread it sent), with **thinking off** and room for a 4,096-token answer. **Thinking** (under Local model)
+turns the model's thinking on with a budget of 1,536 tokens on top; it is slower, and with Gemma 4 the
+answers were not better, so off is recommended. Callsheet reads only the answer; if a thinking model puts
+its answer in the thinking part by mistake, Callsheet uses it there. **Advanced** has the answer's max
+tokens, the server's context size (32,768 by default; if a big brief would not fit, Callsheet sends fewer
+or shorter messages) and the timeout (300 seconds). The first run after the server starts can take about
+a minute while the model loads; if the server says it is still loading, Callsheet tries once more 10
+seconds later. With **If the local model fails, use Claude instead** on (off by default), a failed local
+run is sent to Claude if a Claude key is saved; off keeps your data on your network.
 
 ### App options
 
@@ -135,8 +147,10 @@ setup wins and these options are ignored. Empty fields change nothing.
 - An account says it needs to be connected again: Google ended the sign-in (password change, access
   removed, or the client still in Testing mode). Connect it again.
 - "Google said no access": check that both APIs are enabled in your Google Cloud project (step 2).
-- "The local model ran out of room; try again": the model spent all its tokens thinking. Refresh again,
-  or pick a model that thinks less.
+- "The local model ran out of room; try again": the answer didn't fit in its max tokens (usually with
+  **Thinking** on). Turn Thinking off, or raise **Max tokens** under Advanced.
+- "The local model server was still loading the model": it was still loading after the retry. Refresh
+  again in a minute.
 - "Couldn't reach the local model": check the Server URL and that the server is running; **Test
   connection** should list your model.
 - "The Anthropic API key was refused": create a new key and save it again.

@@ -2,7 +2,8 @@
 areas, VIPs and settings stay byte-identical; the writer settings appear with their defaults. The app
 options seed only the writer. A database that can't be opened stops the app instead of being replaced.
 
-The 0.2.0 database is built with a frozen copy of the 0.2.0 store (tests/fixtures/store_0_2_0.py)."""
+The 0.2.0 database is built with a frozen copy of the 0.2.0 store (tests/fixtures/store_0_2_0.py). A 0.3.0
+database (tests/fixtures/store_0_3_0.py) opens unchanged with 0.3.2 code, which adds the local model options."""
 import importlib.util
 import json
 import os
@@ -140,6 +141,55 @@ class UpgradeTest(unittest.TestCase):
         logged = "".join(c.args[0] for c in err.write.call_args_list)
         self.assertIn("Callsheet can't start", logged)
         self.assertIn("left unchanged", logged)
+
+
+class Upgrade030Test(unittest.TestCase):
+    """A 0.3.0 database (local writer set up, a cached brief with suggestions) opens unchanged with 0.3.2
+    code; the new local options appear with their defaults and the saved writer settings are kept."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = pathlib.Path(self.tmp.name)
+        spec = importlib.util.spec_from_file_location("store_0_3_0", ROOT / "tests" / "fixtures" / "store_0_3_0.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        old = mod.Store(self.dir)
+        old.update_settings({"name": "Sam", "timezone": "Europe/Helsinki"})
+        old.update_writer({"provider": "local", "local": {"base_url": "http://192.168.10.157:8080/v1",
+                                                          "model": "gemma-4-26b-a4b-it-qat-q4_0", "api_key": "local-k-1234"},
+                           "claude": {"api_key": "sk-ant-api03-test-key-abcd"}, "fallback_to_claude": True})
+        old.set_last_writer({"at": "2026-10-29T06:30:00+02:00", "ok": True, "by": "Local · gemma",
+                             "input_tokens": 3000, "output_tokens": 400, "error": None})
+        old.set_cached_brief({"date": "2026-10-29", "kind": "Morning brief", "schedule": [], "heads_up": [],
+                              "replies": [{"id": "r1", "who": "Bob", "area": "personal", "text": "Lunch?",
+                                           "suggestion": "Friday works."}]})
+        self.writer_before = old.writer_config()
+        old.close()
+        self.before = dump(self.dir / store.DB_NAME)
+
+    def test_opens_unchanged_with_local_defaults(self):
+        s = store.Store(self.dir)
+        self.addCleanup(s.close)
+        self.assertEqual(dump(self.dir / store.DB_NAME), self.before)
+        w = s.writer_config()
+        for k in ("provider", "claude", "fallback_to_claude", "suggest_replies", "configured_by_owner"):
+            self.assertEqual(w[k], self.writer_before[k], k)
+        for k, v in self.writer_before["local"].items():
+            self.assertEqual(w["local"][k], v, k)
+        self.assertEqual({k: w["local"][k] for k in ("thinking", "reasoning_budget", "max_tokens", "context", "timeout")},
+                         {"thinking": False, "reasoning_budget": 1536, "max_tokens": 4096, "context": 32768,
+                          "timeout": 300})
+        self.assertEqual(s.last_writer()["input_tokens"], 3000)
+        self.assertEqual(s.cached_brief()["replies"][0]["suggestion"], "Friday works.")
+
+    def test_new_app_serves_the_old_brief(self):
+        app = api.App(self.dir)
+        self.addCleanup(app.close)
+        self.assertEqual(app.state()["writer"]["local"]["max_tokens"], 4096)
+        b = app.brief()  # the old cached brief (from another day) still composes
+        self.assertTrue(all("suggestion_warning" not in r for r in b.get("replies") or []))
+        self.assertEqual(dump(self.dir / store.DB_NAME), self.before)
 
 
 if __name__ == "__main__":

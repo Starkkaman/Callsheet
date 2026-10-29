@@ -29,6 +29,10 @@ class _Fake:
                 with fake.lock:
                     fake.requests.append(req)
                 status, data, extra = fake.answer(req)
+                if status is None:  # drop the connection without an answer (like a server restarting)
+                    self.close_connection = True
+                    self.connection.shutdown(2)
+                    return
                 out = json.dumps(data).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -54,7 +58,7 @@ class FakeAnthropic(_Fake):
     .category (for refusals), .status (error status), .reject_beta (400 naming fallbacks on beta calls)."""
 
     def __init__(self):
-        self.output = {"summary": "A calm day.", "replies": []}
+        self.output = {"summary": "A calm day.", "replies": {}}
         self.text = None  # raw text block instead of .output
         self.stop_reason = "end_turn"
         self.category = None
@@ -96,13 +100,19 @@ class FakeAnthropic(_Fake):
 class FakeLocal(_Fake):
     """OpenAI-compatible: GET /v1/models, POST /v1/chat/completions. .contents: queue of message contents
     (the last one repeats). .status: error status for every request. Like llama.cpp with a thinking model,
-    every answer also carries message.reasoning_content; .finish: finish_reason."""
+    every answer also carries message.reasoning_content (.reasoning); .finish: finish_reason; .timings: llama.cpp
+    timings. .loading: the next N chat requests get HTTP 500 "Loading model"; .resets: the next N chat requests
+    get the connection dropped."""
 
     def __init__(self):
-        self.contents = ['{"summary": "Local summary.", "replies": []}']
+        self.contents = ['{"summary": "Local summary.", "replies": {}}']
+        self.reasoning = '{"summary": "THINKING"}'
         self.models = ["qwen3-coder"]
         self.status = 200
         self.finish = "stop"
+        self.timings = {"prompt_n": 880, "cache_n": 20, "predicted_n": 120}
+        self.loading = 0
+        self.resets = 0
         super().__init__()
 
     @property
@@ -118,10 +128,17 @@ class FakeLocal(_Fake):
         if req["method"] == "GET" and req["path"] == "/v1/models":
             return 200, {"object": "list", "data": [{"id": m, "object": "model"} for m in self.models]}, None
         if req["method"] == "POST" and req["path"] == "/v1/chat/completions":
+            if self.resets:
+                self.resets -= 1
+                return None, None, None
+            if self.loading:
+                self.loading -= 1
+                return 500, {"error": {"code": 500, "message": "Loading model", "type": "unavailable_error"}}, None
             content = self.contents.pop(0) if len(self.contents) > 1 else self.contents[0]
             return 200, {"id": "c1", "object": "chat.completion", "model": (req["body"] or {}).get("model"),
                          "choices": [{"index": 0, "message": {"role": "assistant", "content": content,
-                                                              "reasoning_content": '{"summary": "THINKING"}'},
+                                                              "reasoning_content": self.reasoning},
                                       "finish_reason": self.finish}],
-                         "usage": {"prompt_tokens": 900, "completion_tokens": 120}}, None
+                         "usage": {"prompt_tokens": 900, "completion_tokens": 120},
+                         "timings": self.timings}, None
         return 404, {"error": {"message": "not found"}}, None

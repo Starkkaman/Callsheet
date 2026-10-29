@@ -227,7 +227,7 @@ class Syncer:
             if r["id"] in bodies:
                 item["messages"] = bodies[r["id"]]
             data["replies"].append(item)
-        return data, set(bodies)
+        return data, list(bodies)  # row order (VIP first, then oldest)
 
     def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
         t0 = self.clock()
@@ -238,8 +238,11 @@ class Syncer:
             payload = writer.build_payload(data)
             if provider == "local":
                 loc = wcfg["local"]
+                opts = writer.local_options(loc)
                 try:
-                    result = writer.local_write(loc["base_url"], loc["model"], loc["api_key"], payload, ids)
+                    local_payload = writer.fit_local(data, ids, opts, self.log)
+                    result = writer.local_write(loc["base_url"], loc["model"], loc["api_key"], local_payload, ids,
+                                                opts=opts, log=self.log)
                 except writer.WriterError as e:
                     if not (wcfg["fallback_to_claude"] and wcfg["claude"]["api_key"]):
                         raise
@@ -263,9 +266,15 @@ class Syncer:
         at = dt.datetime.fromtimestamp(self.clock(), tz).isoformat(timespec="seconds")
         if result:
             brief["summary"] = {"text": result["summary"], "by": result["by"], "at": at}
+            flagged = set(result.get("flagged") or ())
             for r in brief["replies"]:
                 if r["id"] in result["replies"]:
                     r["suggestion"] = result["replies"][r["id"]]
+                    if r["id"] in flagged:
+                        r["suggestion_warning"] = writer.WARNING
+            if flagged:
+                n = len(flagged)
+                note = (note + "; " if note else "") + f"{n} suggestion{'s' if n != 1 else ''} flagged"
             if result.get("beta") is False:
                 note = (note + "; " if note else "") + "beta not accepted, sent without fallbacks"
         else:
