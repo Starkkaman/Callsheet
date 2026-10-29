@@ -253,9 +253,10 @@ def date_fields(day):
             "date_short": f"{day:%a} {day.day} {day:%b}"}
 
 
-def compose_brief(sample, settings, areas, cache, live, now):
+def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
     """sample: the bundled sample brief. cache: the brief saved by the last sync (or None).
-    live: at least one account is connected. now: aware datetime."""
+    live: at least one account is connected. now: aware datetime. writer_on: show the AI writer's
+    summary and suggestions from the cache (hidden once the writer is turned off)."""
     if not live:
         brief = dict(sample)
         brief["sample"] = True
@@ -274,6 +275,14 @@ def compose_brief(sample, settings, areas, cache, live, now):
         brief.update(kind=cache.get("kind") or "Morning brief", written_at=hhmm(written),
                      schedule=cache.get("schedule", []), replies=cache.get("replies", []),
                      heads_up=cache.get("heads_up", []), sources=cache.get("sources", ""))
+        summary = cache.get("summary")
+        if writer_on and isinstance(summary, dict) and summary.get("text"):
+            at = dt.datetime.fromisoformat(summary["at"]).astimezone(tz) if summary.get("at") else None
+            brief["summary"] = {"text": summary["text"], "by": summary.get("by") or "",
+                                "at": hhmm(at) if at else None}
+            brief["sections"]["summary"] = "live"
+        if not writer_on:
+            brief["replies"] = [{k: v for k, v in r.items() if k != "suggestion"} for r in brief["replies"]]
     else:
         brief.update(date_fields(now.date()))
         brief.update(kind=kind_for(settings, now), written_at=None, schedule=[], replies=[],

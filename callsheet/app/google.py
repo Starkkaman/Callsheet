@@ -1,4 +1,4 @@
-"""The only code in Callsheet that talks to Google.
+"""The only code in Callsheet that talks to Google (writer.py talks to Claude and the local model).
 
 Read-only by construction: every request goes through `request()`, which checks it against an
 explicit allowlist of (method, URL prefix) pairs. Gmail and Calendar are GET only; the only POSTs
@@ -212,6 +212,12 @@ def gmail_threads(token, q, max_results=50):
 def gmail_thread(token, thread_id):
     return request("GET", api_base() + "/gmail/v1/users/me/threads/" + _q(thread_id), token=token,
                    params=[("format", "metadata")] + [("metadataHeaders", h) for h in METADATA_HEADERS])
+
+
+def gmail_thread_full(token, thread_id):
+    """The full thread (bodies) for the AI writer's suggested replies. Still a GET under gmail.readonly."""
+    return request("GET", api_base() + "/gmail/v1/users/me/threads/" + _q(thread_id), token=token,
+                   params={"format": "full"})
 
 
 def calendar_list(token):

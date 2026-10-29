@@ -8,6 +8,8 @@ import pathlib
 import re
 import time
 
+import writer
+
 import google
 import rules
 from oauth import OAuthFlows
@@ -56,6 +58,9 @@ class App:
             ("DELETE", r"vips/([\w-]+)", self.delete_vip),
             ("PATCH", r"settings", self.patch_settings),
             ("POST", r"sync", self.sync),
+            ("PATCH", r"writer", self.patch_writer),
+            ("DELETE", r"writer/claude-key", self.delete_claude_key),
+            ("POST", r"writer/test", self.test_writer),
         ]
 
     def close(self):
@@ -82,7 +87,8 @@ class App:
         s = self.store.settings()
         now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(s))
         return rules.compose_brief(load_sample(), s, self.store.areas(), self.store.cached_brief(),
-                                   self.store.has_accounts(), now)
+                                   self.store.has_accounts(), now,
+                                   writer_on=self.store.writer_config()["provider"] != "off")
 
     def state(self, _body=None):
         client = self.store.google_client_public()
@@ -94,6 +100,7 @@ class App:
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
+                "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
                 "setup_done": self.store.setup_done() or (client["configured"] and bool(accounts))}
 
     # --- Google client ----------------------------------------------------
@@ -154,3 +161,24 @@ class App:
         if not self.store.has_accounts():
             raise InputError("Connect a Google account first.")
         return self.syncer.run_now()
+
+    # --- AI writer --------------------------------------------------------
+    def patch_writer(self, body):
+        return self.store.update_writer(_obj(body))
+
+    def delete_claude_key(self, _body):
+        return self.store.clear_claude_key()
+
+    def test_writer(self, body):
+        provider = _obj(body).get("provider")
+        w = self.store.writer_config()
+        try:
+            if provider == "claude":
+                message = writer.claude_test(w["claude"]["api_key"], w["claude"]["model"])
+            elif provider == "local":
+                message = writer.local_test(w["local"]["base_url"], w["local"]["api_key"])
+            else:
+                raise InputError("Test claude or local.")
+        except writer.WriterError as e:
+            return {"ok": False, "message": str(e)}
+        return {"ok": True, "message": message}

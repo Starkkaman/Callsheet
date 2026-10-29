@@ -73,13 +73,18 @@ class AllowlistTest(unittest.TestCase):
 class SourceTest(unittest.TestCase):
     NET = re.compile(r"^\s*(?:import|from)\s+(urllib\.request|http\.client|socket|ssl|smtplib)\b", re.M)
 
-    def test_only_google_py_opens_connections(self):
+    SDK = re.compile(r"^\s*(?:import|from)\s+(anthropic|openai|requests|httpx)\b", re.M)
+
+    def test_only_google_py_and_writer_py_open_connections(self):
         for f in sorted(APP.glob("*.py")):
-            hits = self.NET.findall(f.read_text(encoding="utf-8"))
-            if f.name == "google.py":
-                self.assertEqual(hits, ["urllib.request"])
+            src = f.read_text(encoding="utf-8")
+            hits = self.NET.findall(src)
+            if f.name in ("google.py", "writer.py"):
+                self.assertEqual(hits, ["urllib.request"], f.name)
             else:
                 self.assertEqual(hits, [], f.name)
+            # the Anthropic SDK is used (lazily) by writer.py only; no other HTTP libraries
+            self.assertEqual(self.SDK.findall(src), ["anthropic"] if f.name == "writer.py" else [], f.name)
 
     def test_api_calls_are_get_only(self):
         src = (APP / "google.py").read_text(encoding="utf-8")

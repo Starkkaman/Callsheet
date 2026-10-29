@@ -40,9 +40,10 @@ def event(summary, start, end, **kw):
 
 
 def thread(thread_id, sender, subject, snippet, when, to="me@example.com", labels=("INBOX",), earlier=(),
-           cc=None, headers=None):
+           cc=None, headers=None, body=None, html_body=None):
     """when: aware datetime of the last message. earlier: [(sender, when, labels)] older messages.
-    cc / headers ({name: value}) go on the last message only."""
+    cc / headers ({name: value}) go on the last message only. body / html_body: text of the last
+    message (only returned for format=full, like Gmail)."""
     def msg(frm, at, lbls, subj, snip):
         return {"id": "m" + secrets.token_hex(4), "threadId": thread_id, "labelIds": list(lbls), "snippet": snip,
                 "internalDate": str(int(at.timestamp() * 1000)),
@@ -55,6 +56,14 @@ def thread(thread_id, sender, subject, snippet, when, to="me@example.com", label
     if cc:
         extra["Cc"] = cc
     last["payload"]["headers"] += [{"name": k, "value": v} for k, v in extra.items()]
+    parts = []
+    if body is not None:
+        parts.append({"mimeType": "text/plain", "filename": "", "body": {"data": _b64(body.encode())}})
+    if html_body is not None:
+        parts.append({"mimeType": "text/html", "filename": "", "body": {"data": _b64(html_body.encode())}})
+    if parts:
+        last["payload"]["mimeType"] = "multipart/alternative"
+        last["payload"]["parts"] = parts
     msgs.append(last)
     return {"id": thread_id, "historyId": "1", "messages": msgs}
 
@@ -158,6 +167,10 @@ class FakeGoogle:
             tid = urllib.parse.unquote(path.rsplit("/", 1)[1])
             for t in user["threads"]:
                 if t["id"] == tid:
+                    if query.get("format") != ["full"]:  # metadata: headers only, no bodies
+                        t = json.loads(json.dumps(t))
+                        for m in t["messages"]:
+                            m["payload"].pop("parts", None)
                     return self._send(h, 200, t)
             return self._send(h, 404, {"error": {"code": 404}})
         if path == "/calendar/v3/users/me/calendarList":

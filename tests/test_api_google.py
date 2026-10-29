@@ -75,7 +75,8 @@ class StateAndSettingsTest(Base):
         self.assertEqual(len(st["areas"]), 1)
         p = st["areas"][0]
         self.assertEqual((p["id"], p["name"], p["colour"], p["fixed"]), ("personal", "Personal", 1, True))
-        self.assertEqual(p["reads"], {"calendar": True, "mail": True, "chat": True, "tasks": True})
+        self.assertEqual(p["reads"], {"calendar": True, "mail": True, "chat": True, "tasks": True,
+                                      "writer": True})
         self.assertEqual(p["accounts"], [])
         s = st["settings"]
         self.assertEqual(s["workdays"], ["mon", "tue", "wed", "thu", "fri"])

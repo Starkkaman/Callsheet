@@ -1,7 +1,9 @@
-"""SQLite storage for Callsheet: settings, areas, Google client, accounts, VIPs, last sync, cached brief.
+"""SQLite storage for Callsheet: settings, areas, Google client, accounts, VIPs, writer, last sync,
+cached brief.
 
 One connection shared by all threads behind a lock. The database file is created with mode 0600
-because it holds the Google client secret and the account tokens. Nothing in here logs values.
+because it holds the Google client secret, the account tokens and the writer API keys. Nothing in
+here logs values.
 """
 import json
 import os
@@ -10,13 +12,16 @@ import re
 import secrets
 import sqlite3
 import threading
+import urllib.parse
 import zoneinfo
+
+import writer
 
 SCHEMA_VERSION = 1
 DB_NAME = "callsheet.db"
 
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-READ_KEYS = ("calendar", "mail", "chat", "tasks")
+READ_KEYS = ("calendar", "mail", "chat", "tasks", "writer")
 LOOKS = ("bold", "clean", "easy")
 MODES = ("auto", "light", "dark")
 CALL_LABELS = {"morning": "Morning brief", "midday": "Midday check-in", "afternoon": "Afternoon check-in"}
@@ -82,6 +87,18 @@ def client_id_hint(client_id):
     """A short, recognisable hint: the last 6 characters before the common Google suffix."""
     core = client_id[: -len(GOOGLE_ID_SUFFIX)] if client_id.endswith(GOOGLE_ID_SUFFIX) else client_id
     return "…" + core[-6:]
+
+
+def key_hint(key):
+    """The last 4 characters of an API key, or None."""
+    return "…" + key[-4:] if key else None
+
+
+def default_writer():
+    return {"provider": "off",
+            "claude": {"api_key": None, "model": writer.DEFAULT_MODEL},
+            "local": {"base_url": "", "model": "", "api_key": None},
+            "fallback_to_claude": False, "suggest_replies": True}
 
 
 def _slug(name):
@@ -246,8 +263,10 @@ class Store:
     # --- areas ----------------------------------------------------------
     @staticmethod
     def _area(row):
+        reads = {k: True for k in READ_KEYS}  # keys added later (writer) default to on
+        reads.update(json.loads(row["reads"]))
         return {"id": row["id"], "name": row["name"], "colour": row["colour"],
-                "reads": json.loads(row["reads"]), "fixed": bool(row["fixed"])}
+                "reads": reads, "fixed": bool(row["fixed"])}
 
     def areas(self):
         with self.lock:
@@ -298,7 +317,7 @@ class Store:
                 elif key == "reads":
                     if not isinstance(val, dict) or any(k not in READ_KEYS or not isinstance(v, bool)
                                                         for k, v in val.items()):
-                        raise InputError("reads takes true/false for calendar, mail, chat and tasks.")
+                        raise InputError("reads takes true/false for calendar, mail, chat, tasks and writer.")
                     a["reads"].update(val)
                 else:
                     raise InputError(f"Areas can't change {str(key)[:40]}.")
@@ -467,6 +486,112 @@ class Store:
         with self.lock:
             if self.db.execute("DELETE FROM vips WHERE id=?", (vip_id,)).rowcount == 0:
                 raise NotFound("That VIP doesn't exist.")
+
+    # --- writer ---------------------------------------------------------
+    def writer_config(self):
+        """Writer settings with the API keys. Internal only: never send this to the browser."""
+        w = default_writer()
+        saved = self._get_meta("writer", {})
+        for k, v in saved.items():
+            if isinstance(w.get(k), dict) and isinstance(v, dict):
+                w[k].update({kk: vv for kk, vv in v.items() if kk in w[k]})
+            elif k in w:
+                w[k] = v
+        return w
+
+    def writer_public(self):
+        w = self.writer_config()
+        return {"provider": w["provider"],
+                "claude": {"key_hint": key_hint(w["claude"]["api_key"]), "model": w["claude"]["model"]},
+                "local": {"base_url": w["local"]["base_url"], "model": w["local"]["model"],
+                          "key_hint": key_hint(w["local"]["api_key"])},
+                "fallback_to_claude": w["fallback_to_claude"], "suggest_replies": w["suggest_replies"]}
+
+    @staticmethod
+    def _check_key(val, what):
+        if not isinstance(val, str) or re.search(r"\s", val.strip()) or len(val.strip()) > 300:
+            raise InputError(f"That doesn't look like {what}.")
+        return val.strip()
+
+    @staticmethod
+    def _check_base_url(val):
+        if not isinstance(val, str) or len(val.strip()) > 300:
+            raise InputError("The server address must be text of at most 300 characters.")
+        val = val.strip().rstrip("/")
+        if not val:
+            return ""
+        try:
+            parts = urllib.parse.urlsplit(val)
+            parts.port  # noqa: B018 (raises ValueError for a bad port)
+        except ValueError:
+            parts = None
+        if (parts is None or parts.scheme not in ("http", "https") or not parts.hostname or parts.username
+                or parts.password or parts.query or parts.fragment or re.search(r"\s", val)):
+            raise InputError("The server address must look like http://192.168.1.20:8080/v1.")
+        return val
+
+    def update_writer(self, patch):
+        if not isinstance(patch, dict):
+            raise InputError("Send the writer settings as a JSON object.")
+        with self.lock:
+            w = self.writer_config()
+            for key, val in patch.items():
+                if key == "provider":
+                    if val not in ("off", "claude", "local"):
+                        raise InputError("The writer must be off, claude or local.")
+                    w["provider"] = val
+                elif key == "claude":
+                    if not isinstance(val, dict):
+                        raise InputError("claude takes api_key and model.")
+                    for k, v in val.items():
+                        if k == "api_key":
+                            v = self._check_key(v, "an Anthropic API key")
+                            if not v.startswith("sk-ant-"):
+                                raise InputError("That doesn't look like an Anthropic API key. It starts with sk-ant-.")
+                            w["claude"]["api_key"] = v
+                        elif k == "model":
+                            if v not in writer.MODELS:
+                                raise InputError("Pick Claude Opus 5.5, Sonnet 5.5 or Haiku 5.5.")
+                            w["claude"]["model"] = v
+                        else:
+                            raise InputError(f"claude can't change {str(k)[:40]}.")
+                elif key == "local":
+                    if not isinstance(val, dict):
+                        raise InputError("local takes base_url, model and api_key.")
+                    for k, v in val.items():
+                        if k == "base_url":
+                            w["local"]["base_url"] = self._check_base_url(v)
+                        elif k == "model":
+                            if not isinstance(v, str) or len(v.strip()) > 120 or re.search(r"[\x00-\x1f]", v):
+                                raise InputError("The model name must be text of at most 120 characters.")
+                            w["local"]["model"] = v.strip()
+                        elif k == "api_key":
+                            v = "" if v is None else v
+                            w["local"]["api_key"] = self._check_key(v, "an API key") or None
+                        else:
+                            raise InputError(f"local can't change {str(k)[:40]}.")
+                elif key in ("fallback_to_claude", "suggest_replies"):
+                    if not isinstance(val, bool):
+                        raise InputError(f"{key} must be true or false.")
+                    w[key] = val
+                else:
+                    raise InputError(f"The writer can't change {str(key)[:40]}.")
+            self._set_meta("writer", w)
+        return self.writer_public()
+
+    def clear_claude_key(self):
+        with self.lock:
+            w = self.writer_config()
+            w["claude"]["api_key"] = None
+            self._set_meta("writer", w)
+        return self.writer_public()
+
+    def last_writer(self):
+        return self._get_meta("last_writer", {"at": None, "ok": None, "by": None, "input_tokens": 0,
+                                              "output_tokens": 0, "error": None})
+
+    def set_last_writer(self, value):
+        self._set_meta("last_writer", value)
 
     # --- sync results ---------------------------------------------------
     def last_sync(self):
