@@ -72,6 +72,6 @@ plain rules build the brief.
   reply_age_days ("Waiting N days"); snippet or subject mentions a deadline (regex: deadline, due, by
   (mon|tue|…|tomorrow|today|eod|end of day|\d)) ("Mentions a deadline"); sender is a VIP ("VIP").
   Row: who (display name), area, source "Mail", subject or snippet quote, age ("3d", "18h"), reasons, link
-  `https://mail.google.com/mail/?authuser=<email>#search/rfc822msgid:<Message-ID>` (fallback `#all/<threadId>`). Sorted VIP first, then age.
+  `https://mail.google.com/mail/u/?authuser=<email>#search/rfc822msgid:<Message-ID>` (fallback `#all/<threadId>`). Sorted VIP first, then age.
 - Heads up: all-day events, plus sync problems ("Couldn't read <email>: <reason>").
 - Token refresh on 401/expiry; invalid_grant → account status needs_reconnect, brief shows it in Heads up.

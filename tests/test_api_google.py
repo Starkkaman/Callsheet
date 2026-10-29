@@ -309,9 +309,9 @@ class SyncTest(Base):
         priya = b["replies"][1]
         self.assertEqual(priya["reasons"], ["Direct question", "Mentions a deadline", "Waiting 3 days"])
         self.assertEqual((priya["age"], priya["source"], priya["area"]), ("3d", "Mail", "personal"))
-        self.assertEqual(priya["link"], "https://mail.google.com/mail/?authuser=me@example.com"
+        self.assertEqual(priya["link"], "https://mail.google.com/mail/u/?authuser=me@example.com"
                                         "#search/rfc822msgid:CAB%2Bx%2F1%3D@mail.acme.example")
-        self.assertEqual(b["replies"][0]["link"], "https://mail.google.com/mail/?authuser=me@example.com#all/t4")
+        self.assertEqual(b["replies"][0]["link"], "https://mail.google.com/mail/u/?authuser=me@example.com#all/t4")
         self.assertEqual(b["replies"][0]["reasons"], ["VIP"])
         self.assertEqual(b["replies"][0]["age"], "2h")
         # Gmail/Calendar were only read (GET); POSTs only to token/revoke

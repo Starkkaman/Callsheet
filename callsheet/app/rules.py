@@ -201,7 +201,7 @@ def gmail_link(account_email, message_id, thread_id):
     """Link that opens the message in the right Gmail account. authuser picks the account by address
     (a /u/<email>/ path shows "account temporarily unavailable" with several accounts signed in).
     Searches by Message-ID; falls back to the thread id when the message has none."""
-    base = "https://mail.google.com/mail/?authuser=" + urllib.parse.quote(account_email, safe="@.")
+    base = "https://mail.google.com/mail/u/?authuser=" + urllib.parse.quote(account_email, safe="@.")
     mid = (message_id or "").strip().removeprefix("<").removesuffix(">").strip()
     if mid:
         return base + "#search/rfc822msgid:" + urllib.parse.quote(mid, safe="@.")
