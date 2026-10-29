@@ -83,9 +83,10 @@ omissions can't happen. Claude gets it as `output_config.format.json_schema`; th
   present, wall time.
 
 ## Quoted history and signatures (since 0.3.2)
-`writer.strip_quoted(text)` (pure) runs in `message_text` before the 4000-char cap: cuts at "On … wrote:"
+`writer.strip_quoted(text, subject)` (pure) runs in `message_text` before the 4000-char cap: cuts at "On … wrote:"
 (also wrapped over two lines; German/French forms), "-----Original Message-----", an Outlook "From: …" + "Sent:
-…" header, or a "-- " signature line; drops lines starting with ">", "Sent from my …"/"Get Outlook for …"
+…" header (only with >=20 chars of new text above it, and never when the subject or the header's Subject
+starts with FW:/Fwd:; Gmail "Forwarded message" blocks are kept), or a "-- " signature line; drops lines starting with ">", "Sent from my …"/"Get Outlook for …"
 footers and paragraphs (>=120 chars) with "confidential" and "intended recipient". If nothing would be left,
 the original text is kept.
 
@@ -107,7 +108,7 @@ the original text is kept.
   reply rows gain `suggestion` (string), `id` and, when flagged, `suggestion_warning`. `sections.summary: "live"`.
 - `api/state` gains `writer: {provider: "off|claude|local", claude: {key_hint, model}, local: {base_url, model, thinking, reasoning_budget, max_tokens, context, timeout,
   key_hint}, fallback_to_claude, suggest_replies}`, areas gain `reads.writer`, and `last_writer: {at, ok, by,
-  input_tokens, output_tokens, error}`.
+  input_tokens, output_tokens, empty_suggestions (asked for but empty or missing; also in the log line), error}`.
 - Routes: `PATCH api/writer {provider?, claude: {api_key?, model?}, local: {base_url?, model?, api_key?, thinking?,
   reasoning_budget?, max_tokens?, context?, timeout?},
   fallback_to_claude?, suggest_replies?}`, `DELETE api/writer/claude-key`, `POST api/writer/test {provider}`

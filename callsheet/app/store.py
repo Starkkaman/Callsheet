@@ -642,7 +642,7 @@ class Store:
 
     def last_writer(self):
         return self._get_meta("last_writer", {"at": None, "ok": None, "by": None, "input_tokens": 0,
-                                              "output_tokens": 0, "error": None})
+                                              "output_tokens": 0, "empty_suggestions": 0, "error": None})
 
     def set_last_writer(self, value):
         self._set_meta("last_writer", value)

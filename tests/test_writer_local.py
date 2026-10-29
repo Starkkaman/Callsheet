@@ -55,7 +55,7 @@ class SchemaTest(unittest.TestCase):
         arr = writer.parse_output({"summary": "A day.", "replies": [{"id": "r1", "suggestion": "Yes."},
                                                                      {"id": "r1", "suggestion": "Dup."},
                                                                      {"id": "r9", "suggestion": "x"}, "junk"]}, ids)
-        self.assertEqual(obj, {"summary": "A day.", "replies": {"r1": "Yes."}, "flagged": []})
+        self.assertEqual(obj, {"summary": "A day.", "replies": {"r1": "Yes."}, "flagged": [], "empty": 1})
         self.assertEqual(arr, obj)
         out = writer.parse_output({"summary": "A day.", "replies": {"r1": "I've paid it.", "r2": "Sure."}}, ids)
         self.assertEqual(out["flagged"], ["r1"])
@@ -64,8 +64,8 @@ class SchemaTest(unittest.TestCase):
 
 
 class StripTest(unittest.TestCase):
-    def s(self, text):
-        return writer.strip_quoted(text)
+    def s(self, text, subject=None):
+        return writer.strip_quoted(text, subject)
 
     def test_on_wrote_and_below(self):
         self.assertEqual(self.s("Yes, Friday works.\n\nOn Mon, 3 Nov 2026 at 10:00, Priya N <priya@acme.example> "
@@ -81,11 +81,46 @@ class StripTest(unittest.TestCase):
         self.assertEqual(self.s("Agreed in principle.\n\n-----Original Message-----\nFrom: Bob\nold"),
                          "Agreed in principle.")
 
-    def test_outlook_from_sent_header(self):
-        self.assertEqual(self.s("See below.\n\n________________________________\nFrom: Bob Jones <bob@x.example>\n"
-                                "Sent: Monday, November 3, 2026 10:00\nTo: Sam\nSubject: Lunch\n\nLunch Friday?"),
-                         "See below.")
-        self.assertEqual(self.s("Ok.\nFrom: Bob\nDate: today\nSent: Monday\nold"), "Ok.")
+    HEADER = ("________________________________\nFrom: Bob Jones <bob@x.example>\n"
+              "Sent: Monday, November 3, 2026 10:00\nTo: Sam\nSubject: {subject}\n\nCan you confirm the budget?")
+
+    def test_outlook_header_cut_below_a_real_reply(self):
+        reply = "Yes, Friday at 10 works for me."
+        self.assertEqual(self.s(reply + "\n\n" + self.HEADER.format(subject="RE: Lunch"), "RE: Lunch"), reply)
+        self.assertEqual(self.s("Sounds good to me, see you then.\nFrom: Bob\nDate: today\nSent: Monday\nold"),
+                         "Sounds good to me, see you then.")
+
+    def test_outlook_header_kept_with_short_text_above(self):
+        msg = "Thanks, see below\n\n" + self.HEADER.format(subject="Budget")
+        self.assertEqual(self.s(msg, "RE: Budget"), msg)
+        self.assertIn("Can you confirm the budget?", self.s(self.HEADER.format(subject="Budget")))
+
+    def test_outlook_forward_kept(self):
+        fwd = self.HEADER.format(subject="Budget")
+        self.assertEqual(self.s(fwd, "FW: Budget"), fwd)  # header at the top, FW: subject
+        long_note = "Please have a look at this one before Thursday.\n\n"
+        for subject in ("FW: Budget", "Fwd: Budget", "fw:Budget", "FWD: Budget"):
+            self.assertEqual(self.s(long_note + fwd, subject), (long_note + fwd).strip(), subject)
+        # the header block's own Subject says FW: (message subject unknown)
+        inner = long_note + self.HEADER.format(subject="Fw: Budget")
+        self.assertEqual(self.s(inner), inner.strip())
+
+    def test_gmail_forward_kept(self):
+        fwd = ("FYI\n\n---------- Forwarded message ---------\nFrom: Priya N <priya@acme.example>\n"
+               "Date: Mon, 3 Nov 2026 at 10:00\nSubject: Budget\nTo: Sam <me@example.com>\n\n"
+               "Can you sign off the budget by Thursday?")
+        self.assertEqual(self.s(fwd, "Fwd: Budget"), fwd)
+        self.assertEqual(self.s(fwd), fwd)
+
+    def test_message_text_reads_the_subject(self):
+        import base64
+        fwd = self.HEADER.format(subject="Budget")
+        body = "Please have a look at this one before Thursday.\n\n" + fwd
+        msg = {"payload": {"mimeType": "text/plain", "headers": [{"name": "Subject", "value": "FW: Budget"}],
+                           "body": {"data": base64.urlsafe_b64encode(body.encode()).decode()}}}
+        self.assertIn("Can you confirm the budget?", writer.message_text(msg))
+        msg["payload"]["headers"][0]["value"] = "RE: Budget"
+        self.assertEqual(writer.message_text(msg), "Please have a look at this one before Thursday.")
 
     def test_signature_delimiter(self):
         self.assertEqual(self.s("Can we move it to 3pm?\n\n-- \nBob Jones\nHead of Things\n+1 555 0100"),
@@ -245,6 +280,23 @@ class LocalRunTest(LocalBase):
             for word in ("Priya", "Budget", "budget", "Lunch", "me@example.com", LOCAL_KEY, self.loc.base):
                 self.assertNotIn(word, line)
 
+    def test_empty_suggestions_are_counted(self):
+        self.seed()
+        self.local_on()
+        self.loc.contents = ['{"summary": "Two wait.", "replies": {"r1": "  ", "r2": "Sure."}}']
+        b = self.sync_brief()
+        self.assertEqual([r.get("suggestion") for r in b["replies"]], [None, "Sure."])
+        lw = self.ok("GET", "/api/state")["last_writer"]
+        self.assertEqual((lw["ok"], lw["empty_suggestions"]), (True, 1))
+        self.assertIn("1 of 2 suggestions, 1 empty", self.logs[-1])
+        self.loc.contents = ['{"summary": "Two wait.", "replies": {"r1": "Yes.", "r2": "Sure."}}']
+        self.sync_brief()
+        self.assertEqual(self.ok("GET", "/api/state")["last_writer"]["empty_suggestions"], 0)
+        self.assertIn("2 of 2 suggestions, 0 empty", self.logs[-1])
+        self.loc.status = 500
+        self.sync_brief()
+        self.assertEqual(self.ok("GET", "/api/state")["last_writer"]["empty_suggestions"], 0)
+
     def test_warning_reaches_the_brief_and_is_counted(self):
         self.seed()
         self.local_on()
@@ -317,6 +369,8 @@ class ClaudeObjectTest(WriterBase):
         self.ant.output = {"summary": "Busy.", "replies": [{"id": "r2", "suggestion": "Legacy."}]}
         b = self.sync_brief()
         self.assertEqual([r.get("suggestion") for r in b["replies"]], [None, "Legacy."])
+        self.assertEqual(self.ok("GET", "/api/state")["last_writer"]["empty_suggestions"], 1)  # r1 missing
+        self.assertIn("1 of 2 suggestions, 1 empty", self.logs[-1])
 
 
 if __name__ == "__main__":

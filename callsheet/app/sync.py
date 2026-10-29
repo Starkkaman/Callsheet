@@ -283,11 +283,13 @@ class Syncer:
         self.store.set_last_writer({
             "at": at, "ok": bool(result), "by": result["by"] if result else None,
             "input_tokens": result["input_tokens"] if result else 0,
-            "output_tokens": result["output_tokens"] if result else 0, "error": None if result else error})
+            "output_tokens": result["output_tokens"] if result else 0,
+            "empty_suggestions": result.get("empty", 0) if result else 0, "error": None if result else error})
         self.log(f"Callsheet writer: {used}{' (fallback from local)' if used != provider else ''}, "
                  f"{'ok' if result else 'failed'}"
                  + (f", {result['input_tokens']} in / {result['output_tokens']} out tokens, "
-                    f"{len(result['replies'])} of {len(ids)} suggestions" if result else "")
+                    f"{len(result['replies'])} of {len(ids)} suggestions, {result.get('empty', 0)} empty"
+                    if result else "")
                  + (f", {note}" if note else "") + f", {self.clock() - t0:.1f}s")
 
     def _claude(self, wcfg, payload, ids):

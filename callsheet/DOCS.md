@@ -74,8 +74,8 @@ Off by default: the brief then looks exactly as in 0.2.0. Turn it on in **Setup 
 After each read (scheduled or **Refresh**) the writer gets the brief's facts (schedule, heads-ups, the
 replies due) plus, with **Suggest replies** on, the last up to 3 messages of at most 8 threads that need a
 reply (VIPs first, then the oldest). Each message is sent without its quoted history ("On … wrote:" and
-the quoted lines below it, forwarded or replied-to headers), signature, "Sent from my …" footer and long
-legal disclaimer, and is cut at 4,000 characters. Mail bodies are not stored; only the suggestions are.
+the quoted lines below it, Outlook reply headers; forwarded mail is kept whole), signature, "Sent from
+my …" footer and long legal disclaimer, and is cut at 4,000 characters. Mail bodies are not stored; only the suggestions are.
 It adds:
 
 - a summary band under the date ("Written by Claude Opus 5.5" or "Written by Local · <model>");

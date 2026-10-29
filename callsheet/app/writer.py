@@ -193,24 +193,48 @@ _CUT = (
     re.compile(r"^[ \t]*Am\b[^\n]{0,300}(?:\n[^\n]{0,300})?\bschrieb\b[^\n]{0,200}:[ \t]*$", re.M),
     re.compile(r"^[ \t]*Le\b[^\n]{0,300}(?:\n[^\n]{0,300})?\ba écrit[ \t]?:[ \t]*$", re.M),
     re.compile(r"^[ \t]*-{2,}[ \t]*Original Message[ \t]*-{2,}[ \t]*$", re.M | re.I),
-    # Outlook reply/forward header: "From: …" and, on the next line or the one after, "Sent: …"
-    re.compile(r"^(?:[ \t]*_{8,}[ \t]*\n)?[ \t]*\*?From:\*?[ \t][^\n]*\n(?:[^\n]*\n)?[ \t]*\*?Sent:\*?[ \t]", re.M),
     re.compile(r"^-- ?$", re.M),  # signature delimiter "-- "
 )
+# Outlook header: "From: …" and, on the next line or the one after, "Sent: …". Outlook uses it for replies
+# AND forwards, so it only cuts below a real reply (see _outlook_cut). Gmail's "Forwarded message" is kept.
+_OUTLOOK = re.compile(r"^(?:[ \t]*_{8,}[ \t]*\n)?[ \t]*\*?From:\*?[ \t][^\n]*\n(?:[^\n]*\n)?[ \t]*\*?Sent:\*?[ \t]",
+                      re.M)
+_FORWARD = re.compile(r"^\s*(?:fwd?|fw)\s*:", re.I)
+_HEADER_SUBJECT = re.compile(r"^[ \t]*\*?Subject:\*?[ \t]*(?:fwd?|fw)[ \t]*:", re.M | re.I)
+MIN_NEW_TEXT = 20  # characters of new text above an Outlook header before it counts as a reply
+
+
+def _outlook_cut(text, subject):
+    """Where to cut at an Outlook "From:/Sent:" header, or None: only with at least MIN_NEW_TEXT characters
+    of new text above it, and never in a forward (the message's subject or the header's Subject starts with
+    FW:/Fwd:), whose forwarded part is what needs an answer."""
+    if isinstance(subject, str) and _FORWARD.match(subject):
+        return None
+    for m in _OUTLOOK.finditer(text):
+        header = "\n".join(text[m.start():].split("\n")[:8])
+        if _HEADER_SUBJECT.search(header):
+            continue
+        above = "\n".join(ln for ln in text[:m.start()].split("\n") if not _QUOTED_LINE.match(ln))
+        if len(above.strip()) >= MIN_NEW_TEXT:
+            return m.start()
+    return None
 _QUOTED_LINE = re.compile(r"^[ \t]*>")
 _FOOTER = re.compile(r"^[ \t]*(?:Sent from (?:my|Outlook|Mail|Yahoo|Samsung|Proton)\b[^\n]{0,60}"
                      r"|Get Outlook for \S[^\n]{0,30})[ \t]*$", re.I)
 
 
-def strip_quoted(text):
+def strip_quoted(text, subject=None):
     """The new part of a message: quoted history ("On … wrote:" and below, "> " lines, Outlook
-    "-----Original Message-----" / "From: … Sent: …" headers and below), the signature ("-- " and below),
-    mobile footers ("Sent from my …") and long legal disclaimers (a paragraph with "confidential" and
-    "intended recipient") are removed. Never returns an empty message: then it returns the original."""
+    "-----Original Message-----" and, below a real reply, "From: … Sent: …" headers and below), the
+    signature ("-- " and below), mobile footers ("Sent from my …") and long legal disclaimers (a paragraph
+    with "confidential" and "intended recipient") are removed. subject: the message's Subject, to keep
+    forwards whole. Never returns an empty message: then it returns the original."""
     if not isinstance(text, str) or not text.strip():
         return text
     out = text.replace("\r\n", "\n").replace("\r", "\n")
-    cut = min((m.start() for m in (p.search(out) for p in _CUT) if m), default=None)
+    cuts = [m.start() for m in (p.search(out) for p in _CUT) if m]
+    outlook = _outlook_cut(out, subject)
+    cut = min(cuts + ([outlook] if outlook is not None else []), default=None)
     if cut is not None:
         out = out[:cut]
     out = "\n".join(ln for ln in out.split("\n") if not _QUOTED_LINE.match(ln) and not _FOOTER.match(ln))
@@ -236,7 +260,9 @@ def message_text(msg):
         text = html_to_text(found["text/html"])
     if text is None:
         text = html.unescape(msg.get("snippet") or "")
-    text = strip_quoted(text.replace("\r\n", "\n"))
+    subject = next((h.get("value") for h in payload.get("headers") or []
+                    if isinstance(h, dict) and str(h.get("name", "")).lower() == "subject"), None)
+    text = strip_quoted(text.replace("\r\n", "\n"), subject)
     text = re.sub(r"[ \t\r\f\v]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) > MAX_BODY:
@@ -353,7 +379,9 @@ def parse_output(out, ids):
         if isinstance(rid, str) and rid in ids and isinstance(text, str) and text.strip() and rid not in replies:
             replies[rid] = _clip(text, MAX_SUGGESTION)
     return {"summary": _clip(" ".join(out["summary"].split()), MAX_SUMMARY), "replies": replies,
-            "flagged": [rid for rid, text in replies.items() if states_decision(text)]}
+            "flagged": [rid for rid, text in replies.items() if states_decision(text)],
+            # asked for, but empty or missing: counted so silent omissions show in the log and last run
+            "empty": sum(1 for rid in set(ids) if rid not in replies)}
 
 
 def _complete(out, ids):
