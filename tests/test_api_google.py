@@ -269,7 +269,7 @@ class SyncTest(Base):
         ]}
         threads = [
             thread("t1", "Priya N <priya@acme.example>", "Budget", "Can you sign off by Thursday?",
-                   now - dt.timedelta(days=3)),
+                   now - dt.timedelta(days=3), headers={"Message-ID": "<CAB+x/1=@mail.acme.example>"}),
             thread("t2", "Bob <bob@x.example>", "Lunch", "See you there", now - dt.timedelta(hours=5)),
             thread("t3", f"Me <{email}>", "Re: Plan", "Sure?", now - dt.timedelta(days=4)),
             thread("t4", "Boss <boss@acme.example>", "FYI", "Notes attached", now - dt.timedelta(hours=2, minutes=5)),
@@ -309,7 +309,8 @@ class SyncTest(Base):
         priya = b["replies"][1]
         self.assertEqual(priya["reasons"], ["Direct question", "Mentions a deadline", "Waiting 3 days"])
         self.assertEqual((priya["age"], priya["source"], priya["area"]), ("3d", "Mail", "personal"))
-        self.assertEqual(priya["link"], "https://mail.google.com/mail/u/me@example.com/#all/t1")
+        self.assertTrue(priya["link"].startswith("https://mail.google.com/mail/u/?authuser=me@example.com"))
+        self.assertTrue(b["replies"][0]["link"].startswith("https://mail.google.com/mail/u/?authuser=me@example.com"))
         self.assertEqual(b["replies"][0]["reasons"], ["VIP"])
         self.assertEqual(b["replies"][0]["age"], "2h")
         # Gmail/Calendar were only read (GET); POSTs only to token/revoke

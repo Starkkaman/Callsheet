@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+- "Open in Gmail" links open the message directly in the right account, in Gmail's own link format
+  (`/mail/u/?authuser=<email>#all/thread-f:<id>|msg-f:<id>`), so they work when several Google accounts
+  are signed in to one browser (they used to show Gmail's "account temporarily unavailable" page).
+  This is the 0.3.1 work: 0.3.1 was never released on its own and ships here for the first time.
+
 ## 0.3.3
 
 - **Writer evaluation** (for the owner, off by default): compare local model setups on today's real brief

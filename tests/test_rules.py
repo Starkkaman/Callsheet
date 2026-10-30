@@ -124,6 +124,23 @@ class ReplyRulesTest(unittest.TestCase):
         t = thread("c", "Someone <s@e.x>", "Q?", "sent from alias", now, labels=("SENT",))
         self.assertIsNone(self.row(t))
 
+    def test_gmail_link(self):
+        # Gmail's own view-link format: hex API ids written in decimal (checked against a real viewUrl)
+        self.assertEqual(rules.gmail_link("issaacc.h@gmail.com", "1a1559dc6547b99f", "1a155d21e6e7b99f"),
+                         "https://mail.google.com/mail/u/?authuser=issaacc.h@gmail.com"
+                         "#all/thread-f:1879507222623926687|msg-f:1879510819686300063")
+        self.assertEqual(rules.gmail_link("me+work@example.com", "1a1559dc6547b99f"),
+                         "https://mail.google.com/mail/u/?authuser=me%2Bwork@example.com"
+                         "#all/thread-f:1879507222623926687")
+        # ids that aren't hex never produce a broken link: account only, or thread only
+        self.assertEqual(rules.gmail_link("a@b.c", "t9"), "https://mail.google.com/mail/u/?authuser=a@b.c")
+        self.assertEqual(rules.gmail_link("a@b.c", "ff", "mX"),
+                         "https://mail.google.com/mail/u/?authuser=a@b.c#all/thread-f:255")
+        now = at(12)
+        t = thread("1a1559dc6547b99f", "X <x@e.x>", "Q?", "ok?", now - dt.timedelta(hours=1))
+        self.assertTrue(self.row(t)["link"].startswith(
+            "https://mail.google.com/mail/u/?authuser=me@example.com#all/thread-f:1879507222623926687"))
+
     def test_sort_vip_then_age(self):
         now = at(12)
         rows = [self.row(thread(i, f"{i} <{i}@e.x>", "?", "?", now - dt.timedelta(hours=h)),
