@@ -22,7 +22,7 @@
   --base-size:15px;--lh:1.4;--focus-w:2px;
   --cut:polygon(0 0,100% 0,96% 100%,0 100%);
   --cut-bar:polygon(0 0,100% 0,100% 78%,94% 100%,0 100%);
-  --cut-torn:polygon(0 4%,8% 0,30% 3%,52% 0,77% 4%,100% 1%,100% 96%,85% 100%,60% 97%,35% 100%,12% 96%,0 100%);
+  --cut-torn:polygon(0 9px,8% 0,30% 7px,52% 0,77% 9px,100% 2px,100% calc(100% - 9px),85% 100%,60% calc(100% - 7px),35% 100%,12% calc(100% - 9px),0 100%); /* fixed-depth torn edge: % of a tall slab cut into its content */
   --fs-xs:10.5px;--fs-sm:12px;--fs-md:14px;--fs-lg:16px;--fs-time:20px;
   --fs-h3:24px;--fs-h2:27px;--fs-h1:67px;--fs-stat:42px;--fs-hero:50px;
   /* colour */
