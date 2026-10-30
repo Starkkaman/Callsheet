@@ -36,6 +36,30 @@ real data stays on HA + the LAN model server.
   ~10 min for VIP or urgent messages).
 - **Model per call time** (see daily-brief/model-per-call-time.md), decided after the writer evaluation.
 
+## 0.6.0: "Know me" (owner's request 2026-10-30)
+- **Local index** on the HA box (SQLite FTS) of mail, calendars, Slack, notes, Drive (new read-only scope), later
+  Signal (only from linking onward): the base for onboarding and chat. Read-only, owner-chosen time window.
+- **Onboarding scan**: a background full scan with progress, then a drafted profile (people + roles, areas,
+  projects, recurring commitments, VIP candidates, reply habits).
+- **Import Signal history** (owner: in the FIRST 0.6 build): link Signal Desktop with "Transfer message history" (all chats, 45 days of media),
+  export it locally (e.g. signal-export → JSON/Markdown; verify it still works with current Desktop first), upload
+  in setup, pick which chats to include → local index. Android alternative: signalbackup-tools on a .backup file.
+- **Interview**: Callsheet asks questions one at a time (quick picks + free text); answers become the 0.5 memory
+  (editable profile + notes) used by briefs and chat. Re-runnable.
+- **Chat ("Ask Callsheet")**: a chat panel; the agent answers with read-only search tools over the index and
+  links to sources; never sends/changes anything; mail content stays data. Model choice to measure (local Gemma
+  tool use vs Claude).
+
+- Owner feedback 2026-10-30: profile = editable fields (Name, Role, Projects, Area), no "wrong" wording; scan window
+  up to the entire account history with time/storage warnings; the interview asks the agent's own questions
+  (generated from what it couldn't work out), not a script; **Chat gets its own tab and replaces Areas** (area
+  filters move into Replies; area summaries stay in Briefing).
+- **Chat model is a setting** (owner 2026-10-30): local by default (any OpenAI-compatible server + model, like the
+  writer), Claude as an option, chosen independently from the brief writer (Callsheet may be shared with others).
+  Tool use (read-only search) must work with both; measure local tool-calling quality before choosing a default.
+- **Notes = Obsidian** (owner is starting with it): read-only access to the vault folder, which must be reachable
+  from HA (synced folder / network share); Markdown + front matter + links → index.
+
 ## Later: planning assistant
 - Access to the owner's notes (which app: to decide), projects and timelines from notes, tasks and repos
   (real "Projects" section), reminders of things that slipped, live updates.
