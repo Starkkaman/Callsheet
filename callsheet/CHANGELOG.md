@@ -36,6 +36,11 @@ Server and API for this release; the page that uses them follows.
   **Done today**; **Undo** brings it back. A new message in that thread or chat brings it back by itself.
   Done marks are forgotten after 30 days.
 
+## 0.3.6
+
+- Bold look on phones: the torn-paper edge of a long section (e.g. Needs a reply) no longer cuts
+  through its heading and first row; the edge now has a fixed depth.
+
 ## 0.3.5
 
 - Local writer: more specific replies and day summaries, short placeholders like [day], each reply answers
