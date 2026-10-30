@@ -341,7 +341,14 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
             # for the writer's facts (never stored): who wrote since the owner's last message (SENT label or
             # the owner's address), and the last message's text to look for a deadline in
             "_facts": dict(unanswered([(_ms(m) / 1000, _from_owner(m, me)) for m in sorted(msgs, key=_ms)]),
-                           last=_ms(last) / 1000, text=subject + "\n" + snippet)}
+                           last=_ms(last) / 1000, text=subject + "\n" + snippet),
+            # the latest incoming message for the sender's-claim check (sync.inbound_claim; never stored): its
+            # snippet, and the subject unless it is a reply or forward (then an earlier writer, maybe the owner,
+            # chose it)
+            "_inbound": ("" if _REPLY_SUBJECT.match(subject) else subject) + "\n" + snippet}
+
+
+_REPLY_SUBJECT = re.compile(r"\s*(?:re|fwd?|aw|wg|sv)\s*(?:\[\d+\])?\s*:", re.I)
 
 
 def _ms(msg):
@@ -540,7 +547,7 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
                                 "sender": f"{who(uid)} (Slack)"}},
             "_key": f"slack:{ws.get('team_id', '')}:{c['ch']}:{root or ''}:{m['ts']}",
             "_messages": ctx,
-            "_facts": dict(c["facts"], last=_f(m["ts"]), text=text)})
+            "_facts": dict(c["facts"], last=_f(m["ts"]), text=text), "_inbound": text})
     heads = []
     for ch, msgs in (data.get("chan") or {}).items():
         conv = convs.get(ch) or {}

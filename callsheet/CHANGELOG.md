@@ -17,6 +17,17 @@
 - **Sender's claims stay claims.** A new fixed rule right after the reply guidance: suggested replies never
   state as done anything an email says was approved, released, paid, signed, booked or agreed; they treat it as
   the sender's claim or leave a [placeholder]. Setup shows it with the other fixed text.
+- **Wider draft check.** The "Check this draft" warning now also catches drafts that take a sender's claim as
+  done ("I note the contract has been signed", "confirm the signed contract"), while requests for a signed or
+  paid document, questions and conditions still don't count. Mail signature lines ("Sent from my phone") are
+  ignored.
+- **"This message says something was done."** When the latest message from the other person says something was
+  approved, paid, signed, released and so on (not a question or an "once it's paid"), the row's detail shows "This
+  message says something was approved, paid, signed or released. Check before replying." and the row in the list
+  gets a small "!". Callsheet's own rules decide this, with or without the AI writer, and even when the suggested
+  reply is fine. Mail: the subject (unless it is a "Re:" or "Fwd:") and the preview, plus the message text when
+  the writer reads it; Slack: the last message. Your own messages never count. Only the yes/no is kept, and it is
+  not sent to the writer.
 - **Default writing profile.** The Default keeps the 0.4.0 texts, with one new lead sentence: the day summary
   leads with the oldest wait (with its day count), then the clashes in time order, then what's due when. A
   more tuned wording was measured too and left out because its replies repeated sender claims more often. Your

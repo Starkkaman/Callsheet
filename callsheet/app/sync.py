@@ -8,6 +8,7 @@ Logs one line per sync (and one per writer run) with counts only: no subjects, n
 bodies or keys.
 """
 import datetime as dt
+import email.utils
 import sys
 import threading
 import time
@@ -27,6 +28,17 @@ def _stderr(line):
     sys.stderr.write(line + "\n")
     sys.stderr.flush()
 
+
+
+def _addr(value):
+    return email.utils.parseaddr(value or "")[1].lower()
+
+
+def inbound_claim(row):
+    """True when the row's latest incoming message (rules' `_inbound` text: mail subject and snippet, Slack the
+    message) states that something was approved, paid, signed, released and so on (writer.states_decision:
+    [bracketed] text, questions and conditions don't count). Pops `_inbound`, so no message text is stored."""
+    return bool(writer.states_decision(row.pop("_inbound", "") or ""))
 
 class _Stop(Exception):
     pass
@@ -195,6 +207,7 @@ class Syncer:
                 ref["messages"] = row.pop("_messages")
             if "_facts" in row:  # for the writer's facts block only; never stored
                 ref["facts"] = row.pop("_facts")
+            row["claim"] = inbound_claim(row)
             # done: mail by account + thread, Slack by team + channel + thread (or message) ts
             done_key = row.pop("_done", None)
             if ref.get("source") == "mail":
@@ -389,6 +402,10 @@ class Syncer:
             f = dict(refs.get(r["id"], {}).get("facts") or {})
             if f and refs[r["id"]].get("source") == "mail" and bodies.get(r["id"]):
                 f["text"] = (bodies[r["id"]][-1].get("text") or "") + "\n" + (f.get("text") or "")
+                # the sender's-claim check also reads the body (quotes and signature stripped) when the last
+                # message read is still the sender's; only the flag is kept (stored with the brief after _write)
+                if not r.get("claim") and _addr(bodies[r["id"]][-1].get("from")) == refs[r["id"]].get("sender"):
+                    r["claim"] = bool(writer.states_decision(bodies[r["id"]][-1].get("text") or ""))
             f_rows.append({"id": r["id"], "who": r["who"], "text": r["text"], "vip": r.get("vip"), "facts": f})
         f_sched = [{"start_hhmm": e.get("start_hhmm"), "end_hhmm": e.get("end_hhmm"), "title": e.get("title"),
                     "area": name.get(e.get("area"), "")} for e in sched]

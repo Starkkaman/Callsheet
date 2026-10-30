@@ -76,7 +76,8 @@ already exists (default true); Slack is read only when `reads.chat` is true. Eve
 ## Brief JSON (`GET api/brief`) additions
 - Schedule rows: `id` (`"s1"`, `"s2"`, … in brief order) and `key` (stable across the day's briefs).
 - Reply rows: `id` (`"r1"`, … VIP first, then oldest), `key` (stable: source, thread and last message), `via:
-  "mail"|"slack"`; `new: true` (see "New since"). Mail rows keep `source: "Mail"`.
+  "mail"|"slack"`; `new: true` (see "New since"). Mail rows keep `source: "Mail"`. 0.4.1: `claim: true|false`
+  (see "Sender's claim (0.4.1)"; absent in older cached briefs and the sample = false).
 - `top`: always present (list, ≤ 5, may be empty): `[{text, ref, kind: "reply"|"event"}]`, `ref` = a current row
   id. The rows and their order always come from the rules (`rules.rules_top`, recomputed when the brief is
   composed): VIP replies, then clashes (`ref` = the earlier event), then replies that mention a deadline, then the
@@ -352,3 +353,24 @@ Default profile (0.4.1): 0.4.0's texts; in the day summary, "Lead with what need
 what needs the owner today: the oldest wait (with its day count), then the clashes in time order, then what's due
 when." The tuned variant "V3" (task 33) was measured as the Default and left out: its drafts repeated a sender's claim
 more often. Owner profiles are stored as they were.
+
+## Sender's claim (0.4.1)
+
+A deterministic check of the *incoming* message, independent of the writer (it runs with the writer off) and of
+the draft post-check (a clean draft doesn't clear it). Every reply row gets `claim: bool` =
+`writer.states_decision(text)` over the row's latest incoming message (`[bracketed]` text, questions and
+conditions don't count):
+- Mail (`rules.reply_row` → `_inbound`, consumed by `sync.inbound_claim` in `Syncer._read`): the last message's
+  subject and snippet; the subject is left out when it starts with a reply/forward prefix (`Re:`, `Fw:`, `Fwd:`,
+  `AW:`, `WG:`, `SV:`), since an earlier writer (maybe the owner) chose it. A row only exists when that last
+  message is not the owner's, so the owner's own words never count. When the writer reads the thread body
+  (`Syncer._writer_input`, suggestions on) and its last message is still from the row's sender, its text (quotes
+  and signature stripped) is checked too and can only turn the flag on; the brief stored after the writer keeps it.
+- Slack (`rules.slack_rows`): the row's last message (always someone else's).
+
+Stored: only the boolean, on the brief row (`set_cached_brief`; done rows keep it); no message text and nothing new
+in `brief_refs` (`_inbound` is popped before storing). It is never in the writer payload (`data` and `facts` are
+built from explicit fields). The page shows `CLAIM_NOTE` ("This message says something was approved, paid, signed
+or released. Check before replying.") as `p.pflag.claim` under the detail panel's header (where an event's clash
+flag goes) and a `span.cmk` "!" (`--alert`, `aria-hidden`, the note as its title) before the row's age in the
+list; the row's aria-label ends with ", says something was done: check". Both are rendered with `h()` (text nodes).
