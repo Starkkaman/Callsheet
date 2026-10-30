@@ -311,7 +311,7 @@ Content (key order as sent):
   deadline has no time, those last), `what` = the row's subject or quoted message.
 - `counts`: `{open_replies, vip, overdue}`: reply rows sent, VIP rows, rows whose `waiting_days` is more than
   `reply_age_days`. `reply_age_days` 0 means "no age rule" (as for the "Waiting" reason): then `overdue` is 0.
-- `replies`: `{<row id>: {waiting_days, unanswered_messages, follow_ups, first_unanswered, due?}}`:
+- `replies`: `{<row id>: {waiting_days, unanswered_messages, follow_ups, first_unanswered, last_nudge_days?, due?}}`:
   - `unanswered_messages`: messages by others after the owner's last message in that thread or chat (all of them
     when the owner never wrote), the first one included; `follow_ups` = `unanswered_messages - 1` (the times they
     chased: one unanswered message is 0 follow-ups). Mail: every message of the Gmail thread (metadata), the
@@ -323,6 +323,9 @@ Content (key order as sent):
     `day` the brief carries; message times are Gmail's `internalDate` (Slack: `ts`), never dates quoted in bodies.
     It is not the row's `age` (time since the *last* message, whole 24-hour periods): a thread the owner never
     answered that started 3 days before its last message waits 3 days longer than its `age` says.
+  - `last_nudge_days` (only when it differs from `waiting_days`): calendar days, the same way, from their latest
+    message to the brief's date. The fixed facts sentence tells the writer to say both then ("waiting 11 days, last
+    nudge 8 days ago"), otherwise just "waiting N days".
   - `due` (only when found): the first match of the deadline rule (`rules.DEADLINE`) in the last message that is
     followed by a date, weekday or time in the same clause: `{phrase (verbatim, ≤ 60 chars), date (ISO, when it
     can be worked out from the message's date: weekdays on or after it, "tomorrow", month and day, ISO, "the 3rd";

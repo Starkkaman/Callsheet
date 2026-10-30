@@ -11,6 +11,8 @@
   the writer is told to use them exactly. Mail that pretends to contain such facts stays plain mail.
   Both writers and the writer evaluation get them. The waiting days count to the brief's own date (the sync's
   clock in your time zone), so they can be more than the row's age when you never answered an earlier message.
+  When their latest message is more recent than the first unanswered one, the writer gets both numbers and
+  says e.g. "waiting 11 days, last nudge 8 days ago".
 - **Sender's claims stay claims.** A new fixed rule right after the reply guidance: suggested replies never
   state as done anything an email says was approved, released, paid, signed, booked or agreed; they treat it as
   the sender's claim or leave a [placeholder]. Setup shows it with the other fixed text.

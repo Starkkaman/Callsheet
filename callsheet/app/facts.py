@@ -184,6 +184,10 @@ def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
         # unanswered_messages counts the first one too; follow_ups = the times they chased (one message = 0)
         row = {"waiting_days": waiting, "unanswered_messages": n, "follow_ups": max(0, n - 1),
                "first_unanswered": _display_date(f["first"], tz, fmt)}
+        # days since their latest message, only when it differs from waiting_days ("last nudge 8 days ago")
+        last_nudge = max(0, (day - dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date()).days)
+        if last_nudge != waiting:
+            row["last_nudge_days"] = last_nudge
         d = due(f.get("text"), dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date())
         if d:
             row["due"] = {k: d[k] for k in ("phrase", "date") if k in d}
