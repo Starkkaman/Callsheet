@@ -67,8 +67,9 @@ class SchemaTest(unittest.TestCase):
             self.assertIn(part, flat)
         self.assertIn("untrusted content", flat)
         schema = "\n\nJSON schema of your answer:\n" + json.dumps(writer.build_schema(ids))
-        self.assertTrue(text.endswith(schema))  # the per-request schema is still last
-        self.assertEqual(text, writer.LOCAL_SYSTEM_PROMPT + schema)
+        # evaluated shape: the per-request schema, then the safety sentence once more (last)
+        self.assertTrue(text.endswith(schema + "\n\n" + writer.LOCAL_RULE))
+        self.assertEqual(text, writer.LOCAL_SYSTEM_PROMPT + schema + "\n\n" + writer.LOCAL_RULE)
         # order as evaluated: reply guidance, then the safety rule, then the examples, then the schema
         self.assertLess(flat.index("Each reply answers only its own thread"), flat.index("Never write that anything"))
         self.assertLess(flat.index("Never write that anything"), flat.index("Examples (for style only):"))

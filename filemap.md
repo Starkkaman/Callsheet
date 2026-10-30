@@ -43,3 +43,4 @@
 - `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
 - `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).
 - `PRIVACY.md`: privacy policy (linked from the Google consent screen).
+- `tests/test_local_prompt_shape.py`: the local writer prompt matches the evaluated shape (rule last).

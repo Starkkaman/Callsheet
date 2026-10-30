@@ -140,9 +140,17 @@ today, and the 10:00 budget review clashes with the dentist at 10:30. Three repl
 from Sam (4 days, about the contract). After lunch the day is clear apart from the 15:00 call with Ravi.\""""
 
 
+# The safety sentence again after the schema: the evaluated shape (the LLM eval's --rule) had it last.
+LOCAL_RULE = ("Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, and never "
+              "commit the owner to an amount, date or decision. Where a reply needs any of these, write a "
+              "[placeholder] for the owner to fill in.")
+
+
 def local_system(ids):
-    """The local model's system message: the prompt plus this request's schema."""
-    return LOCAL_SYSTEM_PROMPT + "\n\nJSON schema of your answer:\n" + json.dumps(build_schema(ids))
+    """The local model's system message, in the evaluated shape: the prompt, this request's schema, then the
+    safety sentence once more."""
+    return (LOCAL_SYSTEM_PROMPT + "\n\nJSON schema of your answer:\n" + json.dumps(build_schema(ids))
+            + "\n\n" + LOCAL_RULE)
 
 
 class WriterError(Exception):
