@@ -126,6 +126,7 @@
   function setLook(v, persist) {
     if (LOOKS.indexOf(v) < 0) v = 'bold';
     app.dataset.look = v; press('data-set-look', v); syncBg();
+    document.querySelectorAll('.wi textarea').forEach(fitTa);   /* the look changes the font size */
     if (persist) save(KEY_LOOK, v);
   }
   function setMode(v, persist) {
@@ -804,7 +805,7 @@
     else if (d.more) { U.more = !U.more; renderBrief('[data-more]'); }
     else if (d.goarea) { U.area = d.goarea; setTab('areas'); var ah = main.querySelector('.tabbar [data-tab="areas"]'); if (ah) ah.focus({ preventScroll: true }); }
     else if (d.allareas) { U.area = null; renderBrief('.tabbar [data-tab="areas"]'); }
-    else if (d.manage) { ui.step = 3; location.hash = 'setup'; }
+    else if (d.manage) { ui.step = 3; ui.focusNext = '#nnr-h'; location.hash = 'setup'; }
     else if (d.copy) copyDraft(t);
     else if (d.np) {
       var k = d.np.indexOf(':');
@@ -852,6 +853,15 @@
     connect: {},         /* area id -> {flow_id, auth_url} while a sign-in runs */
     confirm: null,       /* 'key' | 'acct:<id>' | 'area:<id>' */
     replaceKey: false,
+    slackOpen: {},       /* area id -> Slack connect panel open */
+    slackMan: null,      /* api/slack/manifest, fetched when a connect panel first opens */
+    slackIgn: {},        /* workspace id -> "Ignore channels" open */
+    slackCh: {},         /* workspace id -> {channels, stale} | {loading} | {error} */
+    slackAll: {},        /* workspace id -> show every channel chip */
+    prof: null,          /* writing profile shown in Setup (default: the active one) */
+    profMode: null,      /* 'copy' | 'rename' while that inline form is open */
+    wdraft: {},          /* '<profile id>:<section>' -> unsaved text */
+    focusNext: null,     /* focus target for the next Setup render (the brief's "Manage" link) */
     newArea: { name: '', colour: 2 }
   };
   function applyServerLook() {
@@ -911,7 +921,10 @@
     refreshErr.textContent = '';
     if (!changed && main.querySelector('.sheet, .bv')) return;
     window.scrollTo(0, 0);
-    if (v === 'setup') { ui.confirm = null; loadState().then(function () { return showSetup(); }, function () { return showSetup(); }); }
+    if (v === 'setup') {
+      var fs = ui.focusNext; ui.focusNext = null; ui.confirm = null;
+      loadState().then(function () { return showSetup(fs); }, function () { return showSetup(fs); });
+    }
     else if (v === 'eval') showEval();
     else showBrief();
   }
@@ -949,6 +962,7 @@
     add(main, sheet);
     press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
     syncBg();
+    main.querySelectorAll('.wi textarea').forEach(fitTa);
     if (focusSel) { var f = main.querySelector(focusSel); if (f) f.focus({ preventScroll: focusSel === '#wiz-title' }); }
   }
   /* obj may be a function: the body is then built when the request's turn comes (after earlier saves landed) */
@@ -983,11 +997,12 @@
     if (cur && list.indexOf(cur) < 0) list.unshift(cur);
     return list;
   }
+  function miniTime() { return S && S.settings && S.settings.time_format === '24h' ? '09:30' : '9:30 am'; }
   function miniCard(look, desc) {
     return h('button', { type: 'button', class: 'lookcard', 'data-set-look': look, 'aria-pressed': String(app.dataset.look === look) },
       h('span', { class: 'app mini', 'data-look': look, 'data-mode': app.dataset.mode }, [
         h('span', { class: 'm-head' }, [h('span', { class: 'm-word' }, 'Daily Brief'), h('span', { class: 'm-date' }, 'Wed 28 Oct')]),
-        h('span', { class: 'm-row' }, [h('span', { class: 'm-time' }, '09:30'), h('span', null, 'Daily stand-up'), h('span', { class: 'm-tag a2' }, 'CO. A')]),
+        h('span', { class: 'm-row' }, [h('span', { class: 'm-time' }, miniTime()), h('span', null, 'Daily stand-up'), h('span', { class: 'm-tag a2' }, 'CO. A')]),
         h('span', { class: 'm-name' }, LOOKNAME[look]), h('span', { class: 'm-desc' }, desc)]));
   }
   function stepAbout() {
@@ -1008,11 +1023,27 @@
       });
       return b;
     }));
+    /* 12-hour or 24-hour times: the server writes the brief's display strings in this format */
+    var tfErr = errBox(), tfCur = st.time_format === '24h' ? '24h' : '12h';
+    var tf = h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'lbl-tf' }, [['12h', '12-hour (2:30 pm)'], ['24h', '24-hour (14:30)']].map(function (x) {
+      var b = btn('chip', x[1], { 'aria-pressed': String(tfCur === x[0]), 'data-tf': x[0], 'data-fk': 'tf:' + x[0] }, function () {
+        if ((S.settings.time_format === '24h' ? '24h' : '12h') === x[0]) return;
+        patchSettings({ time_format: x[0] }, tfErr, [].slice.call(tf.querySelectorAll('button')), function () {
+          tf.querySelectorAll('button').forEach(function (y) {
+            var on = y.getAttribute('data-tf') === x[0];
+            y.setAttribute('aria-pressed', String(on));
+          });
+          document.querySelectorAll('.m-time').forEach(function (m) { m.textContent = miniTime(); });
+        });
+      });
+      return b;
+    }));
     return [
       h('div', { class: 'cols' }, [
         h('div', null, [
           h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-name' }, 'Your name'), name, nameErr]),
-          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-tz' }, 'Time zone'), h('span', { class: 'selw' }, tz), tzErr])]),
+          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-tz' }, 'Time zone'), h('span', { class: 'selw' }, tz), tzErr]),
+          h('div', { class: 'field' }, [h('span', { class: 'label', id: 'lbl-tf' }, 'Time format'), tf, tfErr])]),
         h('div', null, [
           h('div', { class: 'field' }, [h('span', { class: 'label', id: 'lbl-days' }, 'Working days'), days, dayErr]),
           h('p', { class: 'note' }, 'Days off still get a morning brief; check-ins can skip them (step 4).')])]),
@@ -1159,6 +1190,137 @@
           h('div', { class: 'btns' }, [fin, cancel])])]),
       err]);
   }
+  /* Slack (read-only, one workspace per area): the 3-step connect panel, or the connected workspace with its
+     ignore list and Disconnect. The manifest and its create-app URL come from api/slack/manifest. */
+  function copyText(text, b, label, fallbackHost) {
+    function said(t) { b.textContent = t; setTimeout(function () { b.textContent = label; }, 2000); }
+    function selectIt() {
+      var ta = h('textarea', { class: 'inp mfst', rows: '6', readonly: '', spellcheck: 'false', 'aria-label': 'App manifest' });
+      ta.value = text;
+      fallbackHost.textContent = ''; add(fallbackHost, ta);
+      var ok = false;
+      try { ta.focus(); ta.select(); ok = document.execCommand && document.execCommand('copy'); } catch (e) { ok = false; }
+      said(ok ? 'Copied' : 'Selected: press Ctrl+C');
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { said('Copied'); }, selectIt);
+    else selectIt();
+  }
+  function slackName(ws) { return ws.domain ? ws.domain + '.slack.com' : (ws.team_name || 'Slack workspace'); }
+  function slackTag(ws) {
+    if (ws.status === 'connected') return h('span', { class: 'st' }, 'Connected');
+    return h('span', { class: 'st warn' }, ws.status === 'needs_reconnect' ? 'Reconnect needed' : 'Error');
+  }
+  function loadChannels(ws) {
+    ui.slackCh[ws.id] = { loading: true };
+    return api('GET', 'api/slack/' + encodeURIComponent(ws.id) + '/channels').then(function (r) {
+      ui.slackCh[ws.id] = { channels: (r && r.channels) || [], stale: !!(r && r.stale) };
+    }, function (e) { ui.slackCh[ws.id] = { error: e.message }; }).then(function () {
+      if (ui.view === 'setup' && ui.step === 2) renderSetup('[data-fk="' + cssq('ign:' + ws.id) + '"]');
+    });
+  }
+  function slackWs(a, ws) {
+    var open = !!ui.slackIgn[ws.id], listId = 'ign-' + ws.id, ignored = (ws.ignored || []).slice(), err = errBox();
+    var reading = Math.max(0, (Number(ws.channels_total) || 0) - ignored.length);
+    var disc = btn('tbtn disc', 'Ignore channels (' + ignored.length + ')', { 'aria-expanded': String(open), 'aria-controls': listId, 'data-fk': 'ign:' + ws.id }, function () {
+      ui.slackIgn[ws.id] = !open;
+      if (!open && !(ui.slackCh[ws.id] && ui.slackCh[ws.id].channels)) loadChannels(ws);
+      renderSetup('[data-fk="' + cssq('ign:' + ws.id) + '"]');
+    });
+    var body = null, ch = ui.slackCh[ws.id] || {};
+    if (open) {
+      var kids = [h('p', { class: 'help' }, 'Tap a channel to ignore it. Ignored channels never show up in the brief.')];
+      if (ch.loading) kids.push(h('p', { class: 'help', role: 'status' }, 'Loading channels…'));
+      else if (ch.error) kids.push(h('p', { class: 'err', role: 'alert' }, ch.error));
+      else if (ch.channels) {
+        if (ch.stale) kids.push(h('p', { class: 'help' }, 'Slack didn’t answer, so this is the list from the last refresh.'));
+        var chans = ch.channels, many = chans.length > 40 && !ui.slackAll[ws.id];
+        kids.push(chans.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Channels in ' + slackName(ws) },
+          (many ? chans.slice(0, 40) : chans).map(function (c) {
+            var on0 = ignored.indexOf(c.id) >= 0;
+            var b = btn('chip', '#' + c.name, { 'aria-pressed': String(on0), 'aria-label': 'Ignore #' + c.name + (c.kind === 'private' ? ' (private)' : ''), 'data-ch': c.id }, function () {
+              var next;
+              run([b], err, function () {
+                var cur = (ws.ignored || []).slice(), i = cur.indexOf(c.id);
+                if (i >= 0) cur.splice(i, 1); else cur.push(c.id);
+                next = cur;
+                return api('PATCH', 'api/slack/' + encodeURIComponent(ws.id), { ignored: next });
+              }, function (r) {
+                ws.ignored = (r && r.ignored) || next;
+                b.setAttribute('aria-pressed', String(ws.ignored.indexOf(c.id) >= 0));
+                disc.textContent = 'Ignore channels (' + ws.ignored.length + ')';
+                line.textContent = readingLine(Math.max(0, (Number(ws.channels_total) || 0) - ws.ignored.length));
+              });
+            });
+            return b;
+          }).concat(many ? [btn('tbtn', 'Show all ' + chans.length, { 'data-fk': 'ignall:' + ws.id }, function () {
+            ui.slackAll[ws.id] = true; renderSetup('[data-fk="' + cssq('ign:' + ws.id) + '"]');
+          })] : [])) : h('p', { class: 'help' }, 'You’re not in any channels in this workspace.'));
+      }
+      body = h('div', { class: 'ign', id: listId }, kids.concat([err]));
+    } else body = h('div', { id: listId, hidden: true });
+    function readingLine(n) { return 'Reading ' + plural(n, 'channel', 'channels') + ' you’re in, your DMs and group DMs'; }
+    var line = h('p', { class: 'line' }, readingLine(reading));
+    var key = 'slack:' + ws.id;
+    return h('div', { class: 'slws' }, [
+      h('div', { class: 'acct-h' }, [h('span', { class: 'em' }, slackName(ws)), slackTag(ws)]),
+      ws.status !== 'connected' && ws.error ? h('p', { class: 'acct-err' }, ws.error) : null,
+      ws.status === 'needs_reconnect' ? h('p', { class: 'note' }, 'Use "Reconnect Slack workspace" below and paste a new User OAuth Token.') : null,
+      line, disc, body,
+      ui.confirm === key ? confirmRow('Disconnect ' + slackName(ws) + '? Callsheet forgets the token and what it read. You can remove the app in Slack too.', 'Disconnect', function (y, c, e) {
+        run([y, c], e, function () { return api('DELETE', 'api/slack/' + encodeURIComponent(ws.id)); }, function () {
+          ui.confirm = null; delete ui.slackCh[ws.id]; delete ui.slackIgn[ws.id]; return reload('slack:' + a.id);
+        });
+      }) : h('div', { class: 'acct-f' }, askBtn(key, 'Disconnect'))]);
+  }
+  function slackBlock(a) {
+    var wss = a.slack || [], open = !!ui.slackOpen[a.id], panelId = 'sp-' + a.id;
+    var live = wss.filter(function (w) { return w.status !== 'needs_reconnect'; });
+    var kids = [h('h4', { class: 'label slh' }, 'Slack')];
+    if (!wss.length) kids.push(h('div', { class: 'acct-h none' }, [h('span', { class: 'muted' }, 'No workspace yet'), h('span', { class: 'st off' }, 'Not connected')]));
+    wss.forEach(function (ws) { kids.push(slackWs(a, ws)); });
+    if (!live.length) {
+      var cb = btn('act', wss.length ? 'Reconnect Slack workspace' : 'Connect Slack workspace', { 'aria-expanded': String(open), 'aria-controls': panelId, 'data-fk': 'slack:' + a.id }, function () {
+        ui.slackOpen[a.id] = !open;
+        if (!open && (!ui.slackMan || ui.slackMan.error)) {
+          api('GET', 'api/slack/manifest').then(function (m) { ui.slackMan = m || {}; }, function (e) { ui.slackMan = { error: e.message }; })
+            .then(function () { if (ui.view === 'setup' && ui.step === 2) renderSetup('[data-fk="' + cssq('slack:' + a.id) + '"]'); });
+        }
+        renderSetup('[data-fk="' + cssq('slack:' + a.id) + '"]');
+      });
+      kids.push(h('div', { class: 'cbtn' }, cb));
+      if (open) kids.push(slackSteps(a, panelId));
+    }
+    return h('div', { class: 'slk' }, kids);
+  }
+  function slackSteps(a, panelId) {
+    var m = ui.slackMan, err = errBox(), fb = h('div', { class: 'mfw' });
+    var create = m && safeHttps(m.create_url);
+    var text = m && m.manifest ? JSON.stringify(m.manifest, null, 2) : (m && m.manifest_json) || '';
+    var copy = btn('btn sm', 'Copy the app manifest', { disabled: !text }, function () { copyText(text, copy, 'Copy the app manifest', fb); });
+    var tokId = 'tok-' + a.id;
+    var tok = h('input', { class: 'inp', type: 'password', id: tokId, autocomplete: 'off', spellcheck: 'false', placeholder: 'Paste the token', 'data-fk': 'tok:' + a.id });
+    var go = h('button', { type: 'submit', class: 'btn sm primary' }, 'Connect');
+    var form = on(h('form', { class: 'row2', novalidate: '' }, [h('label', { class: 'sr', for: tokId }, 'Paste the token'), tok, go]), 'submit', function (e) {
+      e.preventDefault();
+      var v = tok.value.trim();
+      if (!v) { err.textContent = 'Paste the User OAuth Token first.'; return; }
+      run([go], err, function () { return api('POST', 'api/slack/connect', { area_id: a.id, token: v }); }, function (ws) {
+        tok.value = ''; delete ui.slackOpen[a.id];
+        return reload(ws && ws.id ? 'ign:' + ws.id : 'slack:' + a.id);
+      });
+    });
+    return h('ol', { class: 'steps', id: panelId, 'aria-label': 'Connect a Slack workspace to ' + a.name }, [
+      h('li', null, [h('span', { class: 'num', 'aria-hidden': 'true' }, '1'), h('div', null, [
+        h('div', { class: 'row2' }, [
+          create ? h('a', { class: 'btn sm primary', href: create, target: '_blank', rel: 'noopener', 'data-fk': 'create:' + a.id }, 'Create the Callsheet app in Slack')
+            : h('button', { type: 'button', class: 'btn sm primary', disabled: true }, m ? 'Create the Callsheet app in Slack' : 'Loading…'),
+          copy]),
+        m && m.error ? h('p', { class: 'err', role: 'alert' }, m.error) : null, fb,
+        h('p', { class: 'help' }, 'Slack opens with the app’s settings filled in. It can only read: no posting.')])]),
+      h('li', null, [h('span', { class: 'num', 'aria-hidden': 'true' }, '2'), h('div', null,
+        ['Install it to your workspace, then copy the User OAuth Token (it starts with ', h('code', null, 'xoxp-'), ').'])]),
+      h('li', null, [h('span', { class: 'num', 'aria-hidden': 'true' }, '3'), h('div', null, [form, err])])]);
+  }
   function areaCard(a) {
     var c = clampColour(a.colour), reads = a.reads || {}, err = errBox();
     function readChip(key, label) {
@@ -1174,15 +1336,17 @@
       });
       return b;
     }
-    function later(label) { return h('button', { type: 'button', class: 'chip later', disabled: true, 'aria-pressed': 'false' }, [label, h('span', { class: 'cl' }, ' · Coming later')]); }
+    function later(label, why) { return h('button', { type: 'button', class: 'chip later', disabled: true, 'aria-pressed': 'false' }, [label, h('span', { class: 'cl' }, ' · ' + (why || 'Coming later'))]); }
     var accts = a.accounts || [], key = 'area:' + a.id;
     return h('div', { class: 'acard a' + c }, [
       h('h3', { class: 'areahead', tabindex: '-1', 'data-fk': 'areah:' + a.id }, a.name),
       accts.length ? h('div', { class: 'accts' }, accts.map(function (x) { return accountRow(a, x); })) : h('p', { class: 'note none' }, 'No Google account yet.'),
       connectBlock(a),
+      slackBlock(a),
       h('div', { class: 'reads' }, [h('div', { class: 'q', id: 'q-' + a.id }, 'What may the brief read?'),
-        h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'), readChip('writer', 'AI writer'), later('Chat'), later('Tasks')]),
-        err]),
+        h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'),
+          a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack first'), readChip('writer', 'AI writer'), later('Tasks')]),
+        err, h('p', { class: 'note' }, a.chat_available ? 'Chat is Slack. Check your employer\u2019s policy first.' : 'Check your employer\u2019s policy first.')]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
       }) : h('div', { class: 'acct-f' }, askBtn(key, 'Delete area'))]);
@@ -1268,7 +1432,40 @@
             fact('Mentioned deadlines'),
             fact('Anyone on your VIP list')]),
           ageErr,
-          h('p', { class: 'note' }, 'Only the number of days can change for now.')])])];
+          h('p', { class: 'note' }, 'Only the number of days can change for now.')])]),
+      neverReply()];
+  }
+  /* "Never needs a reply" rules (api/suppress), made from the brief's notepad menu; the brief's "N hidden · Manage" opens this */
+  var NNR_KIND = { thread: 'Thread', sender: 'Sender', domain: 'Domain' };
+  function fmtDay(iso) {
+    var d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return '';
+    try { return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: (S.settings && S.settings.timezone) || undefined }); }
+    catch (e) { return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); }
+  }
+  function neverReply() {
+    var rules = Array.isArray(S.suppress) ? S.suppress : [], err = errBox();
+    var rows = rules.map(function (r, i) {
+      var rm = btn('tbtn', 'Remove', { 'aria-label': 'Remove ' + (r.label || r.value), 'data-fk': 'nnr:' + r.id }, function () {
+        var next = rules[i + 1] || rules[i - 1];
+        run([rm], err, function () { return api('DELETE', 'api/suppress/' + encodeURIComponent(r.id)); }, function () {
+          return reload(next ? 'nnr:' + next.id : 'nnr-h');
+        });
+      });
+      return h('div', { class: 'mrow', role: 'row' }, [
+        h('span', { class: 'nm', role: 'cell' }, [r.label || r.value || '', ' ', h('span', { class: 'k' }, NNR_KIND[r.kind] || r.kind || '')]),
+        h('span', { class: 'src', role: 'cell' }, r.source === 'slack' ? 'Slack' : 'Mail'),
+        h('span', { class: 'dt', role: 'cell' }, fmtDay(r.created)),
+        h('span', { class: 'x', role: 'cell' }, rm)]);
+    });
+    return h('div', { class: 'nnr' }, [
+      h('h2', { class: 'h3', id: 'nnr-h', tabindex: '-1', 'data-fk': 'nnr-h' }, ['Never needs a reply', h('span', { class: 'n' }, 'Hidden from Needs a reply')]),
+      h('p', { class: 'note' }, 'Made from the brief: open a row’s menu and pick “Doesn’t need a reply”. Removed rules show their rows again at the next refresh.'),
+      rules.length ? h('div', { class: 'mtab', role: 'table', 'aria-labelledby': 'nnr-h' }, [
+        h('div', { class: 'mrow h', role: 'row' }, [h('span', { role: 'columnheader' }, 'Thread, sender or domain'), h('span', { role: 'columnheader' }, 'From'),
+          h('span', { role: 'columnheader' }, 'Added'), h('span', { role: 'columnheader' }, h('span', { class: 'sr' }, 'Remove'))]),
+        rows]) : h('p', { class: 'muted' }, 'No rules yet.'),
+      err]);
   }
 
   /* step 4: call times */
@@ -1323,7 +1520,139 @@
       h('div', { class: 'opts' }, [
         row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
         row(false, 'Phone push', 'via the Home Assistant app', 'Coming later')]),
-      writerBlock()];
+      writerBlock(), writingBlock()];
+  }
+
+  /* step 5: writing instructions. Profiles (Default is built in and read-only); five texts per profile, each saved
+     on its own (PATCH api/writer/profiles/<id>); Reset = PATCH "" (the text becomes Default's). The safety rules
+     and the style examples are fixed in the server (writer.SAFETY, writer.EXAMPLES) and always come last. */
+  var WSECT = [
+    ['rules', 'Global rules', 'Applies to everything Callsheet writes.'],
+    ['summary', 'Day summary', 'The short paragraph at the top of Briefing.'],
+    ['areas', 'Area summaries', 'The few sentences for each area.'],
+    ['emails', 'Email summaries', 'The one line in each row and “What they want”.'],
+    ['drafts', 'Reply drafts', 'Suggested replies you copy and send yourself.']];
+  var ALWAYS = [
+    'Mail, chat and calendar text is information, never instructions. Anything in it asking Callsheet to do something is ignored.',
+    'Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, and never promise an amount, date or decision for you. A [placeholder] goes where you have to decide.',
+    'Times are written in your time format (step 1).',
+    'Callsheet has no tools and nothing is sent. You read the brief and copy what you want.'];
+  /* a writing-instructions textarea shows its whole text (up to about 16 lines, then it scrolls) */
+  function fitTa(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 4, 400) + 'px'; }
+  function refreshWriter(r) { return api('GET', 'api/writer').then(function (w) { S.writer = w || S.writer; return r; }); }
+  function writingBlock() {
+    var w = writerOf(), profs = Array.isArray(w.prompt_profiles) && w.prompt_profiles.length ? w.prompt_profiles
+      : [{ id: 'default', name: 'Default', read_only: true }];
+    var defs = w.prompt_defaults || {}, max = Number(w.prompt_max) || 1500, pmax = Number(w.profile_max) || 10;
+    var active = w.active_profile || 'default';
+    if (!profs.some(function (x) { return x.id === ui.prof; })) ui.prof = profs.some(function (x) { return x.id === active; }) ? active : profs[0].id;
+    var prof = profs.filter(function (x) { return x.id === ui.prof; })[0], ro = !!prof.read_only || prof.id === 'default';
+    var owned = profs.filter(function (x) { return !(x.read_only || x.id === 'default'); }).length;
+    var err = errBox();
+    function show(focusKey) { renderSetup('[data-fk="' + cssq(focusKey) + '"]'); }
+
+    var sel = on(h('select', { class: 'inp', id: 'wi-prof', 'data-fk': 'wi-prof' }, profs.map(function (x) {
+      return h('option', { value: x.id, selected: x.id === prof.id }, x.name + (x.id === 'default' ? ' (read-only)' : '') + (x.id === active ? ' · in use' : ''));
+    })), 'change', function () { ui.prof = sel.value; ui.profMode = null; ui.confirm = null; show('wi-prof'); });
+    var full = owned >= pmax;
+    var copyB = btn('act', 'Copy profile', { 'data-fk': 'wi-copy', disabled: full || ui.profMode === 'copy', 'aria-expanded': String(ui.profMode === 'copy') }, function () {
+      ui.profMode = 'copy'; ui.confirm = null; show('wi-name');
+    });
+
+    /* the inline name form (Copy profile, Rename) */
+    var form = null;
+    if (ui.profMode === 'copy' || (ui.profMode === 'rename' && !ro)) {
+      var copying = ui.profMode === 'copy', fErr = errBox();
+      var names = profs.map(function (x) { return x.name; }), guess = prof.name + ' copy', i = 2;
+      while (copying && names.indexOf(guess) >= 0) guess = prof.name + ' copy ' + (i++);
+      var nm = h('input', { class: 'inp', type: 'text', id: 'wi-name', maxlength: '40', autocomplete: 'off', value: copying ? guess : prof.name, 'data-fk': 'wi-name' });
+      var ok = h('button', { type: 'submit', class: 'btn sm primary' }, copying ? 'Make the copy' : 'Save name');
+      var cancel = btn('btn sm', 'Cancel', null, function () { ui.profMode = null; show(copying ? 'wi-copy' : 'wi-rename'); });
+      form = on(h('form', { class: 'wiform', novalidate: '' }, [
+        h('label', { class: 'label', for: 'wi-name' }, copying ? 'Name of the copy of ' + prof.name : 'New name for ' + prof.name),
+        h('div', { class: 'row2' }, [nm, ok, cancel]), fErr]), 'submit', function (e) {
+        e.preventDefault();
+        var v = nm.value.trim();
+        if (!v) { fErr.textContent = 'Give the profile a name.'; return; }
+        run([ok, cancel], fErr, function () {
+          return (copying ? api('POST', 'api/writer/profiles', { copy_from: prof.id, name: v })
+            : api('PATCH', 'api/writer/profiles/' + encodeURIComponent(prof.id), { name: v })).then(refreshWriter);
+        }, function (r) {
+          ui.profMode = null;
+          if (copying && r && r.id) ui.prof = r.id;
+          show('wi-prof');
+        });
+      });
+    }
+
+    var useRow = [];
+    if (prof.id === active) useRow.push(h('span', { class: 'st', 'data-fk': 'wi-inuse', tabindex: '-1' }, 'In use'));
+    else {
+      var useB = btn('act', 'Use this profile', { 'data-fk': 'wi-use' }, function () {
+        run([useB], err, function () { return api('PATCH', 'api/writer', { active_profile: prof.id }); }, function (r) { S.writer = r || S.writer; show('wi-inuse'); });
+      });
+      useRow.push(useB);
+    }
+    if (!ro && ui.profMode !== 'rename') useRow.push(btn('tbtn', 'Rename', { 'data-fk': 'wi-rename' }, function () { ui.profMode = 'rename'; ui.confirm = null; show('wi-name'); }));
+    var pkey = 'prof:' + prof.id;
+    if (!ro && prof.id !== active && ui.confirm !== pkey) useRow.push(askBtn(pkey, 'Delete'));
+    var delConfirm = !ro && prof.id !== active && ui.confirm === pkey ? confirmRow('Delete the profile ' + prof.name + '? Its texts are gone for good.', 'Delete', function (y, c, e) {
+      run([y, c], e, function () { return api('DELETE', 'api/writer/profiles/' + encodeURIComponent(prof.id)); }, function (r) {
+        S.writer = r || S.writer; ui.confirm = null; ui.prof = null;
+        Object.keys(ui.wdraft).forEach(function (k) { if (k.indexOf(prof.id + ':') === 0) delete ui.wdraft[k]; });
+        show('wi-prof');
+      });
+    }) : null;
+
+    var fields = WSECT.map(function (x) {
+      var k = x[0], id = 'wi-' + k, dk = prof.id + ':' + k, saved = typeof prof[k] === 'string' ? prof[k] : (defs[k] || '');
+      var def = typeof defs[k] === 'string' ? defs[k] : saved, cur = ui.wdraft[dk] != null ? ui.wdraft[dk] : saved;
+      var ta = h('textarea', { class: 'inp', id: id, rows: '3', maxlength: String(max), readonly: ro, 'aria-describedby': 'wih-' + k + (ro ? '' : ' wic-' + k), 'data-fk': 'wi:' + k });
+      ta.value = cur;
+      var top = [h('label', { for: id }, x[1])];
+      if (ro) return h('div', { class: 'wfield' + (k === 'rules' ? ' global' : '') }, [h('div', { class: 'top2' }, top), h('div', { class: 'help', id: 'wih-' + k }, x[2]), ta]);
+      var fErr = errBox(), said = h('span', { class: 'said', role: 'status' });
+      var cnt = h('span', { class: 'cnt', id: 'wic-' + k }, cur.length + ' / ' + max + ' characters');
+      var resetB = btn('tbtn', 'Reset', { 'data-fk': 'wir:' + k, 'aria-label': 'Reset ' + x[1] + ' to the Default text', disabled: saved === def && cur === def }, function () {
+        if (saved === def) { delete ui.wdraft[dk]; show('wi:' + k); return; }
+        var body = {}; body[k] = '';
+        run([resetB, saveB], fErr, function () { return api('PATCH', 'api/writer/profiles/' + encodeURIComponent(prof.id), body).then(refreshWriter); },
+          function () { delete ui.wdraft[dk]; show('wi:' + k); });
+      });
+      var saveB = btn('act', 'Save', { 'data-fk': 'wis:' + k, 'aria-label': 'Save ' + x[1], disabled: cur === saved }, function () {
+        var body = {}; body[k] = ta.value;
+        run([resetB, saveB], fErr, function () { return api('PATCH', 'api/writer/profiles/' + encodeURIComponent(prof.id), body).then(refreshWriter); },
+          function () { delete ui.wdraft[dk]; show('wi:' + k); var sd = main.querySelector('[data-said="' + k + '"]'); if (sd) sd.textContent = 'Saved'; });
+      });
+      said.setAttribute('data-said', k);
+      on(ta, 'input', function () {
+        ui.wdraft[dk] = ta.value; said.textContent = ''; fitTa(ta);
+        if (ta.value === saved) delete ui.wdraft[dk];
+        cnt.textContent = ta.value.length + ' / ' + max + ' characters';
+        cnt.classList.toggle('full', ta.value.length >= max);
+        saveB.disabled = ta.value === saved; resetB.disabled = saved === def && ta.value === def;
+      });
+      if (cur.length >= max) cnt.classList.add('full');
+      top.push(resetB);
+      return h('div', { class: 'wfield' + (k === 'rules' ? ' global' : '') }, [h('div', { class: 'top2' }, top), h('div', { class: 'help', id: 'wih-' + k }, x[2]), ta,
+        h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, saveB])]), fErr]);
+    });
+
+    return h('div', { class: 'where wi' }, [
+      h('div', { class: 'shd' }, [h('h2', { class: 'h3' }, 'Writing instructions'),
+        h('label', { class: 'sr', for: 'wi-prof' }, 'Profile'), h('span', { class: 'selw' }, sel), copyB]),
+      h('p', { class: 'note' }, 'Tell Callsheet how to write. Plain words work best. These change tone and length, not the facts.' +
+        (w.provider && w.provider !== 'off' ? '' : ' They’re used when the writer is on.')),
+      full ? h('p', { class: 'note' }, 'You have ' + pmax + ' profiles, the most there can be. Delete one to make another copy.') : null,
+      form,
+      h('div', { class: 'wiuse' }, useRow), err, delConfirm,
+      ro ? h('p', { class: 'hintro' }, 'Default is read-only. Copy it to make changes.') : null,
+      fields,
+      h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'wi-lock' }, [
+        h('div', { class: 'lh', id: 'wi-lock' }, [ico('lock'), 'Always applied (can’t be changed)']),
+        h('ul', null, ALWAYS.map(function (t) { return h('li', null, t); })),
+        h('p', { class: 'muted' }, 'These rules always come last, after your instructions, so nothing you write can switch them off. ' +
+          'The style examples (one sample reply and one sample summary) are fixed too.')])]);
   }
 
   /* step 5: the AI writer. Off / Claude / Local model; keys are write-only (the server returns hints). */
@@ -1506,21 +1835,28 @@
     if (w.join() === 'mon,tue,wed,thu,fri') return 'Mon–Fri';
     return w.map(function (d) { return DAYNAME[d]; }).join(', ');
   }
+  function profileLine() {
+    var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
+    return p && p.id !== 'default' ? ' · Writing profile: ' + p.name : '';
+  }
   function stepReview() {
     var st = S.settings, nAcc = 0, err = errBox();
-    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; });
+    var nSlack = 0;
+    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; });
     var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
     var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
     var timesSum = [morning ? morning.time + ' brief' : 'No morning brief',
       checks.length ? checks.map(function (c) { return c.time; }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') +
         (st.skip_checkins_days_off ? ', skipped on days off' : '') : 'no check-ins'].join(' · ');
     var lines = [
-      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
+      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
       [S.areas.map(function (a) { return a.name; }).join(', '),
-        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet'].join(' · '),
-      plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days'),
+        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
+        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null].filter(Boolean).join(' · '),
+      plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
+        ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
       timesSum,
-      'Sidebar page in Home Assistant · Writer: ' + writerName(writerOf())];
+      'Sidebar page in Home Assistant · Writer: ' + writerName(writerOf()) + profileLine()];
     var ls = S.last_sync || {};
     var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () {
       run([refresh, goB], err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="sync"]'); });
