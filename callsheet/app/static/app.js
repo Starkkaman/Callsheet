@@ -322,15 +322,20 @@
   function newDot(r) {
     return r.new && B.previous_at ? h('span', { class: 'newdot', role: 'img', 'aria-label': 'New since ' + B.previous_at, title: 'New since ' + B.previous_at }) : null;
   }
+  /* the sender's-claim check (0.4.1): the rules flag a row whose latest incoming message says something was done */
+  var CLAIM_NOTE = 'This message says something was approved, paid, signed or released. Check before replying.';
+  function claimMark(r) {
+    return r.claim === true ? h('span', { class: 'cmk', 'aria-hidden': 'true', title: CLAIM_NOTE }, '!') : null;
+  }
   function rowEl(r, where) {
     var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
     return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-row': r.id }, [
       h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
       h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id,
-        'aria-label': r.who + ': ' + gistSum(r) + (r.age ? ', ' + r.age : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') }, [
+        'aria-label': r.who + ': ' + gistSum(r) + (r.age ? ', ' + r.age : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
-        h('span', { class: 'age' }, r.age || ''), rdot(r)]),
+        claimMark(r), h('span', { class: 'age' }, r.age || ''), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
   function doneRows() {
@@ -522,6 +527,7 @@
     return [h('div', { class: 'phd' }, [h('h2', { id: 'bv-ptitle' }, r.who), h('div', { class: 'pmeta' }, [tagOf(r.area),
       h('span', { class: 's' }, [ico(srcKind(r)), r.source || srcName(r)]), r.age ? h('span', null, r.age) : null,
       rk ? h('span', { class: 's' }, [rdot(r), rk[1]]) : null, r.new && B.previous_at ? h('span', { class: 's' }, [newDot(r), 'New']) : null])]),
+    r.claim === true ? h('p', { class: 'pflag claim' }, CLAIM_NOTE) : null,
     h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)),
     ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
       return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);

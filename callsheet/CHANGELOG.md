@@ -16,6 +16,13 @@
 - **Sender's claims stay claims.** A new fixed rule right after the reply guidance: suggested replies never
   state as done anything an email says was approved, released, paid, signed, booked or agreed; they treat it as
   the sender's claim or leave a [placeholder]. Setup shows it with the other fixed text.
+- **"This message says something was done."** When the latest message from the other person says something was
+  approved, paid, signed, released and so on (not a question or an "once it's paid"), the row's detail shows "This
+  message says something was approved, paid, signed or released. Check before replying." and the row in the list
+  gets a small "!". Callsheet's own rules decide this, with or without the AI writer, and even when the suggested
+  reply is fine. Mail: the subject (unless it is a "Re:" or "Fwd:") and the preview, plus the message text when
+  the writer reads it; Slack: the last message. Your own messages never count. Only the yes/no is kept, and it is
+  not sent to the writer.
 - **New Default writing profile.** The Default texts are the tuned "V3" wording: specific names, items and
   dates; replies that greet by first name, sign off with your first name and answer instead of deferring;
   the day summary leads with the oldest wait, then the clashes, then what's due. Your own profiles are

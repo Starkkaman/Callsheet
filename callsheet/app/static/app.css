@@ -674,6 +674,7 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .bv .rmain .tx{flex:1;min-width:0;display:flex;gap:8px;white-space:nowrap;overflow:hidden}
 .bv .rmain .who{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;font-weight:700}
 .bv .rmain .sum{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.bv .rmain .cmk{flex:none;color:var(--alert);font-weight:700}
 .bv .rmain .age{flex:none;font-family:var(--font-display);font-weight:var(--display-weight);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .bv .row.gone,.bv .row.isdone{background:transparent}
 .bv .row.gone{background:var(--surface-2)}
