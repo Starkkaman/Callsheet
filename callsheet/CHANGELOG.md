@@ -9,7 +9,11 @@
   order, the oldest wait, what's due today and counts (open replies, VIPs, overdue: waiting longer than the
   reply age in settings, none when that is 0). They go to the writer in their own block after the data, and
   the writer is told to use them exactly. Mail that pretends to contain such facts stays plain mail.
-  Both writers and the writer evaluation get them.
+  Both writers and the writer evaluation get them. The waiting days count to the brief's own date (the sync's
+  clock in your time zone), so they can be more than the row's age when you never answered an earlier message.
+- **Sender's claims stay claims.** A new fixed rule right after the reply guidance: suggested replies never
+  state as done anything an email says was approved, released, paid, signed, booked or agreed; they treat it as
+  the sender's claim or leave a [placeholder]. Setup shows it with the other fixed text.
 - **New Default writing profile.** The Default texts are the tuned "V3" wording: specific names, items and
   dates; replies that greet by first name, sign off with your first name and answer instead of deferring;
   the day summary leads with the oldest wait, then the clashes, then what's due. Your own profiles are

@@ -580,7 +580,7 @@ class Store:
                 "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES,
                 # read-only: the exact fixed texts compose_system adds to every profile: after_drafts right after
                 # the "Suggested replies" text, then the examples, then the safety block (+ JSON instructions)
-                "fixed": {"after_drafts": writer.NEVER_CLAIM, "safety": writer.SAFETY, "examples": writer.EXAMPLES}}
+                "fixed": {"after_drafts": writer.AFTER_DRAFTS, "safety": writer.SAFETY, "examples": writer.EXAMPLES}}
 
     @staticmethod
     def _check_key(val, what):

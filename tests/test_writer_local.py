@@ -82,7 +82,7 @@ class SchemaTest(unittest.TestCase):
             self.assertEqual(text, writer.compose_system(None, ids, a) + schema + "\n\n" + writer.LOCAL_RULE)
             # order: reply guidance at once followed by the never-claim sentence (as in P2F), examples, the safety
             # block, the schema, the safety sentence again
-            self.assertIn(writer.DEFAULT_PROMPTS["drafts"] + "\n\n" + writer.NEVER_CLAIM + "\n\n" + writer.EXAMPLES,
+            self.assertIn(writer.DEFAULT_PROMPTS["drafts"] + "\n\n" + writer.AFTER_DRAFTS + "\n\n" + writer.EXAMPLES,
                           text)
             self.assertLess(text.index(writer.EXAMPLES), text.index(writer.SAFETY))
             self.assertLess(text.index(writer.SAFETY), text.index("JSON schema of your answer:"))
