@@ -83,7 +83,7 @@ already exists (default true); Slack is read only when `reads.chat` is true. Eve
   in `Syncer._read`, so with or without the writer, e.g. "waiting 11 days, last nudge 8 days ago"; absent when
   nothing is unanswered, in older cached briefs and the sample. Only the wording is stored (no times, no text).
   The page shows it with " · " for ", " in place of `age` (list row's `.age` span and the detail's `.pmeta`),
-  since `age` (time since the last message) would repeat the last nudge; rows without `wait` show `age`. The list
+  since `age` (time since the last message) would repeat the last nudge; rows without `wait` show `age`. The list span shows the compact form (`waitShort`: "waiting 11d · nudge 8d", "waiting 3d", "waiting today"; the full text is its title); the reason pill reads just "Waiting" on rows with `wait` (the rules' "Waiting N days" counts from the last message and would contradict it). The list
   span has the full text as its title; on phones (<=700px) it is capped at 38% of the row with an ellipsis so the
   name stays readable (the detail shows it in full).
 - `top`: always present (list, ≤ 5, may be empty): `[{text, ref, kind: "reply"|"event"}]`, `ref` = a current row

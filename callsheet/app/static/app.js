@@ -258,7 +258,7 @@
     if ((x = find(/^Mentioned|In your thread/))) return ['men', x];
     if ((x = find(/question/i))) return ['q', x];
     if ((x = find(/deadline/i))) return ['due', x];
-    if ((x = find(/^Waiting/))) return ['wait', x];
+    if ((x = find(/^Waiting/))) return ['wait', r.wait ? 'Waiting' : x]; /* the wait text carries the days */
     return null;
   }
   /* minutes since midnight from a display or HH:MM string ("9:30 am", "4:00–5:00 pm", "14:30"); null if none */
@@ -333,6 +333,11 @@
     return typeof r.wait === 'string' && r.wait ? r.wait.split(', ').join(' · ') : '';
   }
   function ageOf(r) { return waitOf(r) || r.age || ''; }
+  /* the list's compact form: "waiting 11d · nudge 8d", "waiting 3d", "waiting today" */
+  function waitShort(r) {
+    return waitOf(r).replace(/^waiting since today/, 'waiting today').replace(/ (\d+) days?/g, ' $1d')
+      .replace(/last nudge (\S+)(?: ago)?/, 'nudge $1');
+  }
   function rowEl(r, where) {
     var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
     return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-row': r.id }, [
@@ -341,7 +346,7 @@
         'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
-        claimMark(r), h('span', { class: 'age', title: waitOf(r) || null }, ageOf(r)), rdot(r)]),
+        claimMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
   function doneRows() {

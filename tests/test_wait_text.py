@@ -91,7 +91,11 @@ class PageTest(unittest.TestCase):
         self.assertIn("return typeof r.wait === 'string' && r.wait ? r.wait.split(', ').join(' · ') : '';", js)
         self.assertIn("function ageOf(r) { return waitOf(r) || r.age || ''; }", js)
         # the list row's age span and the detail panel's meta line, both through h() (text nodes)
-        self.assertIn("h('span', { class: 'age', title: waitOf(r) || null }, ageOf(r))", js)
+        # the list shows the compact form ("waiting 11d · nudge 8d"), the full sentence stays in the title
+        self.assertIn("h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r))", js)
+        self.assertIn(".replace(/^waiting since today/, 'waiting today').replace(/ (\\d+) days?/g, ' $1d')", js)
+        # the reason pill says just "Waiting" when the row has a wait text (no second, different day count)
+        self.assertIn("return ['wait', r.wait ? 'Waiting' : x];", js)
         self.assertIn("ageOf(r) ? h('span', null, ageOf(r)) : null", js)
         self.assertEqual(len(re.findall(r"\br\.age\b", js)), 1)  # only inside ageOf()
         self.assertIsNone(re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write", js))

@@ -23,7 +23,8 @@
   ignored. Thanks for news about it counts too ("Thank you for the update on the signed contract"); a reminder
   or question about a signed copy, or a "paid plan", does not.
 - **Wait on each reply.** Reply rows show how long they have waited, worked out by Callsheet's rules (with or
-  without the writer): "waiting 11 days · last nudge 8 days ago" in place of the short age, in the list and the detail.
+  without the writer), in place of the short age: compact in the list ("waiting 11d · nudge 8d"), in full in the
+  detail ("waiting 11 days · last nudge 8 days ago"). The "Waiting" reason no longer repeats a day count.
 - **"This message says something was done."** When the latest message from the other person says something was
   approved, paid, signed, released and so on (not a question or an "once it's paid"), the row's detail shows "This
   message says something was approved, paid, signed or released. Check before replying." and the row in the list
