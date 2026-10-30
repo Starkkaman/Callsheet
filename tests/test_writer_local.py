@@ -382,6 +382,26 @@ class LocalRunTest(LocalBase):
         st = self.ok("GET", "/api/state")["writer"]["local"]
         self.assertEqual((st["max_tokens"], st["timeout"]), (8192, 600))  # bad patches changed nothing
 
+    def test_server_slot(self):
+        """0.3.5: the optional llama.cpp id_slot, 0..63; null (the default) means the key isn't sent."""
+        self.seed()
+        w = self.local_on()
+        self.assertIsNone(w["local"]["id_slot"])
+        self.sync_brief()
+        self.assertNotIn("id_slot", self.loc.chats()[-1]["body"])
+        for bad in (-1, 64, 1.5, "3", True):
+            status, _, raw = self.call("PATCH", "/api/writer", {"local": {"id_slot": bad}})
+            self.assertEqual(status, 400, bad)
+            self.assertIn("server slot", json.loads(raw)["error"], bad)
+        for good in (0, 63, 5):
+            self.assertEqual(self.ok("PATCH", "/api/writer", {"local": {"id_slot": good}})["local"]["id_slot"], good)
+        self.sync_brief()
+        self.assertEqual(self.loc.chats()[-1]["body"]["id_slot"], 5)
+        self.assertIsNone(self.ok("PATCH", "/api/writer", {"local": {"id_slot": None}})["local"]["id_slot"])
+        self.sync_brief()
+        self.assertNotIn("id_slot", self.loc.chats()[-1]["body"])
+        self.assertIsNone(writer.local_options({"id_slot": 64})["id_slot"])  # a bad stored value isn't sent
+
 
 @unittest.skipUnless(HAVE_SDK, "needs the anthropic package")
 class ClaudeObjectTest(WriterBase):

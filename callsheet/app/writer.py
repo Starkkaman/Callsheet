@@ -39,9 +39,11 @@ LOCAL_TEST_TIMEOUT = 20   # Test connection is only GET /models
 # llama.cpp spent the answer's room on reasoning and big briefs came back empty (finish_reason length).
 LOCAL_DEFAULTS = {"thinking": False, "reasoning_budget": 1536, "max_tokens": 4096,
                   "context": 32768,   # the server's context per request (llama.cpp --ctx-size); only to warn
-                  "timeout": 300}     # a cold model load takes ~50 s on the owner's server, then the answer
+                  "timeout": 300,     # a cold model load takes ~50 s on the owner's server, then the answer
+                  "id_slot": None}    # llama.cpp slot to pin requests to (0..ID_SLOT_MAX); None = not sent
 LOCAL_LIMITS = {"reasoning_budget": (256, 32768), "max_tokens": (512, 32768), "context": (2048, 1048576),
                 "timeout": (30, 1800)}
+ID_SLOT_MAX = 63
 LOAD_WAIT = 10            # seconds before the one retry while the server loads the model
 CHARS_PER_TOKEN = 3.5     # rough prompt estimate
 FIT_CAPS = (2000, 1000, 500)  # per-message caps tried when the prompt doesn't fit the context
@@ -335,7 +337,17 @@ def local_options(cfg):
         v = cfg.get(k)
         if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
             out[k] = v
+    v = cfg.get("id_slot")
+    if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= ID_SLOT_MAX:
+        out["id_slot"] = v
     return out
+
+
+def with_slot(body, opts):
+    """Add "id_slot" to a request body when the owner set a server slot; without one the key is left out."""
+    if opts.get("id_slot") is not None:
+        body["id_slot"] = opts["id_slot"]
+    return body
 
 
 def local_max_tokens(opts):
@@ -640,7 +652,7 @@ def local_body(model, payload_text, ids, opts):
                          {"role": "user", "content": payload_text}]}
     if opts["thinking"]:
         body["reasoning_budget_tokens"] = opts["reasoning_budget"]
-    return body
+    return with_slot(body, opts)
 
 
 def _json_in(text):

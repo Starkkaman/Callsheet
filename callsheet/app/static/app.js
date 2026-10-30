@@ -1006,14 +1006,15 @@
       patchWriter(function () { return { local: { thinking: writerOf().local.thinking !== true } }; }, thErr, [th], function (r) { th.setAttribute('aria-pressed', String(!!(r.local && r.local.thinking))); });
     });
     var advErr = errBox();
-    function numField(id, key, label, min, max) {
+    function numField(id, key, label, min, max, note) {
       var inp = on(h('input', { class: 'inp', type: 'number', id: id, min: String(min), max: String(max), step: '1', inputmode: 'numeric', value: w.local[key] != null ? String(w.local[key]) : '' }), 'change', function () {
         var v = inp.value.trim();
-        if (!v) return;
-        var body = { local: {} }; body.local[key] = Number(v);
-        patchWriter(body, advErr, [], function (r) { if (r && r.local && r.local[key] != null) inp.value = String(r.local[key]); });
+        if (!v && !note) return;  /* optional fields (with a note): empty clears the setting */
+        var body = { local: {} }; body.local[key] = v ? Number(v) : null;
+        patchWriter(body, advErr, [], function (r) { if (r && r.local) inp.value = r.local[key] != null ? String(r.local[key]) : ''; });
       });
-      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp,
+        note ? h('p', { class: 'note' }, note) : null]);
     }
     /* evaluation tools (off by default): a switch, and the way to the Writer evaluation page */
     var ev = S.eval || {}, evErr = errBox();
@@ -1027,7 +1028,9 @@
       h('div', { class: 'lm' }, [
         numField('w-lmax', 'max_tokens', 'Max tokens for the answer', 512, 32768),
         numField('w-lctx', 'context', 'Context size of the server (tokens)', 2048, 1048576),
-        numField('w-ltime', 'timeout', 'Timeout (seconds)', 30, 1800)]),
+        numField('w-ltime', 'timeout', 'Timeout (seconds)', 30, 1800),
+        numField('w-lslot', 'id_slot', 'Server slot for briefs', 0, 63,
+          'Optional. Pins Callsheet\u2019s requests to one llama.cpp slot. Leave empty unless you know you need it.')]),
       h('div', { class: 'swrow' }, [evSw, h('span', { 'aria-hidden': 'true' }, 'Show the evaluation tools')]), evErr,
       h('p', { class: 'note' }, 'Compare local model setups on today\u2019s data, side by side and without names. It only runs when you press its button.'),
       ev.enabled ? h('div', { class: 'testrow' }, btn('act', 'Writer evaluation', { 'data-fk': 'ev-open' }, function () { location.hash = 'eval'; })) : null]);

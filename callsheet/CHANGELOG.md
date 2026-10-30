@@ -5,6 +5,7 @@
 - Local writer: more specific replies and day summaries, short placeholders like [day], each reply answers
   only its own thread (tested on synthetic data: placeholders where needed 61/65 vs 44/65, invented values
   2 vs 8; the safety rule still held). The Claude writer is unchanged.
+- Local model: optional server slot (llama.cpp id_slot) in Advanced; off by default.
 
 ## 0.3.4
 
