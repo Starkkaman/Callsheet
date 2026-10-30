@@ -259,7 +259,8 @@ class ClaudeWriterTest(WriterBase):
         text = self.payload()
         self.assertEqual(text.count("<data>"), 1)
         self.assertEqual(text.count("</data>"), 1)
-        self.assertTrue(text.rstrip().endswith("</data>"))
+        self.assertTrue(text.rstrip().endswith("</facts>"))  # 0.4.1: the facts block follows the data
+        self.assertLess(text.index("</data>"), text.index("<facts>"))
         inner = text.split("<data>\n", 1)[1].rsplit("\n</data>", 1)[0]
         self.assertNotIn("<", inner)  # tags from mail can't open or close anything
         self.assertEqual(json.loads(inner)["replies"][0]["messages"][-1]["text"], INJECTION)  # data intact

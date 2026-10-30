@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 
+import facts
 import google
 import rules
 import slack
@@ -192,6 +193,8 @@ class Syncer:
             ref.update(row.pop("_sup"), key=row["key"], vip=row["vip"])
             if "_messages" in row:
                 ref["messages"] = row.pop("_messages")
+            if "_facts" in row:  # for the writer's facts block only; never stored
+                ref["facts"] = row.pop("_facts")
             # done: mail by account + thread, Slack by team + channel + thread (or message) ts
             done_key = row.pop("_done", None)
             if ref.get("source") == "mail":
@@ -303,7 +306,7 @@ class Syncer:
             r["brief"]["replies"]
         written = brief["written_at"]
         self._mark_new(brief)
-        self.store.set_brief_refs({rid: {k: v for k, v in ref.items() if k != "messages"}
+        self.store.set_brief_refs({rid: {k: v for k, v in ref.items() if k not in ("messages", "facts")}
                                    for rid, ref in r["refs"].items()})
         self.store.set_cached_brief(brief)
         last = {"at": written, "ok": not errors, "errors": errors}
@@ -379,6 +382,17 @@ class Syncer:
             if r["id"] in bodies:
                 item["messages"] = bodies[r["id"]]
             data["replies"].append(item)
+        # the facts block (0.4.1): the rules' numbers for the rows and events sent; the deadline is looked for in
+        # the last message's text when its body was read, else in the subject and snippet (Slack: the message)
+        f_rows = []
+        for r in rows:
+            f = dict(refs.get(r["id"], {}).get("facts") or {})
+            if f and refs[r["id"]].get("source") == "mail" and bodies.get(r["id"]):
+                f["text"] = (bodies[r["id"]][-1].get("text") or "") + "\n" + (f.get("text") or "")
+            f_rows.append({"id": r["id"], "who": r["who"], "text": r["text"], "vip": r.get("vip"), "facts": f})
+        f_sched = [{"start_hhmm": e.get("start_hhmm"), "end_hhmm": e.get("end_hhmm"), "title": e.get("title"),
+                    "area": name.get(e.get("area"), "")} for e in sched]
+        data[writer.FACTS_KEY] = facts.build(f_rows, f_sched, day, tz, fmt, settings.get("reply_age_days") or 0)
         sent = {e["id"] for e in data["schedule"]} | {r["id"] for r in data["replies"]}
         top = rules.rules_top([e for e in brief["schedule"] if e.get("id") in sent],
                               [r for r in brief["replies"] if r.get("id") in sent])

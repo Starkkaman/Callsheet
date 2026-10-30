@@ -179,6 +179,20 @@ def _note(ev):
     return None
 
 
+def overlaps(a, b):
+    """The clash rule: two timed events overlap when each starts before the other ends. a, b: {start, end}
+    (datetimes, or "HH:MM" strings of one day, which compare the same way)."""
+    return a["start"] < b["end"] and b["start"] < a["end"]
+
+
+def unanswered(msgs):
+    """msgs: [(time, from_owner)] of one thread or chat in time order. The messages by others after the owner's
+    last message: {"first": time of the first of them (None when there are none), "chases": how many}."""
+    last_mine = max((i for i, (_, mine) in enumerate(msgs) if mine), default=-1)
+    after = [t for t, mine in msgs[last_mine + 1:] if not mine]
+    return {"first": after[0] if after else None, "chases": len(after)}
+
+
 def build_schedule(items, tz, day, fmt="24h"):
     """items: [(event, area_id)] from events.list for `day`. Returns (rows, all_day_titles). Rows carry the
     machine fields start_hhmm / end_hhmm ("HH:MM", end "24:00" at midnight) and flags ([{kind: not_accepted}
@@ -219,7 +233,7 @@ def build_schedule(items, tz, day, fmt="24h"):
         flags = []
         if _self_status(e["ev"]) == "needsAction":
             flags.append({"kind": "not_accepted"})
-        clash = next((o for o in timed if o is not e and e["start"] < o["end"] and o["start"] < e["end"]), None)
+        clash = next((o for o in timed if o is not e and overlaps(e, o)), None)
         if clash is not None:
             row["clash"] = True
             flags.append({"kind": "overlap", "at": hhmm(max(clash["start"], day_start)),
@@ -323,7 +337,21 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
                      "labels": {"thread": "Mail · " + _clip(subject or snippet or "this thread", 60),
                                 "sender": (f"{name.strip()} <{addr}>" if name.strip() else addr),
                                 "domain": domain}},
-            "_key": "mail:" + str(thread.get("id", "")) + ":" + str(last.get("id", ""))}
+            "_key": "mail:" + str(thread.get("id", "")) + ":" + str(last.get("id", "")),
+            # for the writer's facts (never stored): who wrote since the owner's last message (SENT label or
+            # the owner's address), and the last message's text to look for a deadline in
+            "_facts": dict(unanswered([(_ms(m) / 1000, _from_owner(m, me)) for m in sorted(msgs, key=_ms)]),
+                           last=_ms(last) / 1000, text=subject + "\n" + snippet)}
+
+
+def _ms(msg):
+    return int(msg.get("internalDate") or 0)
+
+
+def _from_owner(msg, me):
+    if "SENT" in (msg.get("labelIds") or []):
+        return True
+    return email.utils.parseaddr(_headers(msg).get("from", ""))[1].lower() == me
 
 
 def sort_replies(rows):
@@ -425,10 +453,11 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
             return u["email"].lower() in vips
         return any(n and n.strip().lower() in vip_names for n in (u.get("name"), u.get("real_name")))
 
-    def add(key, ch, msg, ctx, root=None, mentioned=False, in_thread=False):
+    def add(key, ch, msg, ctx, root=None, mentioned=False, in_thread=False, facts=None):
         c = cands.get(key)
         if c is None or _f(msg["ts"]) >= _f(c["msg"]["ts"]):
             cands[key] = {"ch": ch, "msg": msg, "ctx": ctx, "root": root,
+                          "facts": facts or {"first": _f(msg["ts"]), "chases": 1},
                           "mentioned": mentioned or bool(c and c["mentioned"]),
                           "in_thread": in_thread or bool(c and c["in_thread"])}
         else:
@@ -438,7 +467,7 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
     for ch, msgs in (data.get("dm") or {}).items():
         real = [m for m in msgs if _real(m) and not (m.get("thread_ts") and m.get("thread_ts") != m["ts"])]
         if real and real[-1]["user"] != me and now_ts - _f(real[-1]["ts"]) <= SLACK_DM_MAX_S:
-            add((ch,), ch, real[-1], real[-3:])
+            add((ch,), ch, real[-1], real[-3:], facts=unanswered([(_f(m["ts"]), m["user"] == me) for m in real]))
     threads = data.get("threads") or {}
     for (ch, root), msgs in threads.items():
         real = [m for m in msgs if _real(m)]
@@ -457,7 +486,7 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
             continue
         ctx = real[-3:]
         add((ch, root), ch, after[-1], ctx, root if is_thread else None, mentioned=unanswered_mention,
-            in_thread=bool(mine) and is_thread)
+            in_thread=bool(mine) and is_thread, facts=unanswered([(_f(m["ts"]), m["user"] == me) for m in real]))
     owner_last = data.get("owner_last") or {}
     pending = {(p[0], p[1]) for p in data.get("mentions") or []}  # unanswered mentions from earlier reads
     for ch, msgs in (data.get("chan") or {}).items():
@@ -510,7 +539,8 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
                      "labels": {"thread": source + (" thread" if root else " message"),
                                 "sender": f"{who(uid)} (Slack)"}},
             "_key": f"slack:{ws.get('team_id', '')}:{c['ch']}:{root or ''}:{m['ts']}",
-            "_messages": ctx})
+            "_messages": ctx,
+            "_facts": dict(c["facts"], last=_f(m["ts"]), text=text)})
     heads = []
     for ch, msgs in (data.get("chan") or {}).items():
         conv = convs.get(ch) or {}

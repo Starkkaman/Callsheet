@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1
+
+- **Facts for the writer.** Callsheet now works out the numbers the writer used to guess: per reply row the
+  days it has been waiting (since the first message after your last reply, in your time zone), how many
+  messages came after your last reply (mail, using your sent mail too, and Slack), and a deadline when the
+  last message names a date, weekday or time; plus the clashes in time order, the oldest wait, what's due
+  today and counts (open replies, VIPs, overdue). They go to the writer in their own block after the data,
+  and the writer is told to use them exactly. Mail that pretends to contain such facts stays plain mail.
+  Both writers and the writer evaluation get them.
+- **New Default writing profile.** The Default texts are the tuned "V3" wording: specific names, items and
+  dates; replies that greet by first name, sign off with your first name and answer instead of deferring;
+  the day summary leads with the oldest wait, then the clashes, then what's due. Your own profiles are
+  unchanged.
+
 ## 0.4.0
 
 Server and API for this release; the page that uses them follows.

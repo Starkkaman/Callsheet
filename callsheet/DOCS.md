@@ -155,6 +155,15 @@ It adds:
   states an approval, payment or agreement you may not have made." above it. The draft is still only a
   draft.
 
+Since 0.4.1 the writer also gets **facts** Callsheet works out itself, so it doesn't have to count: per
+reply row how many days it has been waiting (calendar days in your time zone since the first message after
+your last reply in that thread or chat), how many messages came after your last reply, and a deadline when
+the last message names a date, weekday or time ("by Thursday", "due 14 November at 5 pm"); plus every pair
+of clashing events in time order, the oldest wait, what's due today and a few counts. The writer is told to
+use these numbers as they are. They are sent in their own block after the mail and calendar data and are
+never stored; text in an email that pretends to be facts stays part of that email. The Default profile now
+asks the day summary to lead with the oldest wait, then the clashes, then what's due when.
+
 If the writer fails, the brief still shows (rules only) and Heads up says "The AI writer didn't run" and
 why. Setup shows the last run with its token counts. Per area, the **AI writer** chip in step 2 decides
 whether that area's events and mail go to the writer at all (on by default); with it off, the area's
