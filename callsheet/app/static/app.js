@@ -1656,9 +1656,10 @@
       h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'wi-lock' }, [
         h('div', { class: 'lh', id: 'wi-lock' }, [ico('lock'), 'Always applied (can’t be changed)']),
         /* the exact texts from the server (api/writer fixed), shown as they are */
+        fx.after_drafts ? h('p', { class: 'fixtext' }, fx.after_drafts) : null,
         h('p', { class: 'fixtext' }, fx.safety || ''),
-        h('p', { class: 'muted' }, 'These rules always come last, after your instructions, so nothing you write can switch them off. ' +
-          'The style examples are fixed too.'),
+        h('p', { class: 'muted' }, 'The first rule follows your reply instructions; the rest always come last, so nothing you ' +
+          'write can switch them off. The style examples are fixed too.'),
         fx.examples ? exFold : null])]);
   }
 
