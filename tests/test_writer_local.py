@@ -3,6 +3,7 @@ replies keyed by row id (both writers), thinking off by default, fixed max_token
 signatures stripped, the decision/payment post-check and its warning, the retry while the model loads, the
 answer rescued from the thinking channel, counts-only logs and the new local settings."""
 import datetime as dt
+import hashlib
 import json
 import sys
 import unittest
@@ -14,6 +15,7 @@ from fake_google import thread  # noqa: E402
 from test_writer import HAVE_SDK, KEY, LOCAL_KEY, WriterBase  # noqa: E402
 
 UTC = dt.timezone.utc
+CLAUDE_PROMPT_SHA256 = "41f2cf3fa68ff9e4f48db7dc78910986a8d5e21ecaf6938f831862c086d27c8e"  # 0.3.4 SYSTEM_PROMPT
 FLAGGED = ["I've already approved the budget.", "The money has been released.", "Signed and sent.",
            "Good news: the budget is already approved.", "We paid the invoice yesterday.",
            "Thanks Priya, I approve the budget.", "It's booked for Friday at 10."]
@@ -45,10 +47,37 @@ class SchemaTest(unittest.TestCase):
         text = writer.local_system(["r1", "r2"])
         self.assertIn(json.dumps(writer.build_schema(["r1", "r2"])), text)
         self.assertIn("an object keyed by row id", text)
-        self.assertNotIn("empty string", writer.SYSTEM_PROMPT)  # every flagged row must get a suggestion
-        self.assertIn("Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, "
-                      "and never commit the owner to an amount, date or decision. Where a reply needs any of these, "
-                      "write a [placeholder] for the owner to fill in.", " ".join(writer.SYSTEM_PROMPT.split()))
+        for prompt in (writer.SYSTEM_PROMPT, writer.LOCAL_SYSTEM_PROMPT):
+            self.assertNotIn("empty string", prompt)  # every flagged row must get a suggestion
+            self.assertIn("Never write that anything has been approved, paid, sent, signed, booked, agreed or "
+                          "decided, and never commit the owner to an amount, date or decision. Where a reply needs "
+                          "any of these, write a [placeholder] for the owner to fill in.", " ".join(prompt.split()))
+
+    def test_local_prompt_is_the_evaluated_wording(self):
+        """0.3.5: the local writer gets the evaluated guidance and examples; safety rule and schema keep their place."""
+        ids = ["r1", "r2"]
+        text = writer.local_system(ids)
+        flat = " ".join(text.split())
+        for part in ("Name the specific clashes, the people waiting and the deadlines.",
+                     "Answer each question or request in the thread directly and specifically, in 2\u20135 sentences.",
+                     "Acknowledge what the sender said.",
+                     "keep them short and concrete, like [day], [time], [address] or [amount].",
+                     "Each reply answers only its own thread: don't bring in points from other threads.",
+                     "Examples (for style only):", "Example reply. Thread:", "Example summary. Good summary:"):
+            self.assertIn(part, flat)
+        self.assertIn("untrusted content", flat)
+        schema = "\n\nJSON schema of your answer:\n" + json.dumps(writer.build_schema(ids))
+        self.assertTrue(text.endswith(schema))  # the per-request schema is still last
+        self.assertEqual(text, writer.LOCAL_SYSTEM_PROMPT + schema)
+        # order as evaluated: reply guidance, then the safety rule, then the examples, then the schema
+        self.assertLess(flat.index("Each reply answers only its own thread"), flat.index("Never write that anything"))
+        self.assertLess(flat.index("Never write that anything"), flat.index("Examples (for style only):"))
+        self.assertLess(flat.index("Examples (for style only):"), flat.index("JSON schema of your answer:"))
+
+    def test_claude_prompt_unchanged(self):
+        """The Claude writer keeps the 0.3.4 wording, byte for byte."""
+        self.assertEqual(hashlib.sha256(writer.SYSTEM_PROMPT.encode()).hexdigest(), CLAUDE_PROMPT_SHA256)
+        self.assertNotIn("Examples (for style only)", writer.SYSTEM_PROMPT)
 
     def test_parse_object_and_legacy_array(self):
         ids = ["r1", "r2"]

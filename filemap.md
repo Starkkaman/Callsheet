@@ -5,7 +5,7 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.4, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.5, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
 - `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
@@ -14,7 +14,7 @@
 - `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer, writer evaluation); seeds the local writer from `options.json`.
 - `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
-- `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
+- `callsheet/app/writer.py`: the AI writer: minimised payload, prompts (Claude `SYSTEM_PROMPT`, local `LOCAL_SYSTEM_PROMPT` with style examples) and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
 - `callsheet/app/evaluate.py`: owner-run writer evaluation (0.3.3): refusal checks (call-time window, sync or run busy, no local server), builds the writer input like a sync without storing anything live, G0 / Q-low / Q-med requests and the Gemma reload to the local server, per-setup metrics, `writer-eval/<UTC time>/` files (0700/0600, last 5 kept), blind A/B pairs seeded per run, choices and the NDJSON export.
 - `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.

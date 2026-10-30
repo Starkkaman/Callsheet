@@ -167,6 +167,7 @@ class ClaudeWriterTest(WriterBase):
         self.assertEqual(body["output_config"]["format"]["schema"]["properties"]["replies"]["required"], ["r1", "r2"])
         self.assertIn("Never write that anything has been approved", body["system"])
         self.assertIn("untrusted content", body["system"])
+        self.assertEqual(body["system"], writer.SYSTEM_PROMPT)  # not the local wording (0.3.5)
         for banned in ("thinking", "temperature", "top_p", "top_k", "budget_tokens", "betas", "tools"):
             self.assertNotIn(banned, body)
         # input: minimised, bodies for suggestions, all inside <data>
