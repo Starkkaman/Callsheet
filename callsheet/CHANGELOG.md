@@ -11,9 +11,11 @@ Server and API for this release; the page that uses them follows.
   DMs and group DMs where the other person spoke last, @mentions you haven't answered, and new replies in
   threads you're in, with the same reasons as mail and VIPs matched by email (else by name). @channel,
   @here and @everyone go to Heads up. Channels can be ignored. Areas get a **chat** read switch.
-- **Smarter writer.** A summary per area and up to 5 **Top of the day** items that point at rows in the
-  brief; the day summary is 3–6 sentences. Without the writer, Top of the day comes from the rules (VIPs,
-  clashes, deadlines). Slack rows go to the writer with their last 3 messages.
+- **Smarter writer.** A summary per area and up to 5 **Top of the day** items; the day summary is 3–6
+  sentences. The rules pick Top of the day (VIPs, clashes, deadlines, then the next replies) and the writer
+  only words it; without the writer the rules' own lines show. Slack rows go to the writer with their last 3
+  messages. The "never say it was approved or paid" rule follows the reply instructions directly again (as in
+  0.3.5), and more drafts that tell someone to release or pay get the warning.
 - **Writing profiles.** The writer's three instruction texts (day summary, area summaries, suggested
   replies) live in named profiles: a read-only Default plus up to 10 of your own (copy, rename, edit,
   delete). The safety rules are fixed and always come last, whatever a profile says.

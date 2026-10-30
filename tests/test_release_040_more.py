@@ -85,7 +85,7 @@ class GistParseTest(unittest.TestCase):
         self.assertEqual(g["summary"], "Ana wants the invoice approved.")
         self.assertEqual([d["value"] for d in g["details"]],
                          ["INV-2291", "€1,250.00", "14 November", "Please send it to 12 Harbour Street, Leith",
-                          "€1,250", "Tue, 28 Oct 2026"])  # 6 at most; invented, paraphrased, other case dropped
+                          "€1,250", "Tue, 28 Oct 2026"])  # 6 at most; invented, paraphrased dropped; case-folded dups once
         self.assertEqual(res["gists"]["r2"]["details"], [{"label": "Time", "value": "12:30"}])  # per-row text only
         # without the texts nothing can be checked, so no details; bad shapes are ignored, never an error
         self.assertEqual(writer.parse_output(out, ["r1"], self.ask)["gists"]["r1"]["details"], [])

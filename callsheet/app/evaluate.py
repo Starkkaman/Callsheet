@@ -11,6 +11,10 @@ server, one request at a time:
            (both Qwen setups with temperature 1.0, top_p 0.95, top_k 20, as in the replay harness's Phase 2)
     reload one tiny chat request (max_tokens 8) to the Gemma model, so the brief's model is loaded again
 
+Every setup gets what a live 0.4.0 brief would send (Syncer.writer_data's ask: area ids, the rules' top refs,
+the active writing profile, the time format): the same system message (writer.local_system: the composed
+profile prompt, the schema with areas/top/gists/replies, LOCAL_RULE last) and the same JSON schema; answers
+are parsed and scored the way the brief reads them (writer.parse_output with the ask and the payload sent).
 All three get the same payload (fitted once for the largest max_tokens). Model ids can be changed in the
 evaluation's Advanced settings (store.eval_settings) in case the server names them differently.
 
@@ -70,13 +74,14 @@ class Refused(Exception):
 
 
 # --- requests ------------------------------------------------------------------
-def config_body(cfg, model, payload_text, ids, opts):
-    """(request body, options for writer._post) for one setup. opts: the owner's local_options()."""
+def config_body(cfg, model, payload_text, ids, opts, ask=None):
+    """(request body, options for writer._post) for one setup. opts: the owner's local_options(). ask: the
+    live brief's ask (writer.make_ask), so the system message and schema are the ones a brief sends."""
     if cfg["family"] == "gemma":
         o = dict(opts, thinking=False)
-        return writer.local_body(model, payload_text, ids, o), o
+        return writer.local_body(model, payload_text, ids, o, ask), o
     o = dict(opts, thinking=True, reasoning_budget=cfg["budget"], max_tokens=QWEN_ANSWER, timeout=QWEN_TIMEOUT)
-    body = writer.local_body(model, payload_text, ids, o)  # enable_thinking true, budget, max_tokens budget+4096
+    body = writer.local_body(model, payload_text, ids, o, ask)  # enable_thinking true, budget, max_tokens budget+4096
     body["reasoning_effort"] = cfg["effort"]
     body.update(QWEN_SAMPLING)
     return body, o
@@ -107,9 +112,10 @@ def thread_texts(data):
             for r in data.get("replies") or [] if r.get("suggest")}
 
 
-def score(res, ids, threads, wall):
-    """(metrics, parsed) for one raw /chat/completions answer. parsed: {summary, replies} as the brief would
-    show them (writer.parse_output), or None when the answer isn't usable."""
+def score(res, ids, threads, wall, ask=None, payload_text=None):
+    """(metrics, parsed) for one raw /chat/completions answer. parsed: as the brief would show it
+    (writer.parse_output with the ask and the payload sent): {summary, replies} and, with an ask, areas, top
+    and gists (details that fail the verbatim check dropped); None when the answer isn't usable."""
     res = res if isinstance(res, dict) else {}
     choices = res.get("choices") if isinstance(res.get("choices"), list) else []
     choice = choices[0] if choices and isinstance(choices[0], dict) else {}
@@ -126,22 +132,25 @@ def score(res, ids, threads, wall):
         except ValueError:
             out = None
     elif isinstance(reasoning, str):
-        out = next((o for o in writer._json_in(reasoning) if writer._complete(o, ids)), None)
+        out = next((o for o in writer._json_in(reasoning) if writer._complete(o, ids, ask)), None)
         rescued = out is not None
-    parsed = None
+    parsed, p = None, None
     if isinstance(out, dict):
         try:
-            p = writer.parse_output(out, ids)
+            p = writer.parse_output(out, ids, ask, writer.seen_texts(payload_text) if payload_text else None)
             parsed = {"summary": p["summary"], "replies": p["replies"]}
+            if ask is not None:
+                parsed.update(areas=p["areas"], top=p["top"], gists=p["gists"])
         except writer.WriterError:
-            parsed = None
+            parsed, p = None, None
     texts = evalscore.reply_texts(out)
     returned = [i for i in ids if isinstance(texts.get(i), str) and texts[i].strip()]
     drafts = parsed["replies"] if parsed else {}
     flagged = [i for i in ids if i in drafts and writer.states_decision(drafts[i])]
     sc = evalscore.score_drafts(drafts, threads)
     metrics = {
-        "valid_json": valid, "schema_valid": evalscore.schema_valid(out, ids), "rescued_from_thinking": rescued,
+        "valid_json": valid, "schema_valid": evalscore.schema_valid(out, ids, ask),
+        "rescued_from_thinking": rescued,
         "finish_reason": str(choice.get("finish_reason"))[:20] if choice.get("finish_reason") else None,
         "wall_s": round(wall, 1),
         "prompt_tokens": _num(usage.get("prompt_tokens")), "completion_tokens": _num(usage.get("completion_tokens")),
@@ -154,6 +163,8 @@ def score(res, ids, threads, wall):
         "placeholder_used": sc["placeholder_used"], "placeholder_needed": sc["placeholder_needed"],
         "placeholder_used_when_needed": sc["placeholder_used_when_needed"],
         "invented_when_needed": sc["invented_when_needed"], "error": None}
+    if ask is not None:
+        metrics.update(evalscore.shape_040(out, ids, ask, p))
     return metrics, parsed
 
 
@@ -274,15 +285,16 @@ class Evaluator:
             loc = wcfg["local"]
             info["models"] = {"gemma": es["gemma_model"], "qwen": es["qwen_model"]}
             try:
-                data, ids, read_errors = self.syncer.writer_data(wcfg)
+                data, ids, ask, read_errors = self.syncer.writer_data(wcfg)
             finally:
                 held = False
                 self.syncer.lock.release()
             if read_errors:
                 info["errors"].append("Some accounts couldn't be read, so the data may be incomplete.")
             opts = writer.local_options(loc)
-            payload = writer.fit_local(data, ids, fit_opts(opts), self.log)
+            payload = writer.fit_local(data, ids, fit_opts(opts), self.log, ask=ask)
             info["ids"] = list(ids)
+            info["ask"] = {"areas": ask["areas"], "refs": ask["refs"], "time_format": ask["time_format"]}
             _write(d / "payload.txt", payload)
             _write(d / "data.json", _json(data))
             self._save_run(d, info)
@@ -296,7 +308,7 @@ class Evaluator:
                     break
                 self.job.update(step=n, config=cfg["name"])
                 model = es["gemma_model"] if cfg["family"] == "gemma" else es["qwen_model"]
-                body, o = config_body(cfg, model, payload, ids, opts)
+                body, o = config_body(cfg, model, payload, ids, opts, ask)
                 qwen_ran = qwen_ran or cfg["family"] == "qwen"
                 line = {"config": cfg["name"], "model": model,
                         "request": {k: v for k, v in body.items() if k != "messages"},
@@ -305,7 +317,7 @@ class Evaluator:
                 try:
                     res = writer._post(loc["base_url"], loc["api_key"], body, o, self.log, self.monotonic)
                     line["response"] = res
-                    line["metrics"], line["parsed"] = score(res, ids, threads, self.monotonic() - s0)
+                    line["metrics"], line["parsed"] = score(res, ids, threads, self.monotonic() - s0, ask, payload)
                 except writer.WriterError as e:
                     line["error"] = str(e)
                 except Exception as e:  # noqa: BLE001 (one setup failing never stops the others)
@@ -483,6 +495,7 @@ class Evaluator:
             p = x.get("parsed") or {}
             out.append({"type": "config", "config": c["name"], "model": x.get("model"), "request": x.get("request"),
                         "metrics": x.get("metrics"), "summary": p.get("summary"), "drafts": p.get("replies") or {},
+                        "areas": p.get("areas") or {}, "top": p.get("top") or [], "gists": p.get("gists") or {},
                         "error": x.get("error")})
         if choices is not None:
             out.append(dict({"type": "choices"}, **choices))

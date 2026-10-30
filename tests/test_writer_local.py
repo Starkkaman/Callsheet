@@ -14,10 +14,9 @@ from fake_google import thread  # noqa: E402
 from test_writer import HAVE_SDK, KEY, LOCAL_KEY, WriterBase  # noqa: E402
 
 def schema_for(sent, ids):
-    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and row refs) it was sent with."""
-    ask = writer.make_ask(sent["properties"]["areas"]["required"],
-                          sent["properties"]["top"]["items"]["properties"]["ref"]["enum"])
-    assert set(ids) <= set(ask["refs"]), ask["refs"]
+    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and the rules' top refs) it was
+    sent with."""
+    ask = writer.make_ask(sent["properties"]["areas"]["required"], sent["properties"]["top"]["required"])
     return writer.build_schema(ids, ask)
 
 
@@ -81,11 +80,14 @@ class SchemaTest(unittest.TestCase):
             # evaluated shape: the per-request schema, then the safety sentence once more (last)
             self.assertTrue(text.endswith(schema + "\n\n" + writer.LOCAL_RULE))
             self.assertEqual(text, writer.compose_system(None, ids, a) + schema + "\n\n" + writer.LOCAL_RULE)
-            # order: reply guidance, examples, the safety block, the schema, the safety sentence again
-            self.assertLess(flat.index("Each reply answers only its own thread"), flat.index("Examples (for style only):"))
+            # order: reply guidance at once followed by the never-claim sentence (as in P2F), examples, the safety
+            # block, the schema, the safety sentence again
+            self.assertIn(writer.DEFAULT_PROMPTS["drafts"] + "\n\n" + writer.NEVER_CLAIM + "\n\n" + writer.EXAMPLES,
+                          text)
             self.assertLess(text.index(writer.EXAMPLES), text.index(writer.SAFETY))
             self.assertLess(text.index(writer.SAFETY), text.index("JSON schema of your answer:"))
-            self.assertEqual(flat.count(writer.LOCAL_RULE), 2)  # in the safety block and once more at the end
+            # after the reply guidance, in the safety block and once more at the end
+            self.assertEqual(flat.count(writer.LOCAL_RULE), 3)
 
     def test_claude_prompt_has_no_local_tail(self):
         """The Claude writer gets the composed prompt (safety block last), not the local schema + LOCAL_RULE tail."""

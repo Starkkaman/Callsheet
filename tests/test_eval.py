@@ -23,6 +23,14 @@ QLOW_OUT = {"summary": "Qwen low summary.", "replies": {"r1": "I've already appr
 QMED_OUT = {"summary": "Qwen medium summary.", "replies": {"r1": "Yes, Thursday works.", "r2": ""}}
 
 
+def as_040(out, ask, details=()):
+    """An answer in the 0.4.0 shape a live brief asks for: areas, top keyed by the rules' refs, gists."""
+    gist = {"summary": "They want a decision.", "details": [dict(d) for d in details]}
+    return {"summary": out["summary"], "areas": {a: "Area line." for a in ask["areas"]},
+            "top": {r: "Top line." for r in ask["refs"]}, "gists": {i: gist for i in out["replies"]},
+            "replies": out["replies"]}
+
+
 class EvalLocal(fake_ai.FakeLocal):
     """Answers per model id: .by_model[model] is a queue of contents (the last one repeats). .loading_for[model]:
     the next N requests for that model get HTTP 503 "Loading model"."""
@@ -183,8 +191,14 @@ class RunTest(EvalBase):
     def test_run_end_to_end(self):
         self.setup_all()
         self.sync_brief()
+        live = self.loc.chats()[-1]["body"]  # what the live brief sent (the 0.4.0 shape)
+        sent = live["response_format"]["json_schema"]["schema"]
+        ask = writer.make_ask(sent["properties"]["areas"]["required"], sent["properties"]["top"]["required"])
+        self.assertTrue(ask["areas"] and ask["refs"])
+        details = ({"label": "Deadline", "value": "Thursday"}, {"label": "Time", "value": "Friday 9:00"})
         self.loc.requests.clear()
-        self.loc.by_model = {G: [json.dumps(G0_OUT), "OK"], Q: [json.dumps(QLOW_OUT), json.dumps(QMED_OUT)]}
+        self.loc.by_model = {G: [json.dumps(as_040(G0_OUT, ask, details)), "OK"],
+                             Q: [json.dumps(as_040(QLOW_OUT, ask)), json.dumps(as_040(QMED_OUT, ask))]}
         self.loc.loading_for = {Q: 1}  # the server swaps models: one 503 "Loading model", then it answers
         before = self.snapshot()
         n_google = len(self.fake.requests)
@@ -201,6 +215,12 @@ class RunTest(EvalBase):
         self.assertEqual([c["body"]["model"] for c in chats], [G, Q, Q, Q, G])
         g0, qlow, qmed, reload = chats[0]["body"], chats[2]["body"], chats[3]["body"], chats[4]["body"]
         self.assertEqual(chats[1]["body"], qlow)
+        # exactly what a live brief sends: the same system message (profile prompt, 0.4.0 schema with areas, top
+        # and gists, LOCAL_RULE last), the same JSON schema and the same payload
+        self.assertEqual(g0["messages"], live["messages"])
+        self.assertEqual(g0["response_format"], live["response_format"])
+        self.assertTrue(g0["messages"][0]["content"].endswith(writer.LOCAL_RULE))
+        self.assertEqual(set(sent["properties"]), {"summary", "areas", "top", "gists", "replies"})
         self.assertEqual(g0["chat_template_kwargs"], {"enable_thinking": False})
         self.assertEqual(g0["max_tokens"], 4096)
         self.assertNotIn("reasoning_effort", g0)
@@ -245,6 +265,13 @@ class RunTest(EvalBase):
         self.assertEqual(set(m), {"G0", "Q-low", "Q-med"})
         g, lo, me = m["G0"], m["Q-low"], m["Q-med"]
         self.assertTrue(g["valid_json"] and g["schema_valid"])
+        n_areas, n_top = len(ask["areas"]), len(ask["refs"])
+        self.assertEqual({k: g[k] for k in ("areas_expected", "areas_written", "top_expected", "top_written",
+                                             "gists_expected", "gists_written", "details_returned", "details_kept",
+                                             "details_dropped")},
+                         {"areas_expected": n_areas, "areas_written": n_areas, "top_expected": n_top,
+                          "top_written": n_top, "gists_expected": 2, "gists_written": 2, "details_returned": 4,
+                          "details_kept": 1, "details_dropped": 3})  # "Thursday" only in r1's thread
         self.assertEqual((g["finish_reason"], g["prompt_tokens"], g["completion_tokens"]), ("stop", 900, 120))
         self.assertEqual((g["prompt_n"], g["cache_n"], g["predicted_per_second"], g["reasoning_chars"]),
                          (880, 20, 31.5, 90))

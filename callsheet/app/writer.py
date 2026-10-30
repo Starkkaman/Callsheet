@@ -109,6 +109,25 @@ Never write that anything has been approved, paid, sent, signed, booked, agreed 
 the owner to an amount, date or decision. Where a reply needs any of these, write a [placeholder] for the \
 owner to fill in."""
 
+# The never-claim sentence on its own (the safety block's second paragraph). It follows the "Suggested replies"
+# guidance at once, as in the evaluated P2F prompt (0.3.5 held 0/6 on the injection fixtures with it there;
+# 0.4.0 with it only in the safety block, after the examples, wrote "the money has been released" 3/3).
+NEVER_CLAIM = " ".join(SAFETY.split("\n\n", 1)[1].split())
+
+# Gists guidance against copying a sender's claim (fixed, part of the JSON instructions).
+GIST_NO_CLAIM = ("details quote what the sender wrote; a draft never repeats a sender's claim that something was "
+                 "approved, paid or decided as if it were true.")
+GIST_SENDER_FACTS = "details are facts the sender stated, never decisions or approvals by the owner."
+
+# Prompt levers (internal; production values below). The re-measure script (run_e041) switches them one at a
+# time; nothing in the app changes them.
+#   claim_after_drafts:   NEVER_CLAIM right after the "Suggested replies" guidance (P2F order)
+#   safety_before_drafts: the whole SAFETY block also just before "Suggested replies:" (it stays last too)
+#   gist_rules:           sentences added to the gists guidance
+#   drop_flagged_details: a row whose draft the post-check flags keeps its gist summary but no details
+LEVERS = {"claim_after_drafts": True, "safety_before_drafts": False, "gist_rules": (GIST_NO_CLAIM,),
+          "drop_flagged_details": False}
+
 
 def _ordered(ids):
     """ids as a list: in order when given as a list/tuple/dict, sorted when given as a set."""
@@ -119,8 +138,9 @@ def _ordered(ids):
 
 def make_ask(areas=(), refs=(), prompts=None, time_format="12h"):
     """What one request asks for besides the summary and replies: a summary per area (area ids in today's
-    data), "Top of the day" items pointing at these row ids, the active profile's writing instructions and
-    the owner's time format ("12h" or "24h")."""
+    data), a "Top of the day" line for each of these row ids (refs: the rows the rules chose, in their order;
+    the writer only words them), the active profile's writing instructions and the owner's time format
+    ("12h" or "24h")."""
     return {"areas": _ordered(areas), "refs": _ordered(refs), "prompts": effective_prompts(prompts),
             "time_format": "24h" if time_format == "24h" else "12h"}
 
@@ -135,8 +155,8 @@ def effective_prompts(saved):
 def build_schema(ids, ask=None):
     """The output schema for one request: a summary and a replies object keyed by the reply ids we asked
     suggestions for, all required and nothing else (so duplicates and omissions can't happen). With an ask
-    (0.4.0): also an area summary per area id, up to 5 "top" items whose ref is one of the row ids, and a gist
-    (summary + exact details) per reply id."""
+    (0.4.0): also an area summary per area id, a "top" object with one line per ref the rules chose (keyed by
+    ref, so the writer can't pick or reorder rows), and a gist (summary + exact details) per reply id."""
     ids = _ordered(ids)
     props = {"summary": {"type": "string"}}
     required = ["summary"]
@@ -144,11 +164,9 @@ def build_schema(ids, ask=None):
         areas, refs = ask["areas"], ask["refs"]
         props["areas"] = {"type": "object", "properties": {a: {"type": "string", "minLength": 1} for a in areas},
                           "required": list(areas), "additionalProperties": False}
-        item = {"type": "object",
-                "properties": {"text": {"type": "string", "minLength": 1}, "ref": {"type": "string", "enum": list(refs)}},
-                "required": ["text", "ref"], "additionalProperties": False}
-        props["top"] = {"type": "array", "maxItems": MAX_TOP, "items": item} if refs else \
-            {"type": "array", "maxItems": 0}
+        refs = list(refs)[:MAX_TOP]
+        props["top"] = {"type": "object", "properties": {r: {"type": "string", "minLength": 1} for r in refs},
+                        "required": refs, "additionalProperties": False}
         detail = {"type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "string"}},
                   "required": ["label", "value"], "additionalProperties": False}
         gist = {"type": "object",
@@ -174,7 +192,7 @@ summary: the day summary, written as the instructions under "Day summary" say.
 replies: an object keyed by row id, with exactly one entry for each reply row that has "suggest": true and \
 no others. The value is the suggested reply, written as the instructions under "Suggested replies" say."""
     return """Answer with one JSON object and nothing else:
-{"summary": string, "areas": {"<area id>": string}, "top": [{"text": string, "ref": "<row id>"}], \
+{"summary": string, "areas": {"<area id>": string}, "top": {"<row id>": string}, \
 "gists": {"<row id>": {"summary": string, "details": [{"label": string, "value": string}]}}, \
 "replies": {"<row id>": string}}
 
@@ -183,26 +201,38 @@ summary: the day summary, written as the instructions under "Day summary" say.
 areas: an object keyed by area id, with exactly one entry for each area in the data's "areas" list, written as \
 the instructions under "Area summaries" say.
 
-top: "Top of the day": at most 5 items, most important first. Each item is one short line (text) about one row \
-of the data, and ref is that row's id (a reply id like "r1" or a schedule id like "s1"). Each ref at most once.
+{top}
 
 gists: an object keyed by row id, with exactly one entry for each reply row that has "suggest": true and no \
 others. summary: what they want, in plain words (1 or 2 sentences, not a quote), written as the instructions \
 under "Email summaries" say. details: at most 6 exact facts from that row's messages (dates, times, amounts, \
 addresses, reference numbers, deadlines); label is a short name, value is copied character for character from \
-the messages. Facts that aren't written in the messages are dropped. Use [] when there are none.
+the messages. Facts that aren't written in the messages are dropped. Use [] when there are none.{gist_rules}
 
 replies: an object keyed by row id, with exactly one entry for each reply row that has "suggest": true and \
-no others. The value is the suggested reply, written as the instructions under "Suggested replies" say."""
+no others. The value is the suggested reply, written as the instructions under "Suggested replies" say.""" \
+        .replace("{top}", _top_rule(ask["refs"])) \
+        .replace("{gist_rules}", "".join(" " + r for r in LEVERS["gist_rules"]))
+
+
+def _top_rule(refs):
+    refs = list(refs)[:MAX_TOP]
+    if not refs:
+        return 'top: "Top of the day": nothing today; write an empty object {}.'
+    return ('top: "Top of the day": the rules already chose these rows, most important first: ' + ", ".join(refs)
+            + '. An object with exactly one entry for each of these row ids and no others; the value is one short '
+            'line about that row.')
 
 
 def compose_system(profile=None, ids=None, ask=None, schema=False):
     """The system prompt for any writing profile ({rules, summary, areas, emails, drafts}; None = the ask's, else
     Default): fixed intro, the profile's texts (global rules, day summary, area summaries, email summaries,
-    suggested replies), then the fixed safety block (untrusted data, never claim a decision, the JSON format),
+    suggested replies, at once followed by the fixed never-claim sentence, as in the evaluated P2F prompt), the
+    fixed examples, then the fixed safety block (untrusted data, never claim a decision, the JSON format),
     always last: no profile text can remove or move it. Without an ask (the 0.3.x shape) there are no area or
     email summaries. schema=True appends this request's JSON schema (built from ids and
-    the ask), as the local model gets it. Pure: the writer evaluation reuses it for any profile."""
+    the ask), as the local model gets it. Pure (apart from the LEVERS switches, fixed in production): the
+    writer evaluation reuses it for any profile."""
     p = effective_prompts(profile if profile is not None else (ask or {}).get("prompts"))
     # fixed, not part of any profile; the 0.3.x shape (no ask) had 24-hour times
     fmt = (ask or {}).get("time_format") or "24h"
@@ -211,7 +241,12 @@ def compose_system(profile=None, ids=None, ask=None, schema=False):
              "Global rules:\n" + p["rules"], "Day summary:\n" + p["summary"]]
     if ask is not None:
         parts += ["Area summaries:\n" + p["areas"], "Email summaries:\n" + p["emails"]]
-    parts += ["Suggested replies:\n" + p["drafts"], EXAMPLES, SAFETY + "\n\n" + _json_rules(ask)]
+    if LEVERS["safety_before_drafts"]:
+        parts.append(SAFETY)
+    drafts = "Suggested replies:\n" + p["drafts"]
+    if LEVERS["claim_after_drafts"]:
+        drafts += "\n\n" + NEVER_CLAIM
+    parts += [drafts, EXAMPLES, SAFETY + "\n\n" + _json_rules(ask)]
     text = "\n\n".join(parts)
     if schema:
         text += "\n\nJSON schema of your answer:\n" + json.dumps(build_schema(ids or [], ask))
@@ -511,8 +546,10 @@ def _reply_items(raw):
 
 
 def _areas_top(out, ask):
-    """Area summaries and top items from an answer, keeping only known area ids and refs (lenient: a missing
-    or malformed part gives nothing, never an error)."""
+    """Area summaries and top items from an answer, keeping only known area ids and the refs asked for
+    (lenient: a missing or malformed part gives nothing, never an error). top: [{text, ref}] in the ask's ref
+    order (the rules' order; the writer only words it), from the object keyed by ref (or a list of {text,
+    ref}, the earlier 0.4.0 shape)."""
     areas, top = {}, []
     raw = out.get("areas")
     if isinstance(raw, dict):
@@ -520,18 +557,17 @@ def _areas_top(out, ask):
             if aid in ask["areas"] and isinstance(text, str) and text.strip():
                 areas[aid] = _clip(" ".join(text.split()), MAX_AREA_SUMMARY)
     raw = out.get("top")
-    if isinstance(raw, list):
-        seen = set()
+    texts = {}
+    if isinstance(raw, dict):
+        texts = {k: v for k, v in raw.items() if isinstance(k, str)}
+    elif isinstance(raw, list):
         for item in raw:
-            if not isinstance(item, dict):
-                continue
-            ref, text = item.get("ref"), item.get("text")
-            if isinstance(ref, str) and ref in ask["refs"] and ref not in seen and isinstance(text, str) \
-                    and text.strip():
-                seen.add(ref)
-                top.append({"text": _clip(" ".join(text.split()), MAX_TOP_TEXT), "ref": ref})
-            if len(top) == MAX_TOP:
-                break
+            if isinstance(item, dict) and isinstance(item.get("ref"), str):
+                texts.setdefault(item["ref"], item.get("text"))
+    for ref in list(ask["refs"])[:MAX_TOP]:
+        text = texts.get(ref)
+        if isinstance(text, str) and text.strip():
+            top.append({"text": _clip(" ".join(text.split()), MAX_TOP_TEXT), "ref": ref})
     return areas, top
 
 
@@ -561,14 +597,26 @@ def seen_texts(payload_text):
     return out
 
 
+def _fold(text):
+    return _squash(text).casefold()
+
+
 def _gists(out, ids, seen):
-    """Gists {id: {summary, details}} from an answer: known ids only, a non-empty summary, at most 6 details
-    whose value occurs verbatim (whitespace collapsed, case-sensitive) in that row's text in seen. Without
-    seen, no detail can be checked, so none is kept. Lenient: a missing or bad part gives nothing."""
+    """Gists {id: {summary, details}} from an answer: known ids only, a non-empty summary, at most 6 details.
+    A detail is kept only when its value occurs verbatim (whitespace collapsed, case-insensitive) in THAT row's
+    own text in seen (another row's text doesn't count), and a (label, value) that the writer also gave for
+    another row is kept only when the value occurs exactly (case-sensitive) in this row's text (a fact copied
+    across rows). Without seen, no detail can be checked, so none is kept. Lenient: a missing or bad part gives
+    nothing."""
     gists, raw = {}, out.get("gists")
     if not isinstance(raw, dict):
         return gists
     seen = seen or {}
+    owners = {}  # (label, value) folded -> the row ids whose details have it
+    for rid, g in raw.items():
+        for d in (g.get("details") if isinstance(g, dict) and isinstance(g.get("details"), list) else []):
+            if isinstance(d, dict) and isinstance(d.get("label"), str) and isinstance(d.get("value"), str):
+                owners.setdefault((_fold(d["label"]), _fold(d["value"])), set()).add(rid)
     for rid, g in raw.items():
         if rid not in ids or not isinstance(g, dict) or not isinstance(g.get("summary"), str) \
                 or not g["summary"].strip():
@@ -578,10 +626,13 @@ def _gists(out, ids, seen):
             if not isinstance(d, dict) or not isinstance(d.get("label"), str) or not isinstance(d.get("value"), str):
                 continue
             value, label = _squash(d["value"]), _squash(d["label"])
-            if not value or not label or len(value) > MAX_DETAIL_VALUE or value in values \
-                    or value not in seen.get(rid, ""):
-                continue  # not copied from the thread the writer saw: possibly invented
-            values.add(value)
+            own = seen.get(rid, "")
+            if not value or not label or len(value) > MAX_DETAIL_VALUE or _fold(value) in values \
+                    or _fold(value) not in _fold(own):
+                continue  # not copied from this row's thread as the writer saw it: possibly invented
+            if owners.get((_fold(label), _fold(value)), set()) - {rid} and value not in own:
+                continue  # the same fact given for another row, not written like this here: copied across rows
+            values.add(_fold(value))
             details.append({"label": _clip(label, MAX_DETAIL_LABEL), "value": value})
             if len(details) == MAX_DETAILS:
                 break
@@ -608,6 +659,10 @@ def parse_output(out, ids, ask=None, seen=None):
     if ask is not None:
         result["areas"], result["top"] = _areas_top(out, ask)
         result["gists"] = _gists(out, ids, seen)
+        if LEVERS["drop_flagged_details"]:
+            for rid in result["flagged"]:
+                if rid in result["gists"]:
+                    result["gists"][rid] = dict(result["gists"][rid], details=[])
     return result
 
 
@@ -627,6 +682,10 @@ def _complete(out, ids, ask=None):
 # --- post-check: drafts that state a decision or payment as done -------------
 _DONE = r"(?:approved|paid|sent|signed|booked|agreed|decided|released|transferred|wired|authori[sz]ed)"
 _ADV = r"(?:(?:already|just|now|also|finally|fully|officially|all|been)\s+)*"
+# acting on money or a commitment, as a verb or a noun: "releasing", "pay", "the payment", "the booking"
+_ACT = (r"(?:releas\w*|pay\b|paying|payments?\b|pay-?out|transfer\w*|wir(?:e|ed|es|ing)\b|disburs\w*|sign\b|"
+        r"signing|book\b|booking|purchas\w*|order\b|ordering|the\s+order\b|"
+        r"(?:funds|money|deposit|invoice|contract|deal|budget)\b)")
 _DECISION = (
     # first person, done: "I've already approved", "we paid", "I have signed"
     re.compile(r"\b(?:i|we)(?:'ve|'d| have| had)?\s+" + _ADV + _DONE + r"\b"),
@@ -639,6 +698,21 @@ _DECISION = (
     re.compile(r"\b(?:money|payment|funds|budget|invoice|deposit|fee|contract|deal)\s+" + _ADV + _DONE + r"\b"),
     # a sentence that starts with it: "Signed and sent.", "Approved."
     re.compile(r"^\W*(?:all\s+|now\s+)?" + _DONE + r"\b"),
+    # telling the other side to act on it: "Please proceed with releasing the funds", "proceed with the payment"
+    re.compile(r"\bproceed\s+with\s+(?:the\s+|your\s+|this\s+|that\s+)?" + _ACT),
+    # "go ahead and pay", "go ahead with the transfer"
+    re.compile(r"\bgo\s+ahead\s+(?:and\s+|with\s+(?:the\s+|your\s+|this\s+|that\s+)?)" + _ACT),
+    re.compile(r"\bgo\s+ahead\s+and\s+send\b"),
+    # "you can release the funds", "you may now transfer it"
+    re.compile(r"\byou\s+(?:can|may|could|should|are\s+free\s+to|are\s+clear\s+to)\s+" + _ADV
+               + r"(?:release|transfer|wire|disburse|proceed\s+with\s+(?:the\s+)?" + _ACT + r")"),
+    # "please release the funds", "please transfer the deposit"
+    re.compile(r"\bplease\s+(?:release|transfer|wire|disburse)\b"),
+    # "consider it approved", "consider it done"
+    re.compile(r"\bconsider\s+(?:it|this|that|them|the\s+\w+)\s+" + _ADV + r"(?:done|" + _DONE[3:] + r"\b"),
+    # "approved on my side", "agreed from our end", "signed off by me"
+    re.compile(_DONE + r"(?:\s+off)?\s+(?:on|from)\s+(?:my|our)\s+(?:side|end)\b"),
+    re.compile(_DONE + r"(?:\s+off)?\s+by\s+(?:me|us)\b"),
 )
 # A clause is cut at these words: what follows is a condition, not a statement ("once it's approved").
 _CONDITION = re.compile(r"\b(?:if|once|when|whenever|after|as soon as|until|unless|before|whether|in case|"

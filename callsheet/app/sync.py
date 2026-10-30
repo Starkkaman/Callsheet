@@ -319,16 +319,18 @@ class Syncer:
     def writer_data(self, wcfg):
         """For the owner-run writer evaluation (evaluate.py): the writer input a sync would build right now
         (same Google reads, rules, stripping and row ids) without storing anything: no cached brief, last
-        sync, account status or last writer. The caller holds self.lock. Returns (data, ids, read_errors)."""
+        sync, account status or last writer. The caller holds self.lock. Returns (data, ids, ask, read_errors):
+        ask is what a live brief would ask for (areas, the rules' top refs, the active profile, time format)."""
         r = self._read(live=False)
-        data, ids, _ask = self._writer_input(wcfg, r["brief"], r["refs"], r["events"], r["areas"], r["settings"],
-                                             r["tz"], r["day"], r["client"])
-        return data, ids, len(r["errors"])
+        data, ids, ask = self._writer_input(wcfg, r["brief"], r["refs"], r["events"], r["areas"], r["settings"],
+                                            r["tz"], r["day"], r["client"])
+        return data, ids, ask, len(r["errors"])
 
     # --- the AI writer ----------------------------------------------------
     def _writer_input(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
-        """The minimised writer input, the reply ids suggestions may be written for, and the ask (area ids
-        and row ids in the input, the owner's writing instructions). Areas whose reads.writer is off are left
+        """The minimised writer input, the reply ids suggestions may be written for, and the ask (area ids in
+        the input, the rows the rules put in Top of the day among the rows sent, the owner's writing
+        instructions). Areas whose reads.writer is off are left
         out entirely (their events don't even show up as overlaps)."""
         allowed = {aid for aid, a in areas.items() if a["reads"].get("writer", True)}
         name = {aid: a["name"] for aid, a in areas.items()}
@@ -377,8 +379,11 @@ class Syncer:
             if r["id"] in bodies:
                 item["messages"] = bodies[r["id"]]
             data["replies"].append(item)
-        ask = writer.make_ask([a["id"] for a in data["areas"]], [r["id"] for r in data["replies"]] +
-                              [e["id"] for e in data["schedule"]], self.store.active_prompts(wcfg), fmt)
+        sent = {e["id"] for e in data["schedule"]} | {r["id"] for r in data["replies"]}
+        top = rules.rules_top([e for e in brief["schedule"] if e.get("id") in sent],
+                              [r for r in brief["replies"] if r.get("id") in sent])
+        ask = writer.make_ask([a["id"] for a in data["areas"]], [t["ref"] for t in top],
+                              self.store.active_prompts(wcfg), fmt)
         return data, list(bodies), ask  # ids in row order (VIP first, then oldest)
 
     def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client):

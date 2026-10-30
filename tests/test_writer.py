@@ -20,10 +20,9 @@ from fake_google import thread  # noqa: E402
 from test_api_google import Base  # noqa: E402
 
 def schema_for(sent, ids):
-    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and row refs) it was sent with."""
-    ask = writer.make_ask(sent["properties"]["areas"]["required"],
-                          sent["properties"]["top"]["items"]["properties"]["ref"]["enum"])
-    assert set(ids) <= set(ask["refs"]), ask["refs"]
+    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and the rules' top refs) it was
+    sent with."""
+    ask = writer.make_ask(sent["properties"]["areas"]["required"], sent["properties"]["top"]["required"])
     return writer.build_schema(ids, ask)
 
 

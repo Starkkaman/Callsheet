@@ -533,9 +533,18 @@ def mentions_me(m, me):
 
 
 # --- top of the day ------------------------------------------------------------
+def _row_line(r):
+    """A reply row in a top line: its gist summary when it has one (the writer's, or the fallback: the
+    subject or quoted message), else its text."""
+    g = r.get("gist")
+    return g["summary"] if isinstance(g, dict) and isinstance(g.get("summary"), str) and g["summary"].strip() \
+        else r.get("text") or ""
+
+
 def rules_top(schedule, replies):
-    """Without the writer: up to 5 items from the rules: VIP replies, then clashes (the earlier event), then
-    replies that mention a deadline. [{text, ref, kind}]."""
+    """Top of the day, chosen by the rules (the writer only words it): up to 5 items, VIP replies, then
+    clashes (the earlier event), then replies that mention a deadline, then the next reply rows in order.
+    [{text, ref, kind}] with the rules' own text (used when the writer gave none)."""
     out, seen = [], set()
 
     def put(text, ref, kind):
@@ -544,7 +553,7 @@ def rules_top(schedule, replies):
             out.append({"text": _clip(text, 200), "ref": ref, "kind": kind})
     for r in replies:
         if r.get("vip"):
-            put(f"Reply to {r['who']}: {r['text']}", r.get("id"), "reply")
+            put(f"Reply to {r['who']}: {_row_line(r)}", r.get("id"), "reply")
     clash_end = ""
     for e in schedule:
         start = e.get("start_hhmm") or e["time"]
@@ -554,7 +563,22 @@ def rules_top(schedule, replies):
                 e.get("id"), "event")
     for r in replies:
         if "Mentions a deadline" in (r.get("reasons") or []):
-            put(f"Deadline from {r['who']}: {r['text']}", r.get("id"), "reply")
+            put(f"Deadline from {r['who']}: {_row_line(r)}", r.get("id"), "reply")
+    for r in replies:
+        put(f"Reply to {r['who']}: {_row_line(r)}", r.get("id"), "reply")
+    return out
+
+
+def top_texts(raw):
+    """The writer's top wording from a cached summary: {ref: text}, from a list of {text, ref} (as stored) or
+    an object keyed by ref."""
+    if isinstance(raw, dict):
+        return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str) and v.strip()}
+    out = {}
+    for t in raw if isinstance(raw, list) else []:
+        if isinstance(t, dict) and isinstance(t.get("ref"), str) and isinstance(t.get("text"), str) \
+                and t["text"].strip():
+            out.setdefault(t["ref"], t["text"])
     return out
 
 
@@ -623,9 +647,11 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
                      heads_up=cache.get("heads_up", []), sources=sources, hidden=int(cache.get("hidden") or 0))
         prev = cache.get("previous_at")
         brief["previous_at"] = clock(dt.datetime.fromisoformat(prev).astimezone(tz), fmt) if prev else None
-        kinds = {r.get("id"): "reply" for r in brief["replies"]}
-        kinds.update({e.get("id"): "event" for e in brief["schedule"]})
-        kinds.pop(None, None)
+        if not writer_on:
+            brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
+                                for r in brief["replies"]]
+        brief["replies"] = [with_gist(r, writer_on) for r in brief["replies"]]
+        # the rules choose and order the rows; the writer's wording replaces the text of the refs it wrote
         brief["top"] = rules_top(brief["schedule"], brief["replies"])
         brief["top_by"] = "rules"
         summary = cache.get("summary")
@@ -635,17 +661,13 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
                                 "at": clock(at, fmt) if at else None,
                                 "areas": {k: v for k, v in (summary.get("areas") or {}).items()
                                           if isinstance(v, str) and any(a["id"] == k for a in areas)}}
-            if isinstance(summary.get("top"), list):
-                top = [{"text": t["text"], "ref": t["ref"], "kind": kinds[t["ref"]]} for t in summary["top"]
-                       if isinstance(t, dict) and t.get("ref") in kinds and isinstance(t.get("text"), str)]
-                brief["summary"]["top"] = top
-                if top:
-                    brief["top"], brief["top_by"] = top, "writer"
+            words = top_texts(summary.get("top"))
+            if any(t["ref"] in words for t in brief["top"]):
+                brief["top"] = [dict(t, text=_clip(" ".join(words[t["ref"]].split()), 200)) if t["ref"] in words
+                                else t for t in brief["top"]]
+                brief["top_by"] = "writer"
+            brief["summary"]["top"] = brief["top"] if brief["top_by"] == "writer" else []
             brief["sections"]["summary"] = "live"
-        if not writer_on:
-            brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
-                                for r in brief["replies"]]
-        brief["replies"] = [with_gist(r, writer_on) for r in brief["replies"]]
         brief["done"] = done_list(cache.get("done"), tz, fmt, writer_on)
     else:
         brief.update(date_fields(now.date()))

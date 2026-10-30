@@ -15,7 +15,9 @@ Per draft:
     concrete_answer(text)    the draft names a concrete date, time, amount or a yes/no outside [brackets].
 Per answer:
     reply_texts(out)         {id: text} from replies as an object (or the legacy list of {id, suggestion}).
-    schema_valid(out, ids)   the answer matches the per-request schema exactly (writer.build_schema).
+    schema_valid(out, ids, ask=None)  the answer matches the per-request schema exactly (writer.build_schema):
+                             the 0.3.x shape without an ask, the 0.4.0 shape (areas, top, gists) with one.
+    shape_040(out, ids, ask, parsed)  0.4.0 counts: areas, top lines, gists and details returned / kept.
 """
 import re
 
@@ -143,12 +145,47 @@ def reply_texts(out):
     return texts
 
 
-def schema_valid(out, ids):
+def _texts_for(obj, keys):
+    """obj is an object with exactly these keys, each a non-empty string."""
+    return isinstance(obj, dict) and set(obj) == set(keys) and all(isinstance(v, str) and v for v in obj.values())
+
+
+def _gist_valid(g):
+    if not isinstance(g, dict) or set(g) != {"summary", "details"} or not isinstance(g["summary"], str) \
+            or not g["summary"] or not isinstance(g["details"], list) or len(g["details"]) > 6:
+        return False
+    return all(isinstance(d, dict) and set(d) == {"label", "value"} and isinstance(d["label"], str)
+               and isinstance(d["value"], str) for d in g["details"])
+
+
+def schema_valid(out, ids, ask=None):
     """True when out matches the per-request schema: exactly {summary: string, replies: {each id: non-empty
-    string}} with no other keys (additionalProperties false, every id required, minLength 1)."""
-    if not isinstance(out, dict) or set(out) != {"summary", "replies"} or not isinstance(out["summary"], str):
+    string}} with no other keys (additionalProperties false, every id required, minLength 1). With an ask (the
+    0.4.0 shape) also areas {each area id: non-empty string}, top {each ref asked for (at most 5): non-empty
+    string} and gists {each id: {summary: non-empty string, details: at most 6 {label, value} strings}}."""
+    keys = {"summary", "replies"} if ask is None else {"summary", "areas", "top", "gists", "replies"}
+    if not isinstance(out, dict) or set(out) != keys or not isinstance(out["summary"], str):
         return False
-    rep = out["replies"]
-    if not isinstance(rep, dict) or set(rep) != set(ids):
+    if not _texts_for(out["replies"], ids):
         return False
-    return all(isinstance(v, str) and len(v) >= 1 for v in rep.values())
+    if ask is None:
+        return True
+    gists = out["gists"]
+    return _texts_for(out["areas"], ask["areas"]) and _texts_for(out["top"], list(ask["refs"])[:5]) \
+        and isinstance(gists, dict) and set(gists) == set(ids) and all(_gist_valid(g) for g in gists.values())
+
+
+def shape_040(out, ids, ask, parsed):
+    """Counts for the 0.4.0 parts of one answer: areas asked / written, top lines asked / written, gists
+    written, details returned by the model and kept by the parser (the rest failed the verbatim check).
+    parsed: writer.parse_output's result (None when the answer wasn't usable)."""
+    out = out if isinstance(out, dict) else {}
+    parsed = parsed or {}
+    raw = out.get("gists") if isinstance(out.get("gists"), dict) else {}
+    returned = sum(len(g["details"]) for rid, g in raw.items()
+                   if rid in ids and isinstance(g, dict) and isinstance(g.get("details"), list))
+    kept = sum(len(g.get("details") or []) for g in (parsed.get("gists") or {}).values())
+    return {"areas_expected": len(ask["areas"]), "areas_written": len(parsed.get("areas") or {}),
+            "top_expected": len(list(ask["refs"])[:5]), "top_written": len(parsed.get("top") or []),
+            "gists_expected": len(ids), "gists_written": len(parsed.get("gists") or {}),
+            "details_returned": returned, "details_kept": kept, "details_dropped": max(returned - kept, 0)}

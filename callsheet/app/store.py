@@ -578,8 +578,9 @@ class Store:
                 "prompt_profiles": self._profiles(w), "active_profile": w["active_profile"],
                 "prompts": self.active_prompts(w), "prompt_defaults": dict(writer.DEFAULT_PROMPTS),
                 "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES,
-                # read-only: the exact fixed texts compose_system appends after every profile
-                "fixed": {"safety": writer.SAFETY, "examples": writer.EXAMPLES}}
+                # read-only: the exact fixed texts compose_system adds to every profile: after_drafts right after
+                # the "Suggested replies" text, then the examples, then the safety block (+ JSON instructions)
+                "fixed": {"after_drafts": writer.NEVER_CLAIM, "safety": writer.SAFETY, "examples": writer.EXAMPLES}}
 
     @staticmethod
     def _check_key(val, what):

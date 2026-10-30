@@ -23,8 +23,8 @@ Callsheet only reads. It never sends, replies, deletes or changes anything in yo
     wait on you are added (see "Slack").
   - **Heads up**: all-day events, @channel/@here/@everyone messages in Slack, and accounts Callsheet
     couldn't read.
-  - **Top of the day**: up to 5 lines that point at rows in the brief (VIP replies, clashes, deadlines;
-    chosen by the AI writer when it is on).
+  - **Top of the day**: up to 5 lines that point at rows in the brief (VIP replies, clashes, deadlines,
+    then the next replies; chosen by the rules, worded by the AI writer when it is on).
   - Rows that are new since the day's previous brief are marked new.
   - Rows you mark **done** leave Needs a reply and are listed under **Done today** (see "Done").
   - **Projects** still shows sample data.

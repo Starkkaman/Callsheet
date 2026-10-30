@@ -53,3 +53,4 @@
 - `PRIVACY.md`: privacy policy (linked from the Google consent screen).
 - `docs/step4-0.4.0.md`: the 0.4.0 backend/API contract (Slack, writer output, writing profiles, time format, doesn't-need-a-reply, new since, upgrade).
 - `tests/test_local_prompt_shape.py`: the local writer prompt matches the evaluated shape (rule last).
+- `tests/test_writer_fixes_040.py`: fixes after the e040 evaluation: never-claim sentence after the reply guidance, gists guidance, prompt levers, decision post-check on the e040 drafts, per-row verbatim guard, rules-chosen Top of the day, evaluation in the 0.4.0 shape.
