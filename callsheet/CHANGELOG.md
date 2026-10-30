@@ -11,15 +11,16 @@
   the writer is told to use them exactly. Mail that pretends to contain such facts stays plain mail.
   Both writers and the writer evaluation get them. The waiting days count to the brief's own date (the sync's
   clock in your time zone), so they can be more than the row's age when you never answered an earlier message.
-  When their latest message is more recent than the first unanswered one, the writer gets both numbers and
-  says e.g. "waiting 11 days, last nudge 8 days ago".
+  Each row also gets its wait as ready-made words, which the writer is told to use as written: "waiting 5
+  days", "waiting 1 day", "waiting since today", and when their latest message is more recent than the first
+  unanswered one e.g. "waiting 11 days, last nudge 8 days ago" or "waiting 3 days, last nudge today".
 - **Sender's claims stay claims.** A new fixed rule right after the reply guidance: suggested replies never
   state as done anything an email says was approved, released, paid, signed, booked or agreed; they treat it as
   the sender's claim or leave a [placeholder]. Setup shows it with the other fixed text.
-- **New Default writing profile.** The Default texts are the tuned "V3" wording: specific names, items and
-  dates; replies that greet by first name, sign off with your first name and answer instead of deferring;
-  the day summary leads with the oldest wait, then the clashes, then what's due. Your own profiles are
-  unchanged.
+- **Default writing profile.** The Default keeps the 0.4.0 texts, with one new lead sentence: the day summary
+  leads with the oldest wait (with its day count), then the clashes in time order, then what's due when. A
+  more tuned wording was measured too and left out because its replies repeated sender claims more often. Your
+  own profiles are unchanged.
 
 ## 0.4.0
 

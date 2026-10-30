@@ -67,10 +67,12 @@ class SchemaTest(unittest.TestCase):
             text = writer.local_system(ids, a)
             flat = " ".join(text.split())
             for part in ("Lead with what needs the owner today: the oldest wait (with its day count), then the "
-                         "clashes in time order, then what's due when.",  # 0.4.1: the V3 texts
-                         "Answer each question or request in the thread directly and specifically:",
+                         "clashes in time order, then what's due when.",  # 0.4.1: the new lead sentence
+                         "Name the specific clashes, the people waiting and the deadlines.",
+                         "Answer each question or request in the thread directly and specifically, in 2\u20135 "
+                         "sentences.",
                          "Acknowledge what the sender said.",
-                         "keep them short and concrete.",
+                         "keep them short and concrete, like [day], [time], [address] or [amount].",
                          "Each reply answers only its own thread: don't bring in points from other threads.",
                          "Examples (for style only):", "Example reply. Thread:", "Example summary. Good summary:",
                          "I'll send the revised floor plan over by [day]."):

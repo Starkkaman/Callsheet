@@ -157,6 +157,20 @@ def clashes(schedule, fmt="24h"):
              "b_area": _clip(b.get("area"), MAX_TITLE)} for at, _, _, _, a, b in pairs]
 
 
+def _days(n):
+    return "1 day" if n == 1 else f"{n} days"
+
+
+def wait_text(waiting, last_nudge=None):
+    """The ready-made wait wording of a row: "waiting 5 days", "waiting 1 day", "waiting since today" (0 days);
+    with a different last_nudge "waiting 11 days, last nudge 8 days ago" / "..., last nudge 1 day ago" /
+    "..., last nudge today"."""
+    out = "waiting since today" if waiting == 0 else "waiting " + _days(waiting)
+    if last_nudge is not None and last_nudge != waiting:
+        out += ", last nudge " + ("today" if last_nudge == 0 else _days(last_nudge) + " ago")
+    return out
+
+
 def _display_date(ts, tz, fmt):
     d = dt.datetime.fromtimestamp(ts, tz)
     return f"{d:%a %d %b} " + rules.clock(d, fmt)
@@ -167,7 +181,8 @@ def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
     replies: [{id, who, text (subject or quoted message), vip, facts: {first (epoch s of the first unanswered
     message, or None), count (messages by others since the owner's last one), last (epoch s of the last message),
     text (where to look for a deadline)}}] in brief order; schedule: writer-input rows (clashes()); day: the
-    brief's date; tz: the owner's time zone. Each row gets unanswered_messages = count and follow_ups = count - 1.
+    brief's date; tz: the owner's time zone. Each row gets unanswered_messages = count and follow_ups = count - 1,
+    last_nudge_days when it differs from waiting_days, and wait = wait_text() of the two.
     waiting_days = calendar days in the owner's time zone from the first unanswered message to the brief's
     date; overdue = rows waiting more than reply_age_days (0 = no age rule, so overdue
     is 0, as for the "Waiting" reason)."""
@@ -188,6 +203,8 @@ def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
         last_nudge = max(0, (day - dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date()).days)
         if last_nudge != waiting:
             row["last_nudge_days"] = last_nudge
+        # the same as words, for the writer to use as written ("waiting 11 days, last nudge 8 days ago")
+        row["wait"] = wait_text(waiting, last_nudge)
         d = due(f.get("text"), dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date())
         if d:
             row["due"] = {k: d[k] for k in ("phrase", "date") if k in d}

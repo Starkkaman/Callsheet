@@ -129,12 +129,12 @@ class ProfileSectionsTest(unittest.TestCase):
     def test_default_texts(self):
         d = writer.DEFAULT_PROMPTS
         self.assertEqual(writer.PROMPT_KEYS, ("rules", "summary", "areas", "emails", "drafts"))
-        # 0.4.1: Default = the tuned "V3" texts (test_release_041 checks them exactly)
-        self.assertTrue(d["emails"].startswith("One line on what they want, naming the specific item"))
+        self.assertEqual(d["emails"], "One line on what they want; quote only exact dates, amounts, addresses and "
+                                      "reference numbers.")
         self.assertTrue(d["rules"])
-        self.assertNotIn(P2F_SUMMARY, d["summary"])
+        self.assertIn(P2F_SUMMARY, d["summary"])
         self.assertIn("never fewer than 3 or more than 6", d["summary"])
-        self.assertIn("Each reply answers only its own thread: don't bring in points from other threads.", d["drafts"])
+        self.assertIn(P2F_DRAFTS, d["drafts"])
         self.assertTrue(writer.EXAMPLES.startswith("Examples (for style only):"))
         self.assertIn("Example reply.", writer.EXAMPLES)
         self.assertIn("Example summary.", writer.EXAMPLES)
