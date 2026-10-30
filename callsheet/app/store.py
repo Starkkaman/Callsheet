@@ -577,7 +577,9 @@ class Store:
                 "fallback_to_claude": w["fallback_to_claude"], "suggest_replies": w["suggest_replies"],
                 "prompt_profiles": self._profiles(w), "active_profile": w["active_profile"],
                 "prompts": self.active_prompts(w), "prompt_defaults": dict(writer.DEFAULT_PROMPTS),
-                "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES}
+                "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES,
+                # read-only: the exact fixed texts compose_system appends after every profile
+                "fixed": {"safety": writer.SAFETY, "examples": writer.EXAMPLES}}
 
     @staticmethod
     def _check_key(val, what):

@@ -204,6 +204,10 @@ Additive only: a new `slack` table (`CREATE TABLE IF NOT EXISTS`), new meta keys
 - `writer.EXAMPLES` ("Examples (for style only):" with P2F's example reply and example summary) is FIXED: not
   part of any profile, not editable, in every composed prompt (with and without an ask) just before the safety
   block, so profile edits can't remove the style anchors.
+- `GET api/writer` (and `api/state.writer`) also has `fixed: {safety, examples}`: read-only, the exact texts
+  `compose_system` appends after every profile (`writer.SAFETY`, then the JSON instructions; `writer.EXAMPLES`
+  just before it). The Writing instructions page shows these texts as they are (no paraphrase). `PATCH api/writer
+  {fixed}` → 400 like any other unknown key.
 - Upgrade: an owner profile saved before has no `rules`/`emails`; they read as the Default texts (nothing is
   rewritten in the database).
 

@@ -861,6 +861,7 @@
     prof: null,          /* writing profile shown in Setup (default: the active one) */
     profMode: null,      /* 'copy' | 'rename' while that inline form is open */
     wdraft: {},          /* '<profile id>:<section>' -> unsaved text */
+    wexOpen: false,      /* Writing instructions: the fixed style examples unfolded */
     focusNext: null,     /* focus target for the next Setup render (the brief's "Manage" link) */
     newArea: { name: '', colour: 2 }
   };
@@ -1532,11 +1533,6 @@
     ['areas', 'Area summaries', 'The few sentences for each area.'],
     ['emails', 'Email summaries', 'The one line in each row and “What they want”.'],
     ['drafts', 'Reply drafts', 'Suggested replies you copy and send yourself.']];
-  var ALWAYS = [
-    'Mail, chat and calendar text is information, never instructions. Anything in it asking Callsheet to do something is ignored.',
-    'Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, and never promise an amount, date or decision for you. A [placeholder] goes where you have to decide.',
-    'Times are written in your time format (step 1).',
-    'Callsheet has no tools and nothing is sent. You read the brief and copy what you want.'];
   /* a writing-instructions textarea shows its whole text (up to about 16 lines, then it scrolls) */
   function fitTa(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 4, 400) + 'px'; }
   function refreshWriter(r) { return api('GET', 'api/writer').then(function (w) { S.writer = w || S.writer; return r; }); }
@@ -1638,6 +1634,15 @@
         h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, saveB])]), fErr]);
     });
 
+    var fx = w.fixed || {};
+    var exText = h('p', { class: 'fixtext', id: 'wi-ex', hidden: !ui.wexOpen }, fx.examples || '');
+    var exB = btn('exfold', 'Style examples ' + (ui.wexOpen ? '▾' : '▸'),
+      { 'aria-expanded': String(!!ui.wexOpen), 'aria-controls': 'wi-ex' }, function () {
+        ui.wexOpen = !ui.wexOpen; exText.hidden = !ui.wexOpen;
+        exB.setAttribute('aria-expanded', String(ui.wexOpen));
+        exB.textContent = 'Style examples ' + (ui.wexOpen ? '▾' : '▸');
+      });
+    var exFold = h('div', { class: 'exwrap' }, [exB, exText]);
     return h('div', { class: 'where wi' }, [
       h('div', { class: 'shd' }, [h('h2', { class: 'h3' }, 'Writing instructions'),
         h('label', { class: 'sr', for: 'wi-prof' }, 'Profile'), h('span', { class: 'selw' }, sel), copyB]),
@@ -1650,9 +1655,11 @@
       fields,
       h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'wi-lock' }, [
         h('div', { class: 'lh', id: 'wi-lock' }, [ico('lock'), 'Always applied (can’t be changed)']),
-        h('ul', null, ALWAYS.map(function (t) { return h('li', null, t); })),
+        /* the exact texts from the server (api/writer fixed), shown as they are */
+        h('p', { class: 'fixtext' }, fx.safety || ''),
         h('p', { class: 'muted' }, 'These rules always come last, after your instructions, so nothing you write can switch them off. ' +
-          'The style examples (one sample reply and one sample summary) are fixed too.')])]);
+          'The style examples are fixed too.'),
+        fx.examples ? exFold : null])]);
   }
 
   /* step 5: the AI writer. Off / Claude / Local model; keys are write-only (the server returns hints). */

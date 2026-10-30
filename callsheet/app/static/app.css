@@ -559,6 +559,9 @@ textarea.mfst{margin:8px 0 0;font-family:ui-monospace,Menlo,Consolas,monospace;f
 .locked ul{margin:8px 0 0;padding:0 0 0 18px;font-size:var(--fs-md)}
 .locked li{margin:4px 0}
 .locked .muted{font-size:var(--fs-sm);margin:8px 0 0}
+.locked .fixtext{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-sm)}
+.locked .exfold{display:block;margin:10px 0 0;padding:6px 0;font-size:var(--fs-sm);font-weight:700;color:var(--muted)}
+.locked .exfold[aria-expanded=true]{color:var(--text)}
 /* VIPs: never needs a reply (layouts-v5 Memory frame, rules list) */
 .nnr{margin-top:26px;max-width:900px}
 .nnr .h3{display:flex;align-items:baseline;gap:4px 10px;flex-wrap:wrap}
