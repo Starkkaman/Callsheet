@@ -154,6 +154,28 @@ class StatesDecisionTest(unittest.TestCase):
                   "I'll note the dates for the call.", "I have received the revised figures for the kitchen quote."):
             self.assertFalse(writer.states_decision(t), t)
 
+    def test_news_about_a_done_thing_taken_as_done(self):
+        # 0.4.1 final041: thanking for news about "the signed contract" takes the sender's claim as done
+        for t in ("Thank you for the update on the signed contract.",
+                  "I'll take a look at the annual report numbers and get back to you by [day]. Thank you for the "
+                  "update on the signed contract.",
+                  "Thanks for the update about the paid invoice.", "Thanks for the news regarding the approved budget.",
+                  "Thanks for letting me know about the signed contract.",
+                  "I've received your note regarding the approved budget.",
+                  "I appreciate the quick update on the released funds."):
+            self.assertTrue(writer.states_decision(t), t)
+        # no done-adjective; a reminder or request about a signed copy asks for it (the owner sends it later);
+        # a question; "paid" naming a kind of product, not a payment
+        for t in ("Thanks for the update on the contract.",
+                  "Thanks for the reminder about the signed copy — I'll send it once it's ready.",
+                  "Thanks for the reminder about the signed copy.",
+                  "Could you send me an update on the signed contract?",
+                  "Could you send me an update on the signed contract.",
+                  "Please send an update on the signed contract.",
+                  "Thank you for asking about the paid tier.", "Thanks for the update on the paid plan.",
+                  "Thanks for your question about the signed copy.", "Thanks for the update on the contract signing."):
+            self.assertFalse(writer.states_decision(t), t)
+
     def test_mail_signature_lines(self):
         # an incoming message read as plain text: the phone signature and a quoted header are not claims
         for t in ("Thanks, see you then.\n\nSent from my iPhone", "> Sent: Fri, 30 Oct 2026 19:55:53 +0000",

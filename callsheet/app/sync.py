@@ -208,6 +208,10 @@ class Syncer:
             if "_facts" in row:  # for the writer's facts block only; never stored
                 ref["facts"] = row.pop("_facts")
             row["claim"] = inbound_claim(row)
+            # the wait wording for the page (0.4.1), from the same facts and rule as the writer's: no message text
+            wait = facts.row_wait(ref.get("facts"), day, tz)
+            if wait:
+                row["wait"] = wait
             # done: mail by account + thread, Slack by team + channel + thread (or message) ts
             done_key = row.pop("_done", None)
             if ref.get("source") == "mail":

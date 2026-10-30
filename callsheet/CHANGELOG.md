@@ -20,7 +20,10 @@
 - **Wider draft check.** The "Check this draft" warning now also catches drafts that take a sender's claim as
   done ("I note the contract has been signed", "confirm the signed contract"), while requests for a signed or
   paid document, questions and conditions still don't count. Mail signature lines ("Sent from my phone") are
-  ignored.
+  ignored. Thanks for news about it counts too ("Thank you for the update on the signed contract"); a reminder
+  or question about a signed copy, or a "paid plan", does not.
+- **Wait on each reply.** Reply rows show how long they have waited, worked out by Callsheet's rules (with or
+  without the writer): "waiting 11 days · last nudge 8 days ago" in place of the short age, in the list and the detail.
 - **"This message says something was done."** When the latest message from the other person says something was
   approved, paid, signed, released and so on (not a question or an "once it's paid"), the row's detail shows "This
   message says something was approved, paid, signed or released. Check before replying." and the row in the list

@@ -753,6 +753,19 @@ _DECISION = (
                r"thanks\s+for|thank\s+you\s+for)\s+"
                r"(?:(?:that|receipt\s+of|sending|forwarding|sharing|returning|me|us|over|through|back)\s+){0,3}"
                r"(?:the|your|this|that|our)\s+" + _ADV + _DONE_ADJ + r"\s+\w"),
+    # the same through news about it: "thank you for the update on the signed contract", "thanks for letting me
+    # know about the paid invoice", "I've received your note regarding the approved budget". Only news words
+    # count: a reminder, question or request about the signed copy asks for it ("thanks for the reminder about
+    # the signed copy, I'll send it") and is not a claim; nor is a paid tier, plan or subscription
+    re.compile(r"^(?:(?!\b(?:please|kindly)\b|(?<!thank )\byou\b).)*?"
+               r"\b(?:thanks|thank\s+you|grateful|appreciate|confirm(?:s|ed|ing)?|not(?:e|es|ed|ing)|"
+               r"acknowledg\w*|received|(?:have|has|had|'ve)\s+got)\s+(?:for\s+)?"
+               r"(?:(?:the|your|this|that|an?)\s+)?(?:(?:latest|quick|recent|good|great|kind)\s+)?"
+               r"(?:update|news|confirmation|note|message|e-?mail|heads[\s-]?up|info(?:rmation)?|word|notice|"
+               r"notification|letting\s+(?:me|us)\s+know)\s+(?:on|about|regarding|re|of|for|that)\s+"
+               r"(?:the|your|this|that|our)\s+" + _ADV + _DONE_ADJ
+               + r"\s+(?!(?:tiers?|plans?|versions?|subscriptions?|accounts?|options?|leave|features?|users?|"
+               r"members?|customers?|ads?|media|search|content)\b)\w"),
     re.compile(r"\b(?:i|we)(?:'ve| have)\s+(?:attached|enclosed|included)\s+(?:the|our|my)\s+" + _ADV + _DONE_ADJ
                + r"\s+\w"),
     # the same as a subject: "the signed contract is attached", "the approved budget has gone to finance"

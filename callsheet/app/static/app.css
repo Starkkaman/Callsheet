@@ -847,5 +847,6 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .bv .panel .ptop{position:sticky;top:0;z-index:2;margin:0 -16px 12px;padding:max(8px,env(safe-area-inset-top,0px)) 8px 8px;border-bottom:var(--rule-mid) solid var(--rule);background:var(--phone)}
   .bv .tl .ax span{background:var(--phone)}
   .bv .pin{background:var(--phone)}
+  .bv .rmain .age{max-width:38%;overflow:hidden;text-overflow:ellipsis} /* a long wait text gives way to the name */
   .bv-layer .toast{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:none;width:auto;max-width:none}
 }

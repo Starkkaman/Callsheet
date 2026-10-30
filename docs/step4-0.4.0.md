@@ -77,7 +77,15 @@ already exists (default true); Slack is read only when `reads.chat` is true. Eve
 - Schedule rows: `id` (`"s1"`, `"s2"`, … in brief order) and `key` (stable across the day's briefs).
 - Reply rows: `id` (`"r1"`, … VIP first, then oldest), `key` (stable: source, thread and last message), `via:
   "mail"|"slack"`; `new: true` (see "New since"). Mail rows keep `source: "Mail"`. 0.4.1: `claim: true|false`
-  (see "Sender's claim (0.4.1)"; absent in older cached briefs and the sample = false).
+  (see "Sender's claim (0.4.1)"; absent in older cached briefs and the sample = false). 0.4.1: `wait` (string,
+  optional): `facts.row_wait` = `facts.wait_text` of the row's `waiting_days` / `last_nudge_days`, worked out as in
+  "Facts (0.4.1)" from the row's facts (first unanswered and last message, owner's time zone, to the brief's date)
+  in `Syncer._read`, so with or without the writer, e.g. "waiting 11 days, last nudge 8 days ago"; absent when
+  nothing is unanswered, in older cached briefs and the sample. Only the wording is stored (no times, no text).
+  The page shows it with " · " for ", " in place of `age` (list row's `.age` span and the detail's `.pmeta`),
+  since `age` (time since the last message) would repeat the last nudge; rows without `wait` show `age`. The list
+  span has the full text as its title; on phones (<=700px) it is capped at 38% of the row with an ellipsis so the
+  name stays readable (the detail shows it in full).
 - `top`: always present (list, ≤ 5, may be empty): `[{text, ref, kind: "reply"|"event"}]`, `ref` = a current row
   id. The rows and their order always come from the rules (`rules.rules_top`, recomputed when the brief is
   composed): VIP replies, then clashes (`ref` = the earlier event), then replies that mention a deadline, then the

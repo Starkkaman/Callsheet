@@ -171,6 +171,23 @@ def wait_text(waiting, last_nudge=None):
     return out
 
 
+def waits(f, day, tz):
+    """(waiting_days, last_nudge_days) of a row's facts {first, last} (epoch s): calendar days in the owner's time
+    zone (tz) from the first unanswered message and from the last message to day (the brief's date); None when
+    nothing is unanswered (first is None)."""
+    if not isinstance(f, dict) or f.get("first") is None:
+        return None
+    waiting = max(0, (day - dt.datetime.fromtimestamp(f["first"], tz).date()).days)
+    last_nudge = max(0, (day - dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date()).days)
+    return waiting, last_nudge
+
+
+def row_wait(f, day, tz):
+    """The wait wording of a reply row for the page (0.4.1): wait_text() of waits(), or None."""
+    w = waits(f, day, tz)
+    return wait_text(*w) if w else None
+
+
 def _display_date(ts, tz, fmt):
     d = dt.datetime.fromtimestamp(ts, tz)
     return f"{d:%a %d %b} " + rules.clock(d, fmt)
@@ -191,16 +208,15 @@ def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
     for r in replies:
         vip += bool(r.get("vip"))
         f = r.get("facts")
-        if not isinstance(f, dict) or f.get("first") is None:
+        w = waits(f, day, tz)
+        if w is None:
             continue
-        first = dt.datetime.fromtimestamp(f["first"], tz)
-        waiting = max(0, (day - first.date()).days)
+        waiting, last_nudge = w
         n = int(f.get("count") or 0)
         # unanswered_messages counts the first one too; follow_ups = the times they chased (one message = 0)
         row = {"waiting_days": waiting, "unanswered_messages": n, "follow_ups": max(0, n - 1),
                "first_unanswered": _display_date(f["first"], tz, fmt)}
         # days since their latest message, only when it differs from waiting_days ("last nudge 8 days ago")
-        last_nudge = max(0, (day - dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date()).days)
         if last_nudge != waiting:
             row["last_nudge_days"] = last_nudge
         # the same as words, for the writer to use as written ("waiting 11 days, last nudge 8 days ago")
