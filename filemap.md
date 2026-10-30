@@ -23,12 +23,12 @@
 - `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors; the read path is shared with the writer evaluation), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
 - `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
 - `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
-- `callsheet/app/static/index.html`: page shell (a template: `{{version}}` in the version meta and the asset URLs): header (wordmark, sample tag, look picker), the update notice and main.
-- `callsheet/app/static/app.css`: theme tokens (from themes.css) + Daily Brief styles, phone under 700px.
-- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block; the Writer evaluation page (#eval); the version check (page meta against `api/state`) and its Reload notice.
+- `callsheet/app/static/index.html`: page shell (a template: `{{version}}` in the version meta and the asset URLs): compact header (wordmark, date, last refreshed, Refresh/Setup/Look), the update notice, main, and `<template id="icons">` (inline SVG glyphs cloned by app.js).
+- `callsheet/app/static/app.css`: theme tokens (from themes.css) + reason-dot colours + tabbed brief styles (`.bv`: tab bar, rows, side panel, briefing, agenda timeline, areas columns, menu and toast layer); phone under 700px (bottom tab bar, full-screen panel).
+- `callsheet/app/static/app.js`: fetches `api/brief`, renders the tabbed brief (Briefing, Replies, Agenda, Areas; Tasks reserved) with the detail panel (Suggested reply with Copy), notepad menu (`api/suppress` + Undo, local Dismiss), Done (`api/done` + Undo), last tab in localStorage; look/mode; setup steps incl. the Writer block; the Writer evaluation page (#eval); the version check (page meta against `api/state`) and its Reload notice.
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
-- `tests/test_server.py`: stdlib unittest: routes, headers, versioned assets and ETag/304, app version equals config.yaml, 403 for other clients, relative and offline URLs.
+- `tests/test_server.py`: stdlib unittest: routes, headers, versioned assets and ETag/304, app version equals config.yaml, 403 for other clients, relative and offline URLs, no HTML sinks in app.js, the icon template.
 - `tests/fake_google.py`: fake Google HTTP server for tests (token/revoke with PKCE checks, Gmail and Calendar reads; records requests).
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.

@@ -153,6 +153,23 @@ class IngressSafetyTest(unittest.TestCase):
             self.assertIsNone(self.ABSOLUTE.search(text), name)
             self.assertIsNone(self.EXTERNAL.search(text), name)
 
+    def test_data_is_text(self):
+        """Data reaches the page only through textContent (h()), never an HTML sink."""
+        js = (APP / "static" / "app.js").read_text(encoding="utf-8")
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+            self.assertNotIn(sink, js)
+
+    def test_icon_template(self):
+        """Icons are inline SVG cloned from <template id="icons"> (no namespace URL in the JS)."""
+        html = (APP / "static" / "index.html").read_text(encoding="utf-8")
+        js = (APP / "static" / "app.js").read_text(encoding="utf-8")
+        tpl = re.search(r'<template id="icons">(.*?)</template>', html, re.S)
+        self.assertIsNotNone(tpl)
+        have = set(re.findall(r'data-i="([a-z]+)"', tpl.group(1)))
+        need = {"mail", "slack", "cal", "signal", "note", "brief", "areas", "tasks", "back", "close"}
+        need |= set(re.findall(r"ico\('([a-z]+)'", js))
+        self.assertEqual(need - have, set())
+
     def test_font_files_exist(self):
         css = (APP / "static" / "app.css").read_text(encoding="utf-8")
         for ref in re.findall(r"url\(([^)]+)\)", css):

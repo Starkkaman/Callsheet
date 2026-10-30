@@ -51,13 +51,8 @@
   }
   /* inline error slot next to a control: filled with the server's plain sentence on failure */
   function errBox() { return h('p', { class: 'err', role: 'alert' }); }
-  /* "text with **highlight**" -> text nodes and <b>, safely */
-  function rich(s) {
-    return String(s || '').split('**').map(function (part, i) { return i % 2 ? h('b', null, part) : part; });
-  }
   function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
   function clampColour(c) { c = parseInt(c, 10); return c >= 1 && c <= 4 ? c : 4; }
-  function pctOf(p) { return typeof p === 'number' && isFinite(p) ? Math.max(0, Math.min(100, Math.round(p))) : null; }
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   /* "06:30" stays as is; an ISO date-time becomes local HH:MM (with the day when it isn't today) */
   function fmtWhen(v, withDay) {
@@ -81,24 +76,6 @@
   }
   function safeHttps(u) { return typeof u === 'string' && /^https:/i.test(u) ? u : null; }
   function cssq(s) { return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
-
-  /* Copy for "Suggested reply": the Clipboard API inside the click; without it (plain http) select the text
-     and try the legacy copy command, else leave it selected for Ctrl+C. */
-  function copyText(s, el, b) {
-    function said(t) { b.textContent = t; setTimeout(function () { b.textContent = 'Copy'; }, 2000); }
-    function selectIt() {
-      var ok = false;
-      try {
-        var rg = document.createRange(); rg.selectNodeContents(el);
-        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
-        ok = document.execCommand && document.execCommand('copy');
-      } catch (e) { ok = false; }
-      said(ok ? 'Copied' : 'Selected: press Ctrl+C');
-    }
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(s).then(function () { said('Copied'); }, selectIt);
-    } else selectIt();
-  }
 
   /* ---------- api: JSON in and out; mutations carry X-Callsheet: 1 ---------- */
   function api(method, path, body) {
@@ -183,249 +160,690 @@
     if (!t || t.disabled) return;
     if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', app.dataset.look, t); }
     else if (t.dataset.setMode) { setMode(t.dataset.setMode, true); pushLook('mode', app.dataset.mode, t); }
-    else if (t.dataset.filter) setFilter(t.dataset.filter);
-    else if (t.dataset.target) jump(t.dataset.target);
   });
-
-  /* ---------- phone: area filter + section tabs ---------- */
-  function setFilter(id) {
-    press('data-filter', id);
-    main.querySelectorAll('[data-area]').forEach(function (el) {
-      el.classList.toggle('fx', id !== 'all' && el.getAttribute('data-area') !== id);
-    });
-  }
-  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  function jump(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.scrollIntoView({ behavior: reduceMotion.matches ? 'auto' : 'smooth', block: 'start' });
-    markTab(id);
-  }
-  function markTab(id) {
-    document.querySelectorAll('.tabs [data-target]').forEach(function (b) {
-      if (b.dataset.target === id) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
-    });
-  }
-  var ticking = false;
-  window.addEventListener('scroll', function () {
-    if (ticking) return; ticking = true;
-    window.requestAnimationFrame(function () {
-      ticking = false;
-      var cur = null, line = window.innerHeight * 0.35;
-      document.querySelectorAll('.tabs [data-target]').forEach(function (b) {
-        var s = document.getElementById(b.dataset.target);
-        if (s && s.getBoundingClientRect().top <= line) cur = b.dataset.target;
-      });
-      var tabs = document.querySelectorAll('.tabs [data-target]');
-      if (!cur && tabs.length) cur = tabs[0].dataset.target;
-      if (cur) markTab(cur);
-    });
-  }, { passive: true });
 
   /* ---------- header: route buttons, last refreshed, refresh ---------- */
   var setupBtn = document.getElementById('setup-btn'), backBtn = document.getElementById('back-btn');
-  var fresh = document.getElementById('fresh'), freshT = document.getElementById('fresh-t');
+  var fresh = document.getElementById('fresh'), freshT = document.getElementById('fresh-t'), hdrDate = document.getElementById('hdr-date');
   var refreshBtn = document.getElementById('refresh-btn'), refreshErr = document.getElementById('refresh-err');
   setupBtn.addEventListener('click', function () { ui.step = 1; location.hash = 'setup'; });
   backBtn.addEventListener('click', function () { location.hash = 'brief'; });
   refreshBtn.addEventListener('click', function () {
     run([refreshBtn], refreshErr, function () { return api('POST', 'api/sync', {}); }, function (ls) {
       if (S && ls) S.last_sync = ls;
-      if (ls && ls.ok === false) refreshErr.textContent = 'Refreshed with problems: see Heads up.';
+      if (ls && ls.ok === false) refreshErr.textContent = 'Refreshed with problems: see Heads up on Agenda.';
       return showBrief();
     });
   });
 
-  /* ---------- render: brief ---------- */
-  function status(text) { main.textContent = ''; add(main, h('p', { class: 'status', role: 'status' }, text)); }
+  /* ---------- render: brief (tabs-v6) ----------
+     Tabs Briefing · Replies · Agenda · Areas · Tasks (later). One-line rows open a detail panel (desktop: side
+     panel, phone: full-screen sheet). Ticking a row marks it done (api/done); the notepad menu hides rows that
+     don't need a reply (api/suppress) or dismisses heads-ups and events on this device until tomorrow.
+     Times are the brief's display strings (12h/24h from the server); only the timeline's hour labels are
+     formatted here, from brief.time_format. */
+  function status(text) { main.textContent = ''; add(main, h('p', { class: 'status', role: 'status' }, text)); clearLayer(); }
   function noAccounts() {
     return !S || !(S.areas || []).some(function (a) { return (a.accounts || []).length; });
   }
+  var ICONS = document.getElementById('icons');
+  function ico(k, label) {
+    var src = ICONS && ICONS.content ? ICONS.content.querySelector('[data-i="' + k + '"]') : null;
+    if (!src) return null;
+    var s = src.cloneNode(true);
+    if (label) { s.setAttribute('role', 'img'); s.setAttribute('aria-label', label); }
+    else { s.setAttribute('aria-hidden', 'true'); s.setAttribute('focusable', 'false'); }
+    return s;
+  }
+  var KEY_TAB = 'callsheet.tab', KEY_DISMISS = 'callsheet.dismissed';
+  var TABS = [['briefing', 'Briefing', 'Brief', 'brief'], ['replies', 'Replies', 'Replies', 'mail'], ['agenda', 'Agenda', 'Agenda', 'cal'],
+    ['areas', 'Areas', 'Areas', 'areas'], ['tasks', 'Tasks', 'Tasks', 'tasks']];
+  var LIVE_TABS = ['briefing', 'replies', 'agenda', 'areas'];
+  /* one reason dot per row, strongest first; the legend uses the same words */
+  var REASONS = [['vip', 'VIP'], ['men', 'Mentioned'], ['q', 'Question'], ['due', 'Deadline'], ['wait', 'Waiting']];
+  var RNAME = {}; REASONS.forEach(function (x) { RNAME[x[0]] = x[1]; });
+  var phoneMq = window.matchMedia('(max-width: 700px)');
+  function isPhone() { return phoneMq.matches; }
 
-  function render(d) {
-    var areas = {}, order = [];
-    (d.areas || []).forEach(function (a) { areas[a.id] = a; order.push(a.id); });
-    /* rows may point at areas that aren't in data.areas (sample projects in a live brief): neutral tag, never dropped */
-    function area(id, row) {
-      return areas[id] || { id: id, name: String((row && (row.area_name || row.area_label)) || id || '').toUpperCase(), unknown: true };
+  var B = null;            /* the brief being shown */
+  var U = {                /* brief UI state; survives re-renders and refreshes */
+    tab: LIVE_TABS.indexOf(load(KEY_TAB)) >= 0 ? load(KEY_TAB) : 'briefing',
+    open: null,            /* {kind: 'reply'|'event', id} */
+    pop: null,             /* notepad menu {kind: 'reply'|'event'|'heads'|'para', id, anc, sub} */
+    doneOpen: false, area: null, more: false, drafts: {}, toast: null, busy: false
+  };
+  var toastTimer = null;
+
+  /* dismissed on this device until tomorrow: {day: brief date, keys: [...]} */
+  function dismissed() {
+    var d = null;
+    try { d = JSON.parse(load(KEY_DISMISS) || 'null'); } catch (e) { d = null; }
+    var day = B && B.date || '';
+    if (!d || d.day !== day || !Array.isArray(d.keys)) d = { day: day, keys: [] };
+    return d;
+  }
+  function isDismissed(k) { return dismissed().keys.indexOf(k) >= 0; }
+  function setDismissed(k, on) {
+    var d = dismissed(), i = d.keys.indexOf(k);
+    if (on && i < 0) d.keys.push(k);
+    if (!on && i >= 0) d.keys.splice(i, 1);
+    d.keys = d.keys.slice(-300);
+    save(KEY_DISMISS, JSON.stringify(d));
+  }
+  function hashOf(s) { var x = 0; s = String(s || ''); for (var i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0; return String(x >>> 0); }
+
+  /* ----- data helpers ----- */
+  function areaOf(id) {
+    var a = ((B && B.areas) || []).filter(function (x) { return x.id === id; })[0];
+    return a ? { id: a.id, name: a.name, cls: 'a' + clampColour(a.colour) } : { id: id, name: String(id || ''), cls: 'an' };
+  }
+  function tagOf(id) { var a = areaOf(id); return a.name ? h('span', { class: 'tag ' + a.cls }, a.name) : null; }
+  function replies() { return (B && B.replies) || []; }
+  function events() { return ((B && B.schedule) || []).filter(function (e) { return !isDismissed('ev:' + (e.key || e.id)); }); }
+  function replyById(id) { return replies().filter(function (r) { return r.id === id; })[0] || null; }
+  function eventById(id) { return ((B && B.schedule) || []).filter(function (e) { return e.id === id; })[0] || null; }
+  function gistSum(r) { return (r.gist && r.gist.summary) || r.short || r.text || ''; }
+  function srcKind(r) {
+    if (r.via === 'slack' || /^slack/i.test(r.source || '')) return 'slack';
+    if (r.via === 'mail' || /^(mail|gmail)/i.test(r.source || '')) return 'mail';
+    return 'signal';   /* other chat sources: the speech-bubble glyph (Signal arrives in 0.5) */
+  }
+  function srcName(r) { var k = srcKind(r); return k === 'mail' ? 'Gmail' : k === 'slack' ? 'Slack' : (r.source || 'Message'); }
+  function reasonOf(r) {
+    var rs = (Array.isArray(r.reasons) ? r.reasons : []).map(String);
+    function find(re) { return rs.filter(function (x) { return re.test(x); })[0]; }
+    var x;
+    if (r.vip || find(/^VIP$/)) return ['vip', 'VIP'];
+    if ((x = find(/^Mentioned|In your thread/))) return ['men', x];
+    if ((x = find(/question/i))) return ['q', x];
+    if ((x = find(/deadline/i))) return ['due', x];
+    if ((x = find(/^Waiting/))) return ['wait', x];
+    return null;
+  }
+  /* minutes since midnight from a display or HH:MM string ("9:30 am", "4:00–5:00 pm", "14:30"); null if none */
+  function clockMatch(s) {
+    s = String(s || '');
+    var m = /\b(\d{1,2})(?::([0-5]\d))?\s*(?:[–-]\s*\d{1,2}(?::\d{2})?\s*)?(am|pm)\b/i.exec(s);
+    if (m && +m[1] >= 1 && +m[1] <= 12) return { m: (+m[1] % 12 + (m[3].toLowerCase() === 'pm' ? 12 : 0)) * 60 + +(m[2] || 0), text: m[0] };
+    m = /\b([01]?\d|2[0-4]):([0-5]\d)\b/.exec(s);
+    return m ? { m: +m[1] * 60 + +m[2], text: m[0] } : null;
+  }
+  function parseClock(s) { var c = clockMatch(s); return c ? c.m : null; }
+  function startMin(e) { var v = parseClock(e.start_hhmm || e.time); return v == null ? null : v; }
+  function endMin(e) {
+    var s = startMin(e), v = parseClock(e.end_hhmm || e.end);
+    if (s == null) return null;
+    return v == null || v <= s ? s + 30 : v;
+  }
+  /* "now" in Callsheet's time zone, only when the brief is today's */
+  function nowMin() {
+    var tz = (S && S.settings && S.settings.timezone) || undefined, d = new Date(), day, hm;
+    try {
+      day = d.toLocaleDateString('en-CA', { timeZone: tz });
+      hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
+    } catch (e) { day = d.toLocaleDateString('en-CA'); hm = pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+    if (!B || B.date !== day) return null;
+    return parseClock(hm);
+  }
+  /* a reply whose exact details name a time today: [minutes, the time as written] (Agenda pins, "Due today") */
+  function todayTime(r) {
+    var ds = (r.gist && Array.isArray(r.gist.details)) ? r.gist.details : [];
+    var dm = String((B && B.date_short) || '').split(' ').slice(1).join(' ');
+    for (var i = 0; i < ds.length; i++) {
+      var v = String(ds[i].value || '');
+      var onlyTime = /^\s*\d{1,2}(:\d{2})?\s*(am|pm)?(\s*[–-]\s*\d{1,2}(:\d{2})?\s*(am|pm)?)?\s*$/i.test(v);   /* "4:30 pm": today */
+      if (!(onlyTime || /\b(today|tonight)\b/i.test(v) || (dm && v.indexOf(dm) >= 0))) continue;
+      var c = clockMatch(v);
+      if (c) return [c.m, c.text];
     }
-    function acls(a) { return a.unknown ? 'an' : 'a' + clampColour(a.colour); }
-    function tag(id, row) { var a = area(id, row); return h('span', { class: 'tag ' + acls(a) }, a.name); }
-    var secs = d.sections || {};
-    function sampleTag(k) { return secs[k] === 'sample' ? h('span', { class: 'tag sample' }, 'Sample') : null; }
-    function flagsOf(e) {
-      var out = [];
-      if (e.flag) out.push(e.flag);
-      (Array.isArray(e.flags) ? e.flags : []).forEach(function (f) { out.push(typeof f === 'string' ? { text: f } : f); });
-      return out.filter(function (f) { return f && f.text; });
+    return null;
+  }
+  function hourLabel(hr) {
+    if (B && B.time_format === '24h') return pad(hr % 24) + ':00';
+    return (hr % 12 || 12) + (hr % 24 >= 12 ? ' pm' : ' am');
+  }
+  function openReplies() { return replies(); }
+  function vipCount() { return replies().filter(function (r) { return reasonOf(r) && reasonOf(r)[0] === 'vip'; }).length; }
+
+  /* ----- shared pieces ----- */
+  function npBtn(kind, id, anc, wide) {
+    var open = !!(U.pop && U.pop.anc === anc);
+    return h('button', { type: 'button', class: 'np' + (wide ? ' wide' : ''), 'data-np': kind + ':' + id, 'data-anc': anc,
+      'aria-haspopup': 'true', 'aria-expanded': String(open), 'aria-label': wide ? null : 'More: hide or dismiss', title: 'Hide, dismiss or note' },
+    [ico('note'), wide ? 'More' : null]);
+  }
+  function rdot(r) {
+    var x = reasonOf(r);
+    if (!x) return h('span', { class: 'rdot none', 'aria-hidden': 'true' });
+    var all = (Array.isArray(r.reasons) ? r.reasons : []).join(' · ') || x[1];
+    return h('span', { class: 'rdot ' + x[0], role: 'img', 'aria-label': x[1], title: all });
+  }
+  function newDot(r) {
+    return r.new && B.previous_at ? h('span', { class: 'newdot', role: 'img', 'aria-label': 'New since ' + B.previous_at, title: 'New since ' + B.previous_at }) : null;
+  }
+  function rowEl(r, where) {
+    var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
+    return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-row': r.id }, [
+      h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
+      h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id,
+        'aria-label': r.who + ': ' + gistSum(r) + (r.age ? ', ' + r.age : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') }, [
+        h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
+        h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
+        h('span', { class: 'age' }, r.age || ''), rdot(r)]),
+      npBtn('reply', r.id, where + '-' + r.id)]);
+  }
+  function doneRows() {
+    var ds = (B && B.done) || [];
+    if (!ds.length) return null;
+    return [h('button', { type: 'button', class: 'dfold', 'data-donefold': '1', 'aria-expanded': String(U.doneOpen) },
+      'Done today (' + ds.length + ') ' + (U.doneOpen ? '▾' : '▸')),
+    U.doneOpen ? h('div', { class: 'list' }, ds.map(function (d) {
+      return h('div', { class: 'row isdone' }, [
+        h('button', { type: 'button', class: 'ck', 'data-unck': d.id, 'aria-pressed': 'true', 'aria-label': 'Not done: ' + d.who }, h('span', { class: 'bx' })),
+        h('div', { class: 'rmain' }, [h('span', { class: 'tx' }, [h('span', { class: 'who' }, d.who), h('span', { class: 'sum' }, d.summary || '')]),
+          h('span', { class: 'age' }, d.done_at || '')]),
+        h('span')]);
+    })) : null];
+  }
+  function hiddenLine() {
+    var n = parseInt(B && B.hidden, 10) || 0;
+    return n > 0 ? h('p', { class: 'hidline' }, [n + ' hidden · ', h('button', { type: 'button', class: 'tbtn', 'data-manage': '1' }, 'Manage')]) : null;
+  }
+  function legend() {
+    return h('div', { class: 'legend' }, REASONS.map(function (x) {
+      return h('span', null, [h('span', { class: 'rdot ' + x[0], 'aria-hidden': 'true' }), x[1]]);
+    }).concat([h('span', { class: 'hint' }, 'Tick when done.')]));
+  }
+  function foot() {
+    return h('div', { class: 'foot' }, [h('span', null, B.sources || ''), h('span', null, 'Nothing was sent. Drafts wait for you.')]);
+  }
+
+  /* ----- tabs ----- */
+  function T_briefing() {
+    var sum = B.summary && typeof B.summary.text === 'string' && B.summary.text ? B.summary : null;
+    var top = (sum && Array.isArray(sum.top) && sum.top.length ? sum.top : B.top) || [];
+    var doneIds = ((B.done) || []).map(function (d) { return d.id; });
+    var nRep = openReplies().length, evs = events();
+    var head = h('div', { class: 'label muted kicker' }, [B.kind || 'Brief', B.written_at ? ' · ' + B.written_at : '', B.previous_at ? ' · since ' + B.previous_at : '']);
+    var text = sum ? [h('p', { class: 'daytext' + (U.more ? ' all' : ''), id: 'bv-daytext' }, sum.text),
+      sum.text.length > 260 ? h('button', { type: 'button', class: 'tbtn', 'data-more': '1', 'aria-expanded': String(U.more), 'aria-controls': 'bv-daytext' }, U.more ? 'Less' : 'More') : null]
+      : h('h2', { class: 'headline' }, plural(evs.length, 'event', 'events') + ' today, ' + plural(nRep, 'reply', 'replies') + ' waiting.');
+    var topEl = top.length ? [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
+      var isEv = t.kind === 'event', gone = !isEv && !replyById(t.ref), dn = gone && doneIds.indexOf(t.ref) >= 0;
+      var kids = [h('span', { class: 'ri' }, ico(isEv ? 'cal' : 'mail')), h('span', { class: 'tt' }, t.text)];
+      return h('li', null, gone ? h('span', { class: 'tline' + (dn ? ' isdone' : '') }, kids)
+        : h('button', { type: 'button', class: 'tline', 'data-open': (isEv ? 'event:' : 'reply:') + t.ref }, kids));
+    }))] : null;
+    var areas = sum && sum.areas ? (B.areas || []).filter(function (a) { return sum.areas[a.id] && !isDismissed('ar:' + a.id + ':' + hashOf(sum.areas[a.id])); }) : [];
+    var byArea = areas.length ? [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
+      return h('div', { class: 'para cn' }, [
+        h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + ' (open in Areas)' }, [
+          h('span', { class: 'ptag' }, tagOf(a.id)), h('span', { class: 'ptext' }, sum.areas[a.id])]),
+        npBtn('para', a.id, 'pa-' + a.id)]);
+    }))] : null;
+    /* at a glance: next event, due today, waiting */
+    var now = nowMin(), next = null, gl = [];
+    evs.forEach(function (e) { var s = startMin(e); if (!next && s != null && (now == null || s >= now)) next = e; });
+    if (next) gl.push(h('li', null, [h('span', { class: 'label' }, 'Next'), h('span', { class: 'disp' }, next.time || ''), next.short || next.title]));
+    var due = openReplies().map(function (r) { var t = todayTime(r); return t ? [t[0], r, t[1]] : null; }).filter(Boolean).sort(function (a, b) { return a[0] - b[0]; });
+    if (due.length) gl.push(h('li', null, [h('span', { class: 'label' }, 'Due today'), h('span', { class: 'disp' }, due[0][2]),
+      due[0][1].who + (due.length > 1 ? ' and ' + (due.length - 1) + ' more' : '')]));
+    var clashes = evs.filter(function (e) { return e.clash; });
+    if (clashes.length) gl.push(h('li', null, [h('span', { class: 'label' }, 'Clash'), h('span', { class: 'disp alert' }, clashes[0].time || ''), clashes[0].short || clashes[0].title]));
+    var nv = vipCount();
+    gl.push(h('li', null, [h('span', { class: 'label' }, 'Waiting'), h('span', { class: 'disp' }, String(nRep)),
+      nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
+    var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
+    return [h('div', { class: 'bf' }, [h('article', null, [head, text, topEl, byArea]), aside])];
+  }
+  function T_replies() {
+    var rs = openReplies(), nNew = B.previous_at ? rs.filter(function (r) { return r.new; }).length : 0;
+    return [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, rs.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
+      rs.length ? legend() : null,
+      rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, 'Nothing waiting.'),
+      hiddenLine(), doneRows()];
+  }
+  function timeline() {
+    var phone = isPhone(), H = phone ? 56 : 64, evs = events(), now = nowMin();
+    var t0 = 7 * 60, t1 = 22 * 60;
+    evs.forEach(function (e) { var s = startMin(e), en = endMin(e); if (s == null) return; t0 = Math.min(t0, Math.floor(s / 60) * 60); t1 = Math.max(t1, Math.min(24 * 60, Math.ceil(en / 60) * 60)); });
+    function top(m) { return (m - t0) / 60 * H; }
+    var height = top(t1);
+    var ax = h('div', { class: 'col ax', 'aria-hidden': 'true' }), tc = h('div', { class: 'col tc' }), pc = h('div', { class: 'col pc' });
+    var lines = h('div', { class: 'hls', 'aria-hidden': 'true' });
+    for (var m = t0; m <= t1; m += 60) {
+      var lab = h('span', null, hourLabel(m / 60)); lab.style.top = top(m) + 'px'; ax.appendChild(lab);
+      var hl = h('div', { class: 'hl' }); hl.style.top = top(m) + 'px'; lines.appendChild(hl);
     }
-    function reasons(r) {
-      var rs = Array.isArray(r.reasons) ? r.reasons : [];
-      return rs.length ? h('span', { class: 'reasons' }, rs.map(function (x) { return h('span', { class: 'reason' }, String(x)); })) : null;
-    }
-    /* "Suggested reply" disclosure: the text (pre-wrap), Copy, and the Open link. Nothing is sent. */
-    var sugN = 0;
-    function suggestion(r) {
-      if (!r.suggestion || typeof r.suggestion !== 'string') return null;
-      var id = 'sug-' + (++sugN), text = h('p', { class: 'sugtext' }, r.suggestion), link = safeHttps(r.link);
-      var copy = btn('act', 'Copy', null, function () { copyText(r.suggestion, text, copy); });
-      var panel = h('div', { class: 'sugp', id: id, hidden: true }, [text, h('div', { class: 'btns' }, [copy,
-        link ? h('a', { class: 'tbtn', href: link, target: '_blank', rel: 'noopener noreferrer' }, ['Open', h('span', { class: 'sr' }, ' in Gmail')]) : null])]);
-      var tog = btn('tbtn disc', 'Suggested reply', { 'aria-expanded': 'false', 'aria-controls': id }, function () {
-        var open = tog.getAttribute('aria-expanded') !== 'true';
-        tog.setAttribute('aria-expanded', String(open)); panel.hidden = !open;
+    [ax, tc, pc].forEach(function (c) { c.style.height = height + 'px'; });
+    /* clusters of overlapping events side by side; a red marker beside each clash */
+    var timed = evs.filter(function (e) { return startMin(e) != null; }).slice().sort(function (a, b) { return startMin(a) - startMin(b) || endMin(a) - endMin(b); });
+    var clusters = [], cur = null;
+    timed.forEach(function (e) {
+      if (cur && startMin(e) < cur.end) { cur.evs.push(e); cur.end = Math.max(cur.end, endMin(e)); }
+      else { cur = { evs: [e], start: startMin(e), end: endMin(e) }; clusters.push(cur); }
+    });
+    clusters.forEach(function (c) {
+      var lanes = [], lane = {};
+      c.evs.forEach(function (e) {
+        var i = 0; while (i < lanes.length && lanes[i] > startMin(e)) i++;
+        lanes[i] = endMin(e); lane[e.id] = i;
       });
-      /* the server's post-check: the draft states an approval or payment as done. Still just a draft. */
-      var warn = typeof r.suggestion_warning === 'string' && r.suggestion_warning ? h('p', { class: 'err sugwarn' }, r.suggestion_warning) : null;
-      return h('div', { class: 'sug' }, [warn, tog, panel]);
+      var n = lanes.length;
+      if (n > 1) {
+        var cm = h('div', { class: 'cmark', role: 'img', 'aria-label': 'Clash' });
+        cm.style.top = top(c.start) + 'px'; cm.style.height = (top(c.end) - top(c.start)) + 'px'; tc.appendChild(cm);
+      }
+      c.evs.forEach(function (e) {
+        var hh = Math.max(top(endMin(e)) - top(startMin(e)), 26), cl = n > 1 || !!e.clash, a = areaOf(e.area);
+        var sel = U.open && U.open.kind === 'event' && U.open.id === e.id;
+        var blk = h('div', { class: 'blk ' + a.cls + (cl ? ' clash' : '') + (sel ? ' sel' : '') }, [
+          h('button', { type: 'button', class: 'bopen', 'data-open': 'event:' + e.id,
+            'aria-label': (e.time || '') + (e.end ? '–' + e.end : '') + ' ' + e.title + (cl ? ', clash' : '') }, [
+            h('span', { class: 'bt' }, (hh < 40 ? (e.time || '') + ' ' : '') + e.title),
+            hh >= 40 ? h('span', { class: 'bm' }, (e.time || '') + (e.end ? '–' + e.end : '') + (cl ? ' · Clash' : '')) : null,
+            hh >= 60 && (e.note || (e.flag && e.flag.text)) ? h('span', { class: 'bm' }, e.note || e.flag.text) : null]),
+          npBtn('event', e.id, 'tl-' + e.id)]);
+        blk.style.top = top(startMin(e)) + 'px'; blk.style.height = hh + 'px';
+        blk.style.left = 'calc(' + (lane[e.id] * 100 / n) + '% + ' + (lane[e.id] ? 2 : 0) + 'px)';
+        blk.style.width = 'calc(' + (100 / n) + '% - ' + (n > 1 ? 2 : 0) + 'px)';
+        tc.appendChild(blk);
+      });
+    });
+    /* replies whose exact details name a time today, pinned at that time */
+    var lastPin = -100, nPins = 0;
+    openReplies().map(function (r) { var t = todayTime(r); return t && t[0] >= t0 && t[0] <= t1 ? [t[0], r] : null; }).filter(Boolean)
+      .sort(function (a, b) { return a[0] - b[0]; }).forEach(function (p) {
+        var r = p[1], y = Math.max(top(p[0]) - 2, lastPin + 28), rk = reasonOf(r);
+        lastPin = y; nPins++;
+        var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
+        var pin = h('div', { class: 'pin' + (rk && rk[0] === 'due' ? ' due' : '') + (sel ? ' sel' : '') }, [
+          h('button', { type: 'button', class: 'pm', 'data-open': 'reply:' + r.id, title: r.who + ': ' + gistSum(r) }, [
+            h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))), h('span', { class: 'who' }, String(r.who).split(' ')[0]), h('span', { class: 'pt' }, gistSum(r))]),
+          npBtn('reply', r.id, 'pin-' + r.id)]);
+        pin.style.top = y + 'px';
+        pc.appendChild(pin);
+      });
+    var kids = [lines, ax, h('div', { class: 'col' }, [h('div', { class: 'colh label' }, 'Calendar'), tc]),
+      nPins ? h('div', { class: 'col' }, [h('div', { class: 'colh label' }, phone ? 'Messages' : 'Messages about that time'), pc]) : null];
+    if (now != null && now >= t0 && now <= t1) {
+      var nl = h('div', { class: 'nowl', 'aria-hidden': 'true' }); nl.style.top = top(now) + 'px'; kids.push(nl);
+      var nt = h('span', { class: 'nowt' }, 'Now'); nt.style.top = top(now) + 'px'; ax.appendChild(nt);
     }
-    function who(r, tagName) {
-      var link = safeHttps(r.link);
-      if (!link) return h(tagName, { class: 'who' }, r.who);
-      return h('a', { class: 'who', href: link, target: '_blank', rel: 'noopener noreferrer' },
-        [r.who, h('span', { class: 'sr' }, ' (Open in Gmail)')]);
+    var tl = h('div', { class: 'tl' + (nPins ? '' : ' nopins') }, kids);
+    tl.style.height = height + 'px';
+    return tl;
+  }
+  function headsStrip() {
+    var hs = ((B && B.heads_up) || []).filter(function (x) { return !isDismissed('hu:' + hashOf(x)); });
+    if (!hs.length) return null;
+    return h('section', { class: 'hstrip', 'aria-label': 'Heads up' }, [h('h2', { class: 'sub-h' }, 'Heads up'),
+      h('ul', null, hs.map(function (x) { var k = hashOf(x); return h('li', { class: 'cn' }, [h('span', null, x), npBtn('heads', k, 'hu-' + k)]); }))]);
+  }
+  function T_agenda() {
+    var evs = events();
+    return [h('h2', { class: 'sec-h' }, ['Today ', h('span', { class: 'n' }, [B.date_short || '', evs.some(function (e) { return e.clash; }) ? ' · clashes in red' : ''])]),
+      headsStrip(),
+      evs.length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.')];
+  }
+  function T_areas() {
+    var list = (B.areas || []).filter(function (a) { return !U.area || a.id === U.area; });
+    var sumA = (B.summary && B.summary.areas) || {};
+    var filt = U.area ? h('div', { class: 'afilt' }, [h('span', { class: 'muted' }, 'Showing ' + areaOf(U.area).name + ' · '),
+      h('button', { type: 'button', class: 'tbtn', 'data-allareas': '1' }, 'All areas')]) : null;
+    var cols = h('div', { class: 'bycols' }, list.map(function (a) {
+      var reps = openReplies().filter(function (r) { return r.area === a.id; }), evs = events().filter(function (e) { return e.area === a.id; });
+      return h('section', { class: 'acol a' + clampColour(a.colour), 'aria-label': a.name }, [
+        h('h2', { class: 'areahead' }, a.name),
+        sumA[a.id] ? h('p', { class: 'asum' }, sumA[a.id]) : null,
+        h('h3', { class: 'sub-h' }, ['Replies ', h('span', { class: 'n' }, String(reps.length))]),
+        reps.length ? h('div', { class: 'list' }, reps.map(function (r) { return rowEl(r, 'ar'); })) : h('p', { class: 'empty' }, 'Nothing waiting.'),
+        h('h3', { class: 'sub-h' }, ['Today ', h('span', { class: 'n' }, String(evs.length))]),
+        evs.length ? h('div', { class: 'evs' }, evs.map(function (e) {
+          var sel = U.open && U.open.kind === 'event' && U.open.id === e.id;
+          return h('div', { class: 'evr cn' + (sel ? ' sel' : '') }, [
+            h('button', { type: 'button', class: 'emain', 'data-open': 'event:' + e.id }, [h('span', { class: 'tm' }, e.time || ''),
+              h('span', { class: 'w' }, [e.title, e.clash ? h('span', { class: 'ct' }, 'Clash') : null])]),
+            npBtn('event', e.id, 'ae-' + e.id)]);
+        })) : h('p', { class: 'empty' }, 'Nothing booked.')]);
+    }));
+    if (list.length) cols.style.setProperty('--cols', String(Math.min(4, list.length)));
+    return [filt, list.length ? cols : h('p', { class: 'empty' }, 'No areas yet.')];
+  }
+  var TFN = { briefing: T_briefing, replies: T_replies, agenda: T_agenda, areas: T_areas };
+
+  /* ----- detail panel ----- */
+  function panelReply(r) {
+    var rk = reasonOf(r), ds = (r.gist && Array.isArray(r.gist.details)) ? r.gist.details : [];
+    var sug = typeof r.suggestion === 'string' && r.suggestion ? r.suggestion : null, link = safeHttps(r.link);
+    var ta = null;
+    if (sug) { ta = h('textarea', { class: 'inp draft', id: 'bv-draft', 'data-draft': r.id, rows: '4' }); ta.value = U.drafts[r.id] != null ? U.drafts[r.id] : sug; }
+    return [h('div', { class: 'phd' }, [h('h2', { id: 'bv-ptitle' }, r.who), h('div', { class: 'pmeta' }, [tagOf(r.area),
+      h('span', { class: 's' }, [ico(srcKind(r)), r.source || srcName(r)]), r.age ? h('span', null, r.age) : null,
+      rk ? h('span', { class: 's' }, [rdot(r), rk[1]]) : null, r.new && B.previous_at ? h('span', { class: 's' }, [newDot(r), 'New']) : null])]),
+    h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)),
+    ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
+      return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);
+    })), h('div', { class: 'fhint' }, 'Quoted exactly from the message.')] : null,
+    sug ? [h('h3', { class: 'plab' }, h('label', { for: 'bv-draft' }, 'Suggested reply')),
+      typeof r.suggestion_warning === 'string' && r.suggestion_warning ? h('p', { class: 'err sugwarn' }, r.suggestion_warning) : null,
+      ta, h('div', { class: 'dbtns' }, [h('button', { type: 'button', class: 'act', 'data-copy': r.id }, 'Copy'),
+        h('span', { class: 'hint' }, 'Edit it here. Nothing is sent for you.')])] : null,
+    h('div', { class: 'pacts' }, [
+      link ? h('a', { class: 'act', href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + srcName(r)) : null,
+      h('button', { type: 'button', class: 'act ghost', 'data-markdone': r.id }, 'Mark done'),
+      npBtn('reply', r.id, 'pa-' + r.id, true)])];
+  }
+  function panelEvent(e) {
+    var fl = e.flag && e.flag.text ? e.flag.text : null;
+    return [h('div', { class: 'phd' }, [h('h2', { id: 'bv-ptitle' }, e.title), h('div', { class: 'pmeta' }, [tagOf(e.area),
+      h('span', { class: 's' }, [ico('cal'), 'Calendar']), h('span', null, (e.time || '') + (e.end ? '–' + e.end : ''))])]),
+    fl ? h('p', { class: 'pflag' }, fl) : null,
+    e.note ? [h('h3', { class: 'plab' }, 'Note'), h('p', { class: 'what' }, e.note)] : null,
+    h('div', { class: 'pacts' }, [npBtn('event', e.id, 'pe-' + e.id, true)])];
+  }
+  function panelEl() {
+    if (!U.open) return null;
+    var r = U.open.kind === 'reply' ? replyById(U.open.id) : eventById(U.open.id);
+    if (!r) { U.open = null; return null; }
+    var phone = isPhone(), isEv = U.open.kind === 'event';
+    var closeB = h('button', { type: 'button', class: 'xbtn', 'data-close': '1' }, phone ? [ico('back'), 'Back'] : [ico('close'), 'Close']);
+    var attrs = { class: 'panel', 'aria-labelledby': 'bv-ptitle' };
+    if (phone) { attrs.role = 'dialog'; attrs['aria-modal'] = 'true'; }
+    return h('aside', attrs, h('div', { class: 'panel-in' }, [
+      h('div', { class: 'ptop' }, [phone ? closeB : h('span', { class: 'label lbl' }, isEv ? 'Event' : 'Message'), h('span', { class: 'sp' }),
+        phone ? null : closeB]),
+      h('div', { class: 'pbody' }, isEv ? panelEvent(r) : panelReply(r))]));
+  }
+
+  /* ----- notepad menu and toast (in a layer on .app, outside main) ----- */
+  var layer = h('div', { class: 'bv-layer' });
+  app.appendChild(layer);
+  function clearLayer() { layer.textContent = ''; }
+  function popEl() {
+    var P = U.pop;
+    if (!P) return null;
+    var items = [];
+    if (P.kind === 'reply') {
+      var r = replyById(P.id);
+      if (!r) { U.pop = null; return null; }
+      items.push(h('button', { type: 'button', 'data-pnnr': '1', 'aria-expanded': String(!!P.sub) }, 'Doesn’t need a reply ' + (P.sub ? '▾' : '▸')));
+      if (P.sub) {
+        var o = [['thread', 'Just this one', srcKind(r) === 'slack' ? 'Hide this thread' : 'Hide this conversation'],
+          ['sender', 'Never for this sender', 'Hide everything from ' + r.who]];
+        if (srcKind(r) === 'mail') o.push(['domain', 'Never for their domain', 'Hide everything from that domain']);
+        items.push(h('div', { class: 'sub' }, o.map(function (x) {
+          return h('button', { type: 'button', 'data-sup': x[0] }, [x[1], h('span', { class: 's' }, x[2])]);
+        })));
+      }
+    } else {
+      items.push(h('button', { type: 'button', 'data-dismiss': '1' }, ['Dismiss', h('span', { class: 's' }, 'On this device, until tomorrow')]));
     }
+    items.push(h('button', { type: 'button', disabled: true, class: 'later' }, ['Note for Callsheet…', h('span', { class: 's' }, 'Notes arrive in 0.5')]));
+    return h('div', { class: 'pop', role: 'group', 'aria-label': 'More', 'data-pop': '1' }, items);
+  }
+  function placePop() {
+    var el = layer.querySelector('[data-pop]');
+    if (!el || !U.pop) return;
+    var a = document.querySelector('[data-anc="' + cssq(U.pop.anc) + '"]');
+    if (!a) { U.pop = null; el.remove(); return; }
+    var ar = a.getBoundingClientRect(), pr = app.getBoundingClientRect(), w = el.offsetWidth, vw = document.documentElement.clientWidth;
+    var left = Math.max(4, Math.min(ar.right - w, vw - w - 4)) - pr.left;
+    var topY = ar.bottom + 4;
+    if (topY + el.offsetHeight > window.innerHeight - 4 && ar.top - el.offsetHeight - 4 > 0) topY = ar.top - el.offsetHeight - 4;
+    el.style.left = left + 'px'; el.style.top = (topY - pr.top) + 'px';
+  }
+  function toastEl() {
+    var T = U.toast;
+    if (!T) return null;
+    return h('div', { class: 'toast fix' + (T.err ? ' bad' : ''), role: T.err ? 'alert' : 'status' }, [h('b', null, T.b), T.d ? h('span', { class: 'd' }, T.d) : null,
+      T.undo ? h('button', { type: 'button', class: 'tbtn', 'data-undo': '1' }, 'Undo') : null,
+      h('button', { type: 'button', class: 'tx', 'data-toastx': '1', 'aria-label': 'Close' }, ico('close'))]);
+  }
+  function showToast(b, d, undo, err) {
+    U.toast = { b: b, d: d, undo: undo || null, err: !!err, id: Date.now() };
+    var id = U.toast.id;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { if (U.toast && U.toast.id === id) { U.toast = null; renderLayer(); } }, undo ? 8000 : 6000);
+  }
+  function renderLayer() {
+    if (ui.view !== 'brief' || !B) { clearLayer(); return; }
+    layer.textContent = '';
+    add(layer, [popEl(), toastEl()]);
+    placePop();
+  }
 
-    var sched = d.schedule || [], replies = d.replies || [], heads = d.heads_up || [], projects = d.projects || [];
-    var first = sched.filter(function (e) { return e.first; })[0];
-    var clash = sched.filter(function (e) { return e.clash; })[0];
-    var sources = [];
-    replies.forEach(function (r) { if (r.source && sources.indexOf(r.source) < 0) sources.push(r.source); });
-    var written = fmtWhen(d.written_at);
+  /* ----- the whole view ----- */
+  function render(d) { setBrief(d); renderBrief(); }
+  function setBrief(d) {
+    B = d || {};
+    /* the sample brief has no row ids: give it local ones (nothing is saved for the sample) */
+    (B.replies || []).forEach(function (r, i) { if (!r.id) r.id = 'x' + (i + 1); });
+    (B.schedule || []).forEach(function (e, i) { if (!e.id) e.id = 'xs' + (i + 1); });
+    (B.done || []).forEach(function (r, i) { if (!r.id) r.id = 'xd' + (i + 1); });
+    if (U.open && !(U.open.kind === 'reply' ? replyById(U.open.id) : eventById(U.open.id))) U.open = null;
+  }
+  function renderBrief(focusSel) {
+    if (ui.view !== 'brief' || !B) return;
+    var phone = isPhone();
+    var panelScroll = main.querySelector('.panel-in'), ps = panelScroll ? panelScroll.scrollTop : 0, sy = window.scrollY;
+    document.title = 'Daily Brief · ' + (B.date_short || '');
+    document.getElementById('sample-tag').hidden = !B.sample;
+    hdrDate.textContent = (phone ? B.date_short : B.date_long) || '';
+    freshT.textContent = B.written_at ? (phone ? 'Refreshed ' : 'Last refreshed ') + B.written_at : 'Not refreshed yet';
 
-    document.title = 'Daily Brief · ' + (d.date_short || '');
-    document.getElementById('sample-tag').hidden = !d.sample;
-    freshT.textContent = written ? 'Last refreshed ' + written : 'Not refreshed yet';
-
-    /* first run banner */
     var banner = S && !S.setup_done && noAccounts() ? h('div', { class: 'banner', role: 'region', 'aria-label': 'Setup' }, [
       h('p', null, 'This is sample data. Set up Callsheet to see your own day.'),
       btn('btn primary', 'Start setup', null, function () { ui.step = 1; location.hash = 'setup'; })]) : null;
-
-    /* masthead (desktop) */
-    var mast = h('div', { class: 'mast d-only' }, [
-      h('div', { class: 't' }, [
-        h('div', { class: 'label' }, [d.kind || 'Brief', written ? ' · ' + written : '', d.next_checkin ? ' · next check-in ' + d.next_checkin : '']),
-        h('h1', null, d.date_long || '')]),
-      h('div', { class: 'box call' }, [
-        h('div', { class: 'label' }, 'First meeting'),
-        h('div', { class: 'disp' }, first ? first.time : '—'),
-        h('div', { class: 's' }, first ? (first.short || first.title) + ' · ' + area(first.area).name : 'Nothing booked')]),
-      h('div', { class: 'box' }, [
-        h('div', { class: 'label' }, 'Today'),
-        h('div', { class: 'disp' }, sched.length + ' / ' + replies.length + ' / ' + heads.length),
-        h('div', { class: 's' }, 'events · replies due · heads-ups')])
-    ]);
-
-    /* top (phone) */
-    var phTop = h('div', { class: 'ph-top p-only' }, [
-      h('div', { class: 'label' }, ['Daily Brief · ', d.date_short || '', written ? ' · ' + written : '']),
-      h('h1', null, [plural(sched.length, 'event', 'events') + ' today', h('br'),
-        h('span', null, plural(replies.length, 'reply', 'replies') + ' due')]),
-      h('div', { class: 'stat' }, [
-        h('div', { class: 's-call' }, [h('div', { class: 'label' }, 'First meeting'), h('div', { class: 'disp' }, first ? first.time : '—')]),
-        h('div', { class: 's-clash' }, [h('div', { class: 'label' }, 'Clash'), h('div', { class: 'disp' }, clash ? clash.time : 'None')])])
-    ]);
-
-    var chips = h('div', { class: 'chips p-only', role: 'group', 'aria-label': 'Show area' },
-      [h('button', { type: 'button', class: 'chip', 'data-filter': 'all', 'aria-pressed': 'true' }, 'All')].concat(
-        order.map(function (id) { return h('button', { type: 'button', class: 'chip', 'data-filter': id, 'aria-pressed': 'false' }, area(id).name); })));
-
-    /* schedule */
-    var schedTable = h('table', { class: 'sched d-only' }, [
-      h('thead', null, h('tr', null, [h('th', null, 'Time'), h('th', null, 'What'), h('th', null, 'Area'), h('th', null, 'Notes')])),
-      h('tbody', null, sched.map(function (e) {
-        return h('tr', { 'data-area': e.area }, [
-          h('td', { class: 'time' }, e.time),
-          h('td', null, [e.title, flagsOf(e).map(function (f) { return h('span', { class: 'flag' + (f.ok ? ' ok' : '') }, f.text); })]),
-          h('td', null, tag(e.area, e)),
-          h('td', { class: 'nt' }, e.note || '—')]);
-      }))]);
-    var schedList = h('div', { class: 'list p-only' }, sched.map(function (e) {
-      var fl = flagsOf(e), warn = fl.filter(function (f) { return !f.ok; });
-      var sm = e.phone_note || (warn.length ? warn.map(function (f) { return f.text; }).join(' · ') : e.note || (fl[0] && fl[0].text));
-      return h('div', { class: 'it', 'data-area': e.area }, [
-        h('div', { class: 'tm' }, e.time),
-        h('div', null, [e.short || e.title, ' ', tag(e.area, e), sm ? h('div', { class: 'sm' + (warn.length ? ' warn' : '') }, sm) : null])]);
+    var nOpen = openReplies().length;
+    var tabs = h('nav', { class: 'tabbar', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(function (t) {
+      var on = U.tab === t[0], later = t[0] === 'tasks';
+      return h('button', { type: 'button', role: 'tab', id: 'tab-' + t[0], 'data-tab': t[0], 'aria-selected': String(on), 'aria-controls': later ? null : 'bv-pane',
+        tabindex: on ? '0' : '-1', disabled: later, class: later ? 'later' : null, title: later ? 'Coming later' : null }, [
+        ico(t[3]), h('span', { class: 'd-only' }, t[1]), h('span', { class: 'p-only' }, t[2]),
+        t[0] === 'replies' && nOpen ? h('span', { class: 'badge', 'aria-label': nOpen + ' open' }, String(nOpen)) : null,
+        later ? h('span', { class: 'soon d-only' }, 'Coming later') : null]);
     }));
-    var secToday = h('section', { class: 'slab s-today', id: 'sec-today', 'aria-labelledby': 'h-today' }, [
-      h('h2', { class: 'sec-h', id: 'h-today' }, [h('span', { class: 'd-only' }, 'Schedule'), h('span', { class: 'p-only' }, 'Today'),
-        sampleTag('schedule'), h('span', { class: 'n d-only' }, 'Calendar')]),
-      sched.length ? schedTable : h('p', { class: 'muted empty' }, 'Nothing on your calendar today.'),
-      sched.length ? schedList : null]);
-
-    /* needs a reply */
-    var replyTable = h('table', { class: 'reply d-only' }, [
-      h('thead', null, h('tr', null, [h('th', null, 'Who / what'), h('th', null, 'Age'), h('th', null, h('span', { class: 'sr' }, 'Action'))])),
-      h('tbody', null, replies.map(function (r) {
-        return h('tr', { 'data-area': r.area }, [
-          h('td', null, [who(r, 'span'), ' ', tag(r.area, r), ' ', h('span', { class: 'src' }, r.source), h('br'), r.text, reasons(r), suggestion(r)]),
-          h('td', { class: 'age' }, r.age),
-          h('td', null, !r.action ? null : safeHttps(r.link)
-            ? h('a', { class: 'act', href: safeHttps(r.link), target: '_blank', rel: 'noopener noreferrer', tabindex: '-1', 'aria-hidden': 'true' }, r.action)
-            : h('span', { class: 'act' }, r.action))]);
-      }))]);
-    var replyList = h('div', { class: 'list p-only' }, replies.map(function (r) {
-      return h('div', { class: 'it', 'data-area': r.area }, [
-        h('div', { class: 'tm' }, r.age),
-        h('div', null, [who(r, 'b'), ' · ', r.short || r.text,
-          h('div', { class: 'sm' }, [r.source, area(r.area, r).name, String(r.action || '').toLowerCase()].filter(Boolean).join(' · ')),
-          reasons(r), suggestion(r)])]);
-    }));
-    var secReply = h('section', { class: 'slab s-reply', id: 'sec-replies', 'aria-labelledby': 'h-replies' }, [
-      h('h2', { class: 'sec-h', id: 'h-replies' }, ['Needs a reply', sampleTag('replies'), sources.length ? h('span', { class: 'n d-only' }, sources.join(' · ')) : null]),
-      replies.length ? replyTable : h('p', { class: 'muted empty' }, 'No replies waiting.'),
-      replies.length ? replyList : null]);
-
-    /* heads up */
-    var callout = heads.length || secs.headsup === 'live' ? h('div', { class: 'callout', role: 'note', 'aria-label': 'Heads up' }, [
-      h('div', { class: 'h' }, ['Heads up', sampleTag('headsup')]),
-      heads.length ? h('ul', null, heads.map(function (x) { return h('li', null, x); })) : h('p', { class: 'empty' }, 'Nothing to flag.')]) : null;
-
-    /* projects */
-    var cardOrder = order.slice(), rowOf = {};
-    projects.forEach(function (p) { if (cardOrder.indexOf(p.area) < 0) { cardOrder.push(p.area); rowOf[p.area] = p; } });
-    var cards = h('div', { class: 'areas d-only' }, cardOrder.map(function (id) {
-      var a = area(id, rowOf[id]), mine = projects.filter(function (p) { return p.area === id; });
-      return h('div', { class: 'acard ' + acls(a), 'data-area': id }, [
-        h('h3', { class: 'areahead' }, a.name)].concat(mine.length ? mine.map(function (p) {
-          var pct = pctOf(p.pct), bar = h('i');
-          bar.style.width = (pct || 0) + '%';
-          return h('div', { class: 'proj' }, [
-            h('div', { class: 'nm' }, [p.name, ' ', h('span', null, pct === null ? '—' : pct + '%')]),
-            h('div', { class: 'bar', role: 'presentation' }, bar),
-            h('div', { class: 'nx' }, rich(p.note))]);
-        }) : [h('div', { class: 'proj nx' }, 'Nothing tracked yet')]));
-    }));
-    cards.style.setProperty('--cols', String(Math.max(1, cardOrder.length)));
-    var projList = h('div', { class: 'list p-only' }, projects.map(function (p) {
-      var pct = pctOf(p.pct);
-      return h('div', { class: 'it', 'data-area': p.area }, [
-        h('div', { class: 'tm' }, pct === null ? '—' : pct + '%'),
-        h('div', null, [h('b', null, p.name), ' · '].concat(rich(p.note), [h('div', { class: 'sm' }, area(p.area, p).name)]))]);
-    }));
-    var secProj = h('section', { class: 'projects slab s-proj', id: 'sec-projects', 'aria-labelledby': 'h-projects' }, [
-      h('h2', { class: 'sec-h', id: 'h-projects' }, ['Projects', sampleTag('projects'), h('span', { class: 'n d-only' }, 'One column per area')]),
-      projects.length || order.length ? cards : null,
-      projects.length ? projList : h('p', { class: 'muted' }, 'No projects tracked yet.')]);
-
-    /* AI writer summary band (only when the writer ran) */
-    var sum = d.summary && typeof d.summary.text === 'string' && d.summary.text ? h('section', { class: 'summary', 'aria-label': 'Summary' }, [
-      h('p', { class: 'stext' }, d.summary.text),
-      h('p', { class: 'sby' }, ['Written by ', d.summary.by || 'the AI writer', d.summary.at ? ' · ' + fmtWhen(d.summary.at) : ''])]) : null;
-
-    var foot = h('div', { class: 'foot' }, [h('span', null, d.sources || ''), h('span', null, 'Nothing was sent. Drafts wait for you.')]);
-
-    var sheet = h('div', { class: 'sheet brief' }, [mast, phTop, sum, chips, h('div', { class: 'grid2' }, [secToday, secReply]), callout, secProj, foot]);
-    var tabs = h('nav', { class: 'tabs p-only', 'aria-label': 'Sections' }, [
-      h('button', { type: 'button', 'data-target': 'sec-today', 'aria-current': 'true' }, 'Today'),
-      h('button', { type: 'button', 'data-target': 'sec-replies' }, 'Replies'),
-      h('button', { type: 'button', 'data-target': 'sec-projects' }, 'Projects')]);
-
+    var panel = panelEl();
+    var pane = h('div', { class: 'pane', id: 'bv-pane', role: 'tabpanel', 'aria-labelledby': 'tab-' + U.tab, inert: phone && panel ? true : null },
+      [TFN[U.tab](), foot()]);
+    var root = h('div', { class: 'bv brief' + (phone && panel ? ' sheet-open' : '') }, [banner, tabs,
+      h('div', { class: 'body' + (panel ? ' open' : '') }, [pane, panel])]);
+    if (phone && panel) tabs.setAttribute('inert', '');
     main.textContent = '';
-    add(main, [banner, sheet, tabs]);
+    add(main, root);
+    document.querySelector('header.top').toggleAttribute('inert', !!(phone && panel));
+    document.documentElement.classList.toggle('bv-lock', !!(phone && panel));
+    if (!phone || !panel) window.scrollTo(window.scrollX, sy);
+    var pin = main.querySelector('.panel-in'); if (pin && ps) pin.scrollTop = ps;
+    syncTabsH();
+    renderLayer();
     syncBg();
+    if (focusSel) { var f = document.querySelector(focusSel); if (f) f.focus({ preventScroll: true }); }
   }
+  function syncTabsH() {
+    var tb = main.querySelector('.tabbar');
+    if (tb && !isPhone()) document.documentElement.style.setProperty('--tabs-h', tb.offsetHeight + 'px');
+  }
+  onMedia('(max-width: 700px)', function () { if (ui.view === 'brief' && B) { U.pop = null; renderBrief(); } });
+  window.addEventListener('resize', function () { if (ui.view === 'brief' && U.pop) placePop(); syncTabsH(); });
+  window.addEventListener('scroll', function () { if (ui.view === 'brief' && U.pop) placePop(); }, { passive: true, capture: true });
+
+  /* ----- actions ----- */
+  function mutate(fn) { var p = queue.then(fn); queue = p.then(function () { }, function () { }); return p; }
+  function failToast(e) { showToast('Didn’t work.', e && e.message ? e.message : 'Something went wrong.', null, true); renderLayer(); }
+  function refetch() {
+    return api('GET', 'api/brief').then(function (d) { setBrief(d); });
+  }
+  function rowLabel(id) { var r = replyById(id); return r ? r.who : ''; }
+  function markDone(id) {
+    var r = replyById(id);
+    if (!r) return;
+    var after = function (doneList) {
+      B.replies = replies().filter(function (x) { return x !== r; });
+      if (doneList) B.done = doneList; else B.done = [{ id: r.id, who: r.who, summary: gistSum(r), done_at: '' }].concat(B.done || []);
+      if (U.open && U.open.id === id) U.open = null;
+      U.pop = null;
+      showToast('Marked done.', r.who + ' · comes back if they write again', { kind: 'done', id: id, row: r });
+      renderBrief('[data-undo]');
+    };
+    if (B.sample) { after(null); return; }
+    mutate(function () { return api('POST', 'api/done', { row_id: id, done: true, key: r.key }); })
+      .then(function (res) { after(res && Array.isArray(res.done) ? res.done : null); }, function (e) { renderBrief(); failToast(e); if (/changed/.test(e.message)) refetch().then(function () { renderBrief(); }); });
+  }
+  function unDone(id, focusSel) {
+    if (B.sample) {
+      var row = U.toast && U.toast.undo && U.toast.undo.id === id ? U.toast.undo.row : null;
+      B.done = (B.done || []).filter(function (d) { return d.id !== id; });
+      if (row) B.replies = replies().concat([row]).sort(byId);
+      U.toast = null; renderBrief(focusSel); return;
+    }
+    mutate(function () { return api('POST', 'api/done', { row_id: id, done: false }); })
+      .then(function () { return refetch(); })
+      .then(function () { U.toast = null; renderBrief(focusSel); }, failToast);
+  }
+  function byId(a, b) { return (parseInt(String(a.id).replace(/\D/g, ''), 10) || 0) - (parseInt(String(b.id).replace(/\D/g, ''), 10) || 0); }
+  function suppress(id, scope) {
+    var r = replyById(id);
+    if (!r) return;
+    U.pop = null;
+    var before = replies().slice();
+    var after = function (res) {
+      var still = replies().map(function (x) { return x.id; });
+      var gone = before.filter(function (x) { return still.indexOf(x.id) < 0; });
+      if (U.open && U.open.kind === 'reply' && still.indexOf(U.open.id) < 0) U.open = null;
+      var rule = res && res.rule, label = rule && rule.label;
+      showToast('Hidden.', scope === 'thread' ? r.who + ' · just this one' : 'Won’t ask again for ' + (label || r.who),
+        { kind: 'suppress', rule: rule && rule.id, rows: gone });
+      renderBrief('[data-undo]');
+    };
+    if (B.sample) {
+      B.replies = replies().filter(function (x) { return x !== r; }); B.hidden = (parseInt(B.hidden, 10) || 0) + 1;
+      after(null); return;
+    }
+    mutate(function () { return api('POST', 'api/suppress', { row_id: id, scope: scope, key: r.key }); })
+      .then(function (res) { return refetch().then(function () { after(res); }); },
+        function (e) { renderBrief(); failToast(e); });
+  }
+  function unSuppress(u) {
+    var back = function () {
+      var have = replies().map(function (x) { return x.id; });
+      var rows = (u.rows || []).filter(function (x) { return have.indexOf(x.id) < 0; });
+      B.replies = replies().concat(rows).sort(byId);
+      B.hidden = Math.max(0, (parseInt(B.hidden, 10) || 0) - rows.length);
+      U.toast = null;
+      renderBrief(rows.length ? '[data-open="reply:' + cssq(rows[0].id) + '"]' : null);
+    };
+    if (B.sample || !u.rule) { back(); return; }
+    mutate(function () { return api('DELETE', 'api/suppress/' + encodeURIComponent(u.rule)); }).then(back, failToast);
+  }
+  function dismiss(P) {
+    var key = P.kind === 'event' ? 'ev:' + ((eventById(P.id) || {}).key || P.id) : P.kind === 'heads' ? 'hu:' + P.id
+      : 'ar:' + P.id + ':' + hashOf(((B.summary || {}).areas || {})[P.id]);
+    var what = P.kind === 'event' ? (eventById(P.id) || {}).title : P.kind === 'heads' ? 'Heads up' : areaOf(P.id).name + ' summary';
+    setDismissed(key, true);
+    if (U.open && U.open.kind === 'event' && P.kind === 'event' && U.open.id === P.id) U.open = null;
+    U.pop = null;
+    showToast('Dismissed.', (what || '') + ' · until tomorrow', { kind: 'dismiss', key: key });
+    renderBrief('[data-undo]');
+  }
+  function copyDraft(b) {
+    var ta = main.querySelector('#bv-draft');
+    if (!ta) return;
+    var s = ta.value;
+    function said(t) { b.textContent = t; setTimeout(function () { b.textContent = 'Copy'; }, 2000); }
+    function selectIt() {
+      var ok = false;
+      try { ta.focus(); ta.select(); ok = document.execCommand && document.execCommand('copy'); } catch (e) { ok = false; }
+      said(ok ? 'Copied' : 'Selected: press Ctrl+C');
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(function () { said('Copied'); }, selectIt);
+    else selectIt();
+  }
+  function openItem(spec) {
+    var i = spec.indexOf(':'), kind = spec.slice(0, i), id = spec.slice(i + 1);
+    U.open = { kind: kind, id: id };
+    U.pop = null;
+    renderBrief('.panel [data-close]');
+  }
+  function closePanel() {
+    var o = U.open;
+    U.open = null;
+    renderBrief(o ? '[data-open="' + cssq(o.kind + ':' + o.id) + '"]' : null);
+  }
+  function setTab(t, focus) {
+    if (LIVE_TABS.indexOf(t) < 0) return;
+    U.tab = t; U.pop = null; save(KEY_TAB, t);
+    if (t !== 'areas') U.area = null;
+    renderBrief(focus ? '[data-tab="' + t + '"]' : null);
+    if (!isPhone()) { var tb = main.querySelector('.tabbar'); if (tb && tb.getBoundingClientRect().top < 0) window.scrollTo(0, 0); }
+    else window.scrollTo(0, 0);
+  }
+  function inBrief(t) { return ui.view === 'brief' && B && t && (main.contains(t) || layer.contains(t)); }
+  document.addEventListener('click', function (e) {
+    if (ui.view !== 'brief' || !B) return;
+    var t = e.target.closest ? e.target.closest('button') : null;
+    /* a click outside the open menu closes it */
+    if (U.pop && !e.target.closest('[data-pop]') && !(t && t.dataset.np && inBrief(t))) {
+      U.pop = null; renderLayer();
+      main.querySelectorAll('[data-np][aria-expanded="true"]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    }
+    if (!t || t.disabled || !inBrief(t)) return;
+    var d = t.dataset, P = U.pop;
+    if (d.tab) setTab(d.tab, true);
+    else if (d.open) openItem(d.open);
+    else if (d.close) closePanel();
+    else if (d.ck) {
+      var rowEl = t.closest('.row');
+      t.setAttribute('aria-pressed', 'true'); if (rowEl) rowEl.classList.add('gone');
+      setTimeout(function () { markDone(d.ck); }, 380);
+    }
+    else if (d.unck) unDone(d.unck, '[data-donefold]');
+    else if (d.markdone) markDone(d.markdone);
+    else if (d.donefold) { U.doneOpen = !U.doneOpen; renderBrief('[data-donefold]'); }
+    else if (d.more) { U.more = !U.more; renderBrief('[data-more]'); }
+    else if (d.goarea) { U.area = d.goarea; setTab('areas'); var ah = main.querySelector('.tabbar [data-tab="areas"]'); if (ah) ah.focus({ preventScroll: true }); }
+    else if (d.allareas) { U.area = null; renderBrief('.tabbar [data-tab="areas"]'); }
+    else if (d.manage) { ui.step = 3; location.hash = 'setup'; }
+    else if (d.copy) copyDraft(t);
+    else if (d.np) {
+      var k = d.np.indexOf(':');
+      U.pop = P && P.anc === d.anc ? null : { kind: d.np.slice(0, k), id: d.np.slice(k + 1), anc: d.anc, sub: false };
+      renderLayer();
+      var fb = U.pop ? layer.querySelector('[data-pop] button') : null;
+      if (fb) fb.focus(); else t.setAttribute('aria-expanded', 'false');
+      main.querySelectorAll('[data-np]').forEach(function (b) { b.setAttribute('aria-expanded', String(!!(U.pop && b.dataset.anc === U.pop.anc))); });
+    }
+    else if (d.pnnr && P) { P.sub = !P.sub; renderLayer(); var nb = layer.querySelector(P.sub ? '[data-sup]' : '[data-pnnr]'); if (nb) nb.focus(); }
+    else if (d.sup && P) suppress(P.id, d.sup);
+    else if (d.dismiss && P) dismiss(P);
+    else if (d.undo) {
+      var u = U.toast && U.toast.undo;
+      if (!u) return;
+      if (u.kind === 'done') unDone(u.id, '[data-open="reply:' + cssq(u.id) + '"]');
+      else if (u.kind === 'suppress') unSuppress(u);
+      else if (u.kind === 'dismiss') { setDismissed(u.key, false); U.toast = null; renderBrief(); }
+    }
+    else if (d.toastx) { U.toast = null; renderLayer(); }
+  });
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (ui.view === 'brief' && t.dataset && t.dataset.draft) U.drafts[t.dataset.draft] = t.value;
+  });
+  document.addEventListener('keydown', function (e) {
+    if (ui.view !== 'brief' || !B) return;
+    if (e.key === 'Escape') {
+      if (U.pop) { var anc = U.pop.anc; U.pop = null; renderLayer(); var a = main.querySelector('[data-anc="' + cssq(anc) + '"]'); if (a) { a.setAttribute('aria-expanded', 'false'); a.focus(); } e.preventDefault(); }
+      else if (U.open && lookPanel.hidden) { closePanel(); e.preventDefault(); }
+      return;
+    }
+    var t = e.target;
+    if (t.dataset && t.dataset.tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
+      var i = LIVE_TABS.indexOf(t.dataset.tab), n = LIVE_TABS.length;
+      i = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
+      setTab(LIVE_TABS[i], true); e.preventDefault();
+    }
+  });
 
   /* ---------- state ---------- */
   var ui = {
@@ -485,10 +903,13 @@
     var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : 'brief';
     var changed = v !== ui.view;
     ui.view = v;
-    setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief';
+    setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
+    if (v !== 'brief') {   /* leaving the brief: no menu, toast, sheet lock or inert header */
+      clearLayer(); document.documentElement.classList.remove('bv-lock'); document.querySelector('header.top').removeAttribute('inert');
+    }
     if (v !== 'eval') stopEvalPoll();
     refreshErr.textContent = '';
-    if (!changed && main.querySelector('.sheet')) return;
+    if (!changed && main.querySelector('.sheet, .bv')) return;
     window.scrollTo(0, 0);
     if (v === 'setup') { ui.confirm = null; loadState().then(function () { return showSetup(); }, function () { return showSetup(); }); }
     else if (v === 'eval') showEval();
