@@ -711,6 +711,8 @@ def _complete(out, ids, ask=None):
 # --- post-check: drafts that state a decision or payment as done -------------
 _DONE = r"(?:approved|paid|sent|signed|booked|agreed|decided|released|transferred|wired|authori[sz]ed)"
 _ADV = r"(?:(?:already|just|now|also|finally|fully|officially|all|been)\s+)*"
+# the same verbs as an adjective before a noun: "the signed contract", "the paid invoice"
+_DONE_ADJ = r"(?:approved|paid|signed|countersigned|booked|agreed|released|transferred|wired|authori[sz]ed)"
 # acting on money or a commitment, as a verb or a noun: "releasing", "pay", "the payment", "the booking"
 _ACT = (r"(?:releas\w*|pay\b|paying|payments?\b|pay-?out|transfer\w*|wir(?:e|ed|es|ing)\b|disburs\w*|sign\b|"
         r"signing|book\b|booking|purchas\w*|order\b|ordering|the\s+order\b|"
@@ -742,6 +744,24 @@ _DECISION = (
     # "approved on my side", "agreed from our end", "signed off by me"
     re.compile(_DONE + r"(?:\s+off)?\s+(?:on|from)\s+(?:my|our)\s+(?:side|end)\b"),
     re.compile(_DONE + r"(?:\s+off)?\s+by\s+(?:me|us)\b"),
+    # taking the sender's claim as done: "to confirm the signed contract", "thanks for the paid invoice",
+    # "I note your approved budget", "I've received the signed copy". A request for the document ("please
+    # send me the signed copy", "could you confirm the signed contract") is not a claim: only confirming,
+    # noting, acknowledging, receiving, having or thanking counts, and not after "please" or "you"
+    re.compile(r"^(?:(?!\b(?:please|kindly)\b|(?<!thank )\byou\b).)*?"
+               r"\b(?:confirm(?:s|ed|ing)?|not(?:e|es|ed|ing)|acknowledg\w*|received|(?:have|has|had|'ve)\s+got|"
+               r"thanks\s+for|thank\s+you\s+for)\s+"
+               r"(?:(?:that|receipt\s+of|sending|forwarding|sharing|returning|me|us|over|through|back)\s+){0,3}"
+               r"(?:the|your|this|that|our)\s+" + _ADV + _DONE_ADJ + r"\s+\w"),
+    re.compile(r"\b(?:i|we)(?:'ve| have)\s+(?:attached|enclosed|included)\s+(?:the|our|my)\s+" + _ADV + _DONE_ADJ
+               + r"\s+\w"),
+    # the same as a subject: "the signed contract is attached", "the approved budget has gone to finance"
+    re.compile(r"^\W*(?:the|your|our)\s+" + _ADV + _DONE_ADJ + r"\s+(?:\w+\s+){1,2}?(?:is|are|was|were|has|have)\b"),
+    re.compile(r"^\W*(?:the|your|our)\s+" + _ADV + _DONE_ADJ + r"\s+\w+'s\b"),
+    # confirming or noting a payment as finished: "I can confirm the transfer has been processed",
+    # "noting that the invoice is settled" (the plain "has been paid" is caught above)
+    re.compile(r"\b(?:confirm(?:s|ed|ing)?|not(?:e|es|ed|ing)|acknowledg\w*)\b.*(?:\b(?:is|are|was|were|has|have|had)"
+               r"|'s|'re)\s+" + _ADV + r"(?:processed|settled|cleared|completed|finali[sz]ed|executed|countersigned)\b"),
 )
 # A clause is cut at these words: what follows is a condition, not a statement ("once it's approved").
 _CONDITION = re.compile(r"\b(?:if|once|when|whenever|after|as soon as|until|unless|before|whether|in case|"
@@ -751,11 +771,15 @@ _NEGATION = re.compile(r"\b(?:not|never|nothing|nobody|no one|yet to)\b|n't\b")
 
 def states_decision(text):
     """True when a draft says that something has been approved, paid, released, sent, signed, booked,
-    agreed or decided, as a fact or in the first person. Text in [brackets], questions and conditions
-    ("Once you approve, I'll book it.") don't count."""
+    agreed or decided, as a fact or in the first person, or takes a sender's claim as done ("I note the
+    contract has been signed", "to confirm the signed contract"). Text in [brackets], questions, conditions
+    ("Once you approve, I'll book it.") and requests for a signed or paid document ("Please send me the signed
+    copy") don't count. Plain text, so it also reads an incoming message (its "Sent from my phone" and
+    "Sent: <date>" lines are skipped)."""
     if not isinstance(text, str):
         return False
     text = re.sub(r"\[[^\]]*\]", " ", text.replace("’", "'").lower())
+    text = re.sub(r"(?m)^[\s>]*sent(?:\s*:|\s+from\s+(?!(?:my|our)\s+(?:side|end)\b)).*$", " ", text)
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
         if not sentence.strip() or sentence.rstrip().endswith("?"):
             continue

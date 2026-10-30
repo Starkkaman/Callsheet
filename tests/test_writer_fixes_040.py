@@ -125,6 +125,43 @@ class StatesDecisionTest(unittest.TestCase):
                   "I'll [approve / hold] the payment by [day].", "Let me check before anything is released."):
             self.assertFalse(writer.states_decision(t), t)
 
+    def test_sender_claim_taken_as_done(self):
+        # 0.4.1 (decision 3a): the Gemma drafts that confirmed a sender's claim, verbatim first
+        for t in ("I will [action] to confirm the signed contract.", "I also note the contract has been signed.",
+                  "Thanks for confirming the invoice is paid.", "I note the invoice has been paid.",
+                  "I can confirm the payment has been approved.", "Confirming the contracts have been signed.",
+                  "Thanks for the signed contract.", "Thank you for sending over the signed copy.",
+                  "I have received the signed contract.", "I've got the signed copy.",
+                  "Confirming receipt of the paid invoice.", "I note your approved budget.",
+                  "I've attached the signed contract.", "The signed contract is in the shared folder.",
+                  "The approved budget has gone to finance.", "I can confirm the transfer has been processed.",
+                  "Noting that the invoice is settled."):
+            self.assertTrue(writer.states_decision(t), t)
+
+    def test_requests_and_questions_about_a_signed_document(self):
+        # asking for a signed or paid document is not a claim that it exists; neither is waiting for one
+        for t in ("Once the contract is signed, I'll file it.", "Is the invoice paid?",
+                  "[confirm whether it's been paid]", "Could you send the signed contract when it's ready?",
+                  "I'll check whether the payment was approved.", "Let me know if the contract has been signed.",
+                  "I haven't approved it yet.", "Please send me the signed copy.", "Send me the signed contract.",
+                  "Please confirm the signed contract.", "Can you confirm receipt of the signed contract, please.",
+                  "I look forward to receiving the signed contract.", "I'm waiting for the signed copy.",
+                  "I'll check the signed contract once it arrives.", "Once I have the signed contract I'll file it.",
+                  "You can send the signed copy to [address].", "I need the signed contract by [day].",
+                  "I'll confirm when the payment has been processed.", "I can't confirm the signed contract yet.",
+                  "The signed contract should go to [address].", "Could you confirm the invoice is paid?",
+                  "Send over the signed contract and I'll confirm the date.", "Thanks for the update on the contract.",
+                  "I'll note the dates for the call.", "I have received the revised figures for the kitchen quote."):
+            self.assertFalse(writer.states_decision(t), t)
+
+    def test_mail_signature_lines(self):
+        # an incoming message read as plain text: the phone signature and a quoted header are not claims
+        for t in ("Thanks, see you then.\n\nSent from my iPhone", "> Sent: Fri, 30 Oct 2026 19:55:53 +0000",
+                  "Talk soon.\n> > Sent from my iPhone"):
+            self.assertFalse(writer.states_decision(t), t)
+        for t in ("Sent.", "Signed and sent.", "Sent from my side.", "Paid.\n\nSent from my iPhone"):
+            self.assertTrue(writer.states_decision(t), t)
+
 
 class VerbatimGuardTest(unittest.TestCase):
     def setUp(self):
