@@ -4,6 +4,7 @@ Everything here is a pure function of its inputs so it can be tested directly.
 """
 import datetime as dt
 import email.utils
+import hashlib
 import html
 import re
 import urllib.parse
@@ -15,6 +16,11 @@ DEADLINE = re.compile(r"\b(?:deadline|due|by\s+(?:mon(?:day)?|tues?(?:day)?|wed(
                       re.I)
 AUTOMATED_SENDER = re.compile(r"(?:^|[._+-])(?:no-?reply|do-?not-?reply|notifications?|mailer-daemon|"
                               r"postmaster|alerts?|bounces?)(?:$|[._+-])", re.I)
+# Gmail's category tabs: never "needs a reply" (even when the thread is in the inbox), unless from a VIP
+NO_REPLY_CATEGORIES = ("CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS", "CATEGORY_SOCIAL")
+SLACK_WAIT_H = 3          # "Waiting Nh" from 3 hours on
+SLACK_DM_MAX_S = 14 * 86400
+MAX_TOP = 5
 SECTIONS_SAMPLE = {"schedule": "sample", "replies": "sample", "headsup": "sample", "projects": "sample"}
 SECTIONS_LIVE = {"schedule": "live", "replies": "live", "headsup": "live", "projects": "sample"}
 
@@ -39,6 +45,55 @@ def _clip(text, n):
 
 def hhmm(d):
     return f"{d:%H:%M}"
+
+
+def clock(value, fmt="24h"):
+    """A display time from a datetime/time or an "HH:MM" string (also "24:00", the end of the day).
+    fmt "24h": "14:30". fmt "12h": "9:30 am", "2:30 pm", whole hours as "11 am"; noon "12 pm", midnight
+    "12 am"."""
+    if isinstance(value, str):
+        try:
+            h, m = (int(x) for x in value.split(":"))
+        except ValueError:
+            return value
+    else:
+        h, m = value.hour, value.minute
+    if fmt != "12h":
+        return f"{h:02d}:{m:02d}"
+    h %= 24
+    suffix = "am" if h < 12 else "pm"
+    h12 = h % 12 or 12
+    return f"{h12} {suffix}" if m == 0 else f"{h12}:{m:02d} {suffix}"
+
+
+def time_format(settings):
+    return "24h" if (settings or {}).get("time_format") == "24h" else "12h"
+
+
+def flag_text(flags, fmt):
+    """The schedule flag line from structured flags (cached as machine values, worded per time format)."""
+    out = []
+    for f in flags:
+        if f.get("kind") == "not_accepted":
+            out.append("Not accepted yet")
+        elif f.get("kind") == "overlap":
+            out.append(f"Overlaps {clock(f['at'], fmt)} {f['title']}")
+    return " · ".join(out)
+
+
+def render_schedule(rows, fmt):
+    """Display fields of cached schedule rows in the owner's time format: time, end and the flag text come
+    from the machine fields start_hhmm, end_hhmm and flags. Rows from older caches are left as they are."""
+    out = []
+    for r in rows:
+        r = dict(r)
+        if r.get("start_hhmm"):
+            r["time"] = clock(r["start_hhmm"], fmt)
+            r["end"] = clock(r["end_hhmm"], fmt)
+            if r.get("flags"):
+                r["flag"] = {"text": flag_text(r["flags"], fmt)}
+        out.append(r)
+    return out
 
 
 # --- call times --------------------------------------------------------------
@@ -124,8 +179,10 @@ def _note(ev):
     return None
 
 
-def build_schedule(items, tz, day):
-    """items: [(event, area_id)] from events.list for `day`. Returns (rows, all_day_titles)."""
+def build_schedule(items, tz, day, fmt="24h"):
+    """items: [(event, area_id)] from events.list for `day`. Returns (rows, all_day_titles). Rows carry the
+    machine fields start_hhmm / end_hhmm ("HH:MM", end "24:00" at midnight) and flags ([{kind: not_accepted}
+    | {kind: overlap, at: "HH:MM", title}]), and the display fields time, end and flag.text in fmt."""
     day_start, day_end = day_bounds(day, tz)
     timed, all_day, seen = [], [], set()
     for ev, area in items:
@@ -149,29 +206,33 @@ def build_schedule(items, tz, day):
             end = start
         if end <= day_start or start >= day_end:
             continue
-        timed.append({"start": start, "end": end, "title": title, "area": area, "ev": ev})
+        timed.append({"start": start, "end": end, "title": title, "area": area, "ev": ev, "key": key})
     timed.sort(key=lambda e: (e["start"], e["end"]))
 
     first = next((e for e in timed if _others(e["ev"])), timed[0] if timed else None)
     rows = []
     for e in timed:
         shown = max(e["start"], day_start)
-        row = {"time": hhmm(shown), "end": hhmm(e["end"]) if e["end"] < day_end else "24:00",
+        start_s, end_s = hhmm(shown), hhmm(e["end"]) if e["end"] < day_end else "24:00"
+        row = {"time": clock(start_s, fmt), "end": clock(end_s, fmt), "start_hhmm": start_s, "end_hhmm": end_s,
                "title": e["title"], "short": _clip(e["title"], 24), "area": e["area"]}
         flags = []
         if _self_status(e["ev"]) == "needsAction":
-            flags.append("Not accepted yet")
+            flags.append({"kind": "not_accepted"})
         clash = next((o for o in timed if o is not e and e["start"] < o["end"] and o["start"] < e["end"]), None)
         if clash is not None:
             row["clash"] = True
-            flags.append(f"Overlaps {hhmm(max(clash['start'], day_start))} {_clip(clash['title'], 40)}")
+            flags.append({"kind": "overlap", "at": hhmm(max(clash["start"], day_start)),
+                          "title": _clip(clash["title"], 40)})
         if flags:
-            row["flag"] = {"text": " · ".join(flags)}
+            row["flags"] = flags
+            row["flag"] = {"text": flag_text(flags, fmt)}
         note = _note(e["ev"])
         if note:
             row["note"] = note
         if e is first:
             row["first"] = True
+        row["_key"] = f"cal:{e['key'][0]}:{e['key'][1]}"
         rows.append(row)
     return rows, all_day
 
@@ -230,6 +291,8 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     vip = addr in vips
     if not vip and is_automated(hdr, addr):
         return None
+    if not vip and any(lb in NO_REPLY_CATEGORIES for lb in last.get("labelIds") or []):
+        return None
     in_to = _addressed(hdr, ("to",), me)
     in_to_cc = in_to or _addressed(hdr, ("cc",), me)
     subject = " ".join(hdr.get("subject", "").split())
@@ -250,9 +313,16 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     text = _clip(subject, 120) if subject else '"' + _clip(snippet, 118) + '"'
     who = name.strip() or vips.get(addr) or addr or "Unknown sender"
     link = gmail_link(account_email, thread.get("id", ""), last.get("id", ""))
-    return {"who": _clip(who, 60), "area": area, "source": "Mail", "text": text, "short": _clip(text, 40),
-            "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
-            "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s}
+    domain = addr.rsplit("@", 1)[1] if "@" in addr else ""
+    return {"who": _clip(who, 60), "area": area, "source": "Mail", "via": "mail", "text": text,
+            "short": _clip(text, 40), "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
+            "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s,
+            "_sup": {"source": "mail", "thread": str(thread.get("id", "")).lower(), "sender": addr,
+                     "domain": domain or None,
+                     "labels": {"thread": "Mail · " + _clip(subject or snippet or "this thread", 60),
+                                "sender": (f"{name.strip()} <{addr}>" if name.strip() else addr),
+                                "domain": domain}},
+            "_key": "mail:" + str(thread.get("id", "")) + ":" + str(last.get("id", ""))}
 
 
 def sort_replies(rows):
@@ -260,6 +330,230 @@ def sort_replies(rows):
     for r in rows:
         r.pop("_age_s", None)
     return rows
+
+
+def row_key(source):
+    """A stable, opaque row key (the same thread/event and last message give the same key all day)."""
+    return hashlib.sha256(source.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+# --- doesn't need a reply ------------------------------------------------------
+def suppressed(sup, vip, rules_list):
+    """True when a "Doesn't need a reply" rule hides this row. sup: the row's {source, thread, sender, domain}.
+    A thread rule always applies; VIPs win over sender and domain rules."""
+    for r in rules_list or []:
+        if r.get("source") != sup.get("source"):
+            continue
+        kind, value = r.get("kind"), r.get("value")
+        if kind == "thread" and value and value == sup.get("thread"):
+            return True
+        if vip:
+            continue
+        if kind == "sender" and value and value == sup.get("sender"):
+            return True
+        if kind == "domain" and value and sup.get("domain") and (sup["domain"] == value
+                                                                 or sup["domain"].endswith("." + value)):
+            return True
+    return False
+
+
+# --- Slack ---------------------------------------------------------------------
+_SLACK_LINK = re.compile(r"<([^<>|]+)(?:\|([^<>]*))?>")
+_BROADCAST = re.compile(r"<!(channel|here|everyone)(?:\|[^>]*)?>")
+
+
+def slack_text(text, users):
+    """Slack markup as plain text: <@U1> -> @Name, <#C1|general> -> #general, <!here> -> @here, links -> their
+    label (or the address), &amp; &lt; &gt; decoded."""
+    def sub(m):
+        target, label = m.group(1), m.group(2)
+        if target.startswith("@"):
+            u = users.get(target[1:]) or {}
+            return "@" + (label or u.get("name") or target[1:])
+        if target.startswith("#"):
+            return "#" + (label or target[1:])
+        if target.startswith("!"):
+            word = target[1:].split("^")[0]
+            return "@" + (label.lstrip("@") if label else word)
+        return label or target
+    out = _SLACK_LINK.sub(sub, text or "")
+    return out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+def slack_link(domain, channel, ts, root=None):
+    base = f"https://{domain or 'app'}.slack.com/archives/{channel}/p{str(ts).replace('.', '')}"
+    if root and root != ts:
+        base += "?" + urllib.parse.urlencode({"thread_ts": root, "cid": channel})
+    return base
+
+
+def _f(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _real(m):
+    if not isinstance(m, dict) or m.get("bot_id") or not m.get("user") or not m.get("ts"):
+        return False
+    return m.get("subtype") in (None, "thread_broadcast", "file_share", "me_message")
+
+
+def _waiting(age_s):
+    h = int(age_s // 3600)
+    if h < SLACK_WAIT_H:
+        return None
+    return f"Waiting {h}h" if h < 48 else f"Waiting {h // 24} days"
+
+
+def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
+    """Needs-a-reply rows and Heads up lines from one workspace's read (slack.read_workspace). Pure.
+    vips: {lowercase email: name}. Returns (rows, heads_up)."""
+    me, users, convs = data["me"], data.get("users") or {}, data.get("convs") or {}
+    domain, tz = data.get("domain") or ws.get("domain") or "", tz or dt.timezone.utc
+    vip_names = {n.strip().lower(): n for n in vips.values() if n}
+    cands = {}
+
+    def who(uid):
+        return (users.get(uid) or {}).get("name") or uid
+
+    def is_vip(uid):
+        u = users.get(uid) or {}
+        if u.get("email"):
+            return u["email"].lower() in vips
+        return any(n and n.strip().lower() in vip_names for n in (u.get("name"), u.get("real_name")))
+
+    def add(key, ch, msg, ctx, root=None, mentioned=False, in_thread=False):
+        c = cands.get(key)
+        if c is None or _f(msg["ts"]) >= _f(c["msg"]["ts"]):
+            cands[key] = {"ch": ch, "msg": msg, "ctx": ctx, "root": root,
+                          "mentioned": mentioned or bool(c and c["mentioned"]),
+                          "in_thread": in_thread or bool(c and c["in_thread"])}
+        else:
+            c["mentioned"] |= mentioned
+            c["in_thread"] |= in_thread
+
+    for ch, msgs in (data.get("dm") or {}).items():
+        real = [m for m in msgs if _real(m) and not (m.get("thread_ts") and m.get("thread_ts") != m["ts"])]
+        if real and real[-1]["user"] != me and now_ts - _f(real[-1]["ts"]) <= SLACK_DM_MAX_S:
+            add((ch,), ch, real[-1], real[-3:])
+    threads = data.get("threads") or {}
+    for (ch, root), msgs in threads.items():
+        real = [m for m in msgs if _real(m)]
+        if not real or ch not in convs:
+            continue
+        mine = [_f(m["ts"]) for m in real if m["user"] == me]
+        my_last = max(mine, default=0.0)
+        after = [m for m in real if m["user"] != me and _f(m["ts"]) > my_last]
+        if not after:
+            continue
+        is_thread = len(msgs) > 1 or bool(real[0].get("thread_ts"))
+        if not is_thread and _f((data.get("owner_last") or {}).get(ch)) > _f(after[-1]["ts"]):
+            continue  # a plain mention answered later in the channel
+        unanswered_mention = any(mentions_me(m, me) for m in after)
+        if not (mine and is_thread) and not unanswered_mention:
+            continue
+        ctx = real[-3:]
+        add((ch, root), ch, after[-1], ctx, root if is_thread else None, mentioned=unanswered_mention,
+            in_thread=bool(mine) and is_thread)
+    owner_last = data.get("owner_last") or {}
+    pending = {(p[0], p[1]) for p in data.get("mentions") or []}  # unanswered mentions from earlier reads
+    for ch, msgs in (data.get("chan") or {}).items():
+        for i, m in enumerate(msgs):
+            if not _real(m) or m["user"] == me or not mentions_me(m, me):
+                continue
+            if _f(m["ts"]) < data.get("window_start", 0) and (ch, m["ts"]) not in pending:
+                continue
+            root = m.get("thread_ts") or m["ts"]
+            if (ch, root) in threads or _f(owner_last.get(ch)) > _f(m["ts"]):
+                continue
+            add((ch, root), ch, m, [x for x in msgs[: i + 1] if _real(x)][-3:], None, mentioned=True)
+
+    rows = []
+    for key, c in cands.items():
+        conv = convs.get(c["ch"]) or {}
+        m, uid = c["msg"], c["msg"]["user"]
+        text = " ".join(slack_text(m.get("text") or "", users).split())
+        age_s = max(0.0, now_ts - _f(m["ts"]))
+        vip = is_vip(uid)
+        reasons = (["VIP"] if vip else []) + (["Mentioned you"] if c["mentioned"] else []) \
+            + (["In your thread"] if c["in_thread"] else [])
+        if "?" in text:
+            reasons.append("Direct question")
+        if DEADLINE.search(text):
+            reasons.append("Mentions a deadline")
+        wait = _waiting(age_s)
+        if wait:
+            reasons.append(wait)
+        if not reasons:
+            continue
+        kind = conv.get("kind")
+        source = "Slack · DM" if kind == "dm" else "Slack · group DM" if kind == "group" else \
+            "Slack · #" + (conv.get("name") or c["ch"])
+        quote = '"' + _clip(text or "(no text)", 118) + '"'
+        root = c["root"]
+        thread_value = f"{c['ch']}:{root or m['ts']}".lower()
+        ctx = [{"from": who(x["user"]),
+                "date": f"{dt.datetime.fromtimestamp(_f(x['ts']), tz):%a %d %b} "
+                        + clock(dt.datetime.fromtimestamp(_f(x["ts"]), tz), fmt),
+                "text": slack_text(x.get("text") or "", users)} for x in c["ctx"]]
+        rows.append({
+            "who": _clip(who(uid), 60), "area": area, "source": source, "via": "slack", "text": quote,
+            "short": _clip(quote, 40),
+            "age": f"{int(age_s // 86400)}d" if age_s >= 86400 else f"{max(1, int(age_s // 3600))}h",
+            "reasons": reasons, "vip": vip, "action": "Open", "link": slack_link(domain, c["ch"], m["ts"], root),
+            "_age_s": age_s,
+            "_sup": {"source": "slack", "thread": thread_value, "sender": uid.lower(), "domain": None,
+                     "labels": {"thread": source + (" thread" if root else " message"),
+                                "sender": f"{who(uid)} (Slack)"}},
+            "_key": f"slack:{ws.get('team_id', '')}:{c['ch']}:{root or ''}:{m['ts']}",
+            "_messages": ctx})
+    heads = []
+    for ch, msgs in (data.get("chan") or {}).items():
+        conv = convs.get(ch) or {}
+        for m in msgs:
+            if len(heads) >= 5:
+                break
+            if not _real(m) or m["user"] == me or _f(m["ts"]) < data.get("window_start", 0):
+                continue
+            b = _BROADCAST.search(m.get("text") or "")
+            if not b:
+                continue
+            body = " ".join(slack_text(_BROADCAST.sub("", m.get("text") or ""), users).split())
+            where = "#" + conv["name"] if conv.get("kind") in ("channel", "private") else "a group DM"
+            heads.append(_clip(f"@{b.group(1)} in {where}: {body}", 100))
+    return rows, heads
+
+
+def mentions_me(m, me):
+    return isinstance(m.get("text"), str) and f"<@{me}" in m["text"]
+
+
+# --- top of the day ------------------------------------------------------------
+def rules_top(schedule, replies):
+    """Without the writer: up to 5 items from the rules: VIP replies, then clashes (the earlier event), then
+    replies that mention a deadline. [{text, ref, kind}]."""
+    out, seen = [], set()
+
+    def put(text, ref, kind):
+        if ref and ref not in seen and len(out) < MAX_TOP:
+            seen.add(ref)
+            out.append({"text": _clip(text, 200), "ref": ref, "kind": kind})
+    for r in replies:
+        if r.get("vip"):
+            put(f"Reply to {r['who']}: {r['text']}", r.get("id"), "reply")
+    clash_end = ""
+    for e in schedule:
+        start = e.get("start_hhmm") or e["time"]
+        if e.get("clash") and start >= clash_end:  # one item per clash: the earlier event
+            clash_end = e.get("end_hhmm") or e.get("end") or start
+            put(f"Clash at {e['time']}: {e['title']}. {(e.get('flag') or {}).get('text', '')}".strip(),
+                e.get("id"), "event")
+    for r in replies:
+        if "Mentions a deadline" in (r.get("reasons") or []):
+            put(f"Deadline from {r['who']}: {r['text']}", r.get("id"), "reply")
+    return out
 
 
 # --- the brief ---------------------------------------------------------------
@@ -271,30 +565,50 @@ def date_fields(day):
 def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
     """sample: the bundled sample brief. cache: the brief saved by the last sync (or None).
     live: at least one account is connected. now: aware datetime. writer_on: show the AI writer's
-    summary and suggestions from the cache (hidden once the writer is turned off)."""
+    summary and suggestions from the cache (hidden once the writer is turned off). Top of the day: the
+    writer's (its refs still rows) when shown, else the rules' list."""
     if not live:
         brief = dict(sample)
         brief["sample"] = True
         brief["sections"] = dict(SECTIONS_SAMPLE)
         return brief
     tz = tzinfo(settings)
+    fmt = time_format(settings)
     now = now.astimezone(tz)
     nxt, _ = next_call(settings, now)
-    brief = {"sample": False, "sections": dict(SECTIONS_LIVE),
+    brief = {"sample": False, "sections": dict(SECTIONS_LIVE), "time_format": fmt,
              "areas": [{"id": a["id"], "name": a["name"], "colour": a["colour"]} for a in areas],
-             "next_checkin": hhmm(nxt) if nxt else None,
+             "next_checkin": clock(nxt, fmt) if nxt else None,
              "projects": sample.get("projects", [])}
     if cache:
         written = dt.datetime.fromisoformat(cache["written_at"]).astimezone(tz)
         brief.update(date_fields(dt.date.fromisoformat(cache["date"])))
-        brief.update(kind=cache.get("kind") or "Morning brief", written_at=hhmm(written),
-                     schedule=cache.get("schedule", []), replies=cache.get("replies", []),
-                     heads_up=cache.get("heads_up", []), sources=cache.get("sources", ""))
+        sources = cache.get("sources", "")
+        if cache.get("sources_tail"):
+            sources = f"Written {clock(written, fmt)} {cache['sources_tail']}"
+        brief.update(kind=cache.get("kind") or "Morning brief", written_at=clock(written, fmt),
+                     schedule=render_schedule(cache.get("schedule", []), fmt), replies=cache.get("replies", []),
+                     heads_up=cache.get("heads_up", []), sources=sources, hidden=int(cache.get("hidden") or 0))
+        prev = cache.get("previous_at")
+        brief["previous_at"] = clock(dt.datetime.fromisoformat(prev).astimezone(tz), fmt) if prev else None
+        kinds = {r.get("id"): "reply" for r in brief["replies"]}
+        kinds.update({e.get("id"): "event" for e in brief["schedule"]})
+        kinds.pop(None, None)
+        brief["top"] = rules_top(brief["schedule"], brief["replies"])
+        brief["top_by"] = "rules"
         summary = cache.get("summary")
         if writer_on and isinstance(summary, dict) and summary.get("text"):
             at = dt.datetime.fromisoformat(summary["at"]).astimezone(tz) if summary.get("at") else None
             brief["summary"] = {"text": summary["text"], "by": summary.get("by") or "",
-                                "at": hhmm(at) if at else None}
+                                "at": clock(at, fmt) if at else None,
+                                "areas": {k: v for k, v in (summary.get("areas") or {}).items()
+                                          if isinstance(v, str) and any(a["id"] == k for a in areas)}}
+            if isinstance(summary.get("top"), list):
+                top = [{"text": t["text"], "ref": t["ref"], "kind": kinds[t["ref"]]} for t in summary["top"]
+                       if isinstance(t, dict) and t.get("ref") in kinds and isinstance(t.get("text"), str)]
+                brief["summary"]["top"] = top
+                if top:
+                    brief["top"], brief["top_by"] = top, "writer"
             brief["sections"]["summary"] = "live"
         if not writer_on:
             brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
@@ -303,5 +617,5 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
         brief.update(date_fields(now.date()))
         brief.update(kind=kind_for(settings, now), written_at=None, schedule=[], replies=[],
                      heads_up=["Callsheet hasn't read your accounts yet. It reads them at the next check-in."],
-                     sources="Not read yet")
+                     sources="Not read yet", top=[], top_by="rules", hidden=0, previous_at=None)
     return brief

@@ -186,6 +186,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json({"error": str(e)}, head, 404)
         except Conflict as e:
             return self._send_json({"error": str(e)}, head, 409)
+        except api.UpstreamError as e:
+            return self._send_json({"error": str(e)}, head, 502)
         except api.MethodNotAllowed:
             return self._send_json({"error": "That action isn't possible here."}, head, 405)
         except Exception:

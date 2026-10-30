@@ -31,7 +31,7 @@ class Scheduler:
             self.thread.join(timeout=5)
 
     def startup_due(self):
-        if not self.store.has_accounts():
+        if not self.store.has_sources():
             return False
         at = self.store.last_sync().get("at")
         if not at:
@@ -50,7 +50,7 @@ class Scheduler:
         return nxt is not None and nxt.timestamp() <= now
 
     def _sync(self):
-        if not self.store.has_accounts():
+        if not self.store.has_sources():
             return
         try:
             self.syncer.run_now()

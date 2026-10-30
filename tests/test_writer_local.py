@@ -13,6 +13,14 @@ import writer  # noqa: E402
 from fake_google import thread  # noqa: E402
 from test_writer import HAVE_SDK, KEY, LOCAL_KEY, WriterBase  # noqa: E402
 
+def schema_for(sent, ids):
+    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and row refs) it was sent with."""
+    ask = writer.make_ask(sent["properties"]["areas"]["required"],
+                          sent["properties"]["top"]["items"]["properties"]["ref"]["enum"])
+    assert set(ids) <= set(ask["refs"]), ask["refs"]
+    return writer.build_schema(ids, ask)
+
+
 UTC = dt.timezone.utc
 FLAGGED = ["I've already approved the budget.", "The money has been released.", "Signed and sent.",
            "Good news: the budget is already approved.", "We paid the invoice yesterday.",
@@ -365,7 +373,8 @@ class ClaudeObjectTest(WriterBase):
         self.assertEqual(b["replies"][0]["suggestion_warning"], writer.WARNING)
         self.assertNotIn("suggestion_warning", b["replies"][1])
         body = self.ant.messages()[-1]["body"]
-        self.assertEqual(body["output_config"]["format"]["schema"], writer.build_schema(["r1", "r2"]))
+        self.assertEqual(body["output_config"]["format"]["schema"],
+                         schema_for(body["output_config"]["format"]["schema"], ["r1", "r2"]))
         self.assertEqual((body["max_tokens"], body["fallbacks"], body["output_config"]["effort"]),
                          (16000, "default", "medium"))
         self.ant.output = {"summary": "Busy.", "replies": [{"id": "r2", "suggestion": "Legacy."}]}

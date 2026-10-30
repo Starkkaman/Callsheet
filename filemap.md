@@ -5,20 +5,21 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.4, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.4.0, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
-- `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
+- `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, Slack setup (manifest, admin approval), doesn't-need-a-reply, time format, AI writer (writing profiles, Claude, local model, app options), data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
 - `callsheet/app/server.py`: stdlib web server (thin): static files (index.html filled in with the app version, `?v=` asset URLs, ETag and 304 for the page, app.css and app.js), `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors (409 for conflicts), attachment downloads; refuses to start if the database can't be opened.
-- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer, writer evaluation); seeds the local writer from `options.json`.
-- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer and writing profiles, Slack, suppression rules, writer evaluation); seeds the local writer from `options.json`.
+- `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief; Slack workspaces (token, ignore list, read state), writing profiles, suppression rules, new-since keys, brief row refs.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
-- `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
+- `callsheet/app/slack.py`: Slack network code (0.4.0): read-method allowlist, manifest and create URL, token check, per-sync client with Retry-After, backoff and a request cap, the read of one workspace (DMs, channels, threads, mentions) and its saved state.
+- `callsheet/app/writer.py`: the AI writer: minimised payload, `compose_system` (profile texts, then the fixed safety block) and per-request output schema (replies keyed by row id, area summaries, Top of the day), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
 - `callsheet/app/evaluate.py`: owner-run writer evaluation (0.3.3): refusal checks (call-time window, sync or run busy, no local server), builds the writer input like a sync without storing anything live, G0 / Q-low / Q-med requests and the Gemma reload to the local server, per-setup metrics, `writer-eval/<UTC time>/` files (0700/0600, last 5 kept), blind A/B pairs seeded per run, choices and the NDJSON export.
 - `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
-- `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons, call times, brief composition.
+- `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons (Gmail categories, suppression), Slack rows and Heads up, rules-based Top of the day, 12h/24h display times, call times, brief composition.
 - `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors; the read path is shared with the writer evaluation), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
 - `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
 - `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
@@ -39,7 +40,12 @@
 - `tests/test_upgrade.py`: a 0.2.0 database opens unchanged with 0.3.0 code and a 0.3.0 database with 0.3.2 code; options seeding writes only the writer; an unreadable or newer database stops the app.
 - `tests/fixtures/store_0_2_0.py`: frozen 0.2.0 `store.py`, used to build the 0.2.0 database.
 - `tests/fixtures/store_0_3_0.py`: frozen 0.3.0 `store.py`, used to build the 0.3.0 database.
+- `tests/fixtures/store_0_3_4.py`: frozen 0.3.4 `store.py`, used to build the 0.3.4 database.
+- `tests/fake_slack.py`: fake Slack Web API (read methods, 429 with Retry-After, request log).
+- `tests/test_slack.py`: Slack against the fake: allowlist, manifest scopes, connect and channels API, DM/mention/thread rules, Heads up, ignore list, VIPs, rate limits and the request cap, reconnect, suppression.
+- `tests/test_release_040.py`: writing profiles and the safety block, writer schema with areas/top, rules' Top of the day, 12h/24h times, Gmail categories, mail suppression, new-since, upgrade from 0.3.4.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
 - `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
 - `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).
 - `PRIVACY.md`: privacy policy (linked from the Google consent screen).
+- `docs/step4-0.4.0.md`: the 0.4.0 backend/API contract (Slack, writer output, writing profiles, time format, doesn't-need-a-reply, new since, upgrade).

@@ -25,6 +25,7 @@ WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 READ_KEYS = ("calendar", "mail", "chat", "tasks", "writer")
 LOOKS = ("bold", "clean", "easy")
 MODES = ("auto", "light", "dark")
+TIME_FORMATS = ("12h", "24h")
 CALL_LABELS = {"morning": "Morning brief", "midday": "Midday check-in", "afternoon": "Afternoon check-in"}
 GOOGLE_ID_SUFFIX = ".apps.googleusercontent.com"
 
@@ -41,7 +42,16 @@ CREATE TABLE IF NOT EXISTS accounts (
     services TEXT NOT NULL, calendars TEXT NOT NULL, created_at REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS vips (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, area_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS slack (
+    id TEXT PRIMARY KEY, area_id TEXT NOT NULL, team_id TEXT NOT NULL UNIQUE, team_name TEXT NOT NULL,
+    domain TEXT NOT NULL, user_id TEXT NOT NULL, user_name TEXT NOT NULL, token TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'connected', error TEXT, ignored TEXT NOT NULL DEFAULT '[]',
+    state TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL DEFAULT 0);
 """
+SUPPRESS_KINDS = ("thread", "sender", "domain")
+MAX_SUPPRESS = 500
+MAX_IGNORED = 500
+MAX_PROFILES = 10
 
 
 class InputError(ValueError):
@@ -86,6 +96,7 @@ def default_settings():
         "skip_checkins_days_off": True,
         "look": "bold",
         "mode": "auto",
+        "time_format": "12h",
     }
 
 
@@ -113,6 +124,8 @@ def default_writer():
             "claude": {"api_key": None, "model": writer.DEFAULT_MODEL},
             "local": dict({"base_url": "", "model": "", "api_key": None}, **writer.LOCAL_DEFAULTS),
             "fallback_to_claude": False, "suggest_replies": True,
+            # the owner's writing-instruction profiles (the built-in "default" is never stored) and the one in use
+            "prompt_profiles": [], "active_profile": "default",
             # set on any change through the API: from then on the app options never touch the writer
             "configured_by_owner": False}
 
@@ -226,6 +239,10 @@ class Store:
                 if val not in LOOKS:
                     raise InputError("Look must be bold, clean or easy.")
                 s["look"] = val
+            elif key == "time_format":
+                if val not in TIME_FORMATS:
+                    raise InputError("Time format must be 12h or 24h.")
+                s["time_format"] = val
             elif key == "mode":
                 if val not in MODES:
                     raise InputError("Mode must be auto, light or dark.")
@@ -365,6 +382,7 @@ class Store:
             self.db.execute("BEGIN")
             try:
                 self.db.execute("DELETE FROM accounts WHERE area_id=?", (area_id,))
+                self.db.execute("DELETE FROM slack WHERE area_id=?", (area_id,))
                 self.db.execute("UPDATE vips SET area_id='personal' WHERE area_id=?", (area_id,))
                 self.db.execute("DELETE FROM areas WHERE id=?", (area_id,))
                 self.db.execute("COMMIT")
@@ -521,11 +539,31 @@ class Store:
         w = default_writer()
         saved = self._get_meta("writer", {})
         for k, v in saved.items():
-            if isinstance(w.get(k), dict) and isinstance(v, dict):
+            if k == "prompt_profiles":
+                if isinstance(v, list):
+                    w[k] = [x for x in v if isinstance(x, dict) and isinstance(x.get("id"), str)]
+            elif isinstance(w.get(k), dict) and isinstance(v, dict):
                 w[k].update({kk: vv for kk, vv in v.items() if kk in w[k]})
             elif k in w:
                 w[k] = v
+        if not any(x["id"] == w["active_profile"] for x in w["prompt_profiles"]):
+            w["active_profile"] = "default"
         return w
+
+    @staticmethod
+    def _profiles(w):
+        """Every profile: the built-in read-only Default first, then the owner's."""
+        out = [dict(writer.DEFAULT_PROMPTS, id="default", name="Default", read_only=True)]
+        for x in w["prompt_profiles"]:
+            texts = writer.effective_prompts(x)
+            out.append(dict(texts, id=x["id"], name=str(x.get("name") or "Profile"), read_only=False))
+        return out
+
+    def active_prompts(self, w=None):
+        """{summary, areas, drafts} of the active profile (for the writer)."""
+        w = w or self.writer_config()
+        p = next(x for x in self._profiles(w) if x["id"] == w["active_profile"])
+        return {k: p[k] for k in writer.PROMPT_KEYS}
 
     def writer_public(self):
         w = self.writer_config()
@@ -533,7 +571,10 @@ class Store:
                 "claude": {"key_hint": key_hint(w["claude"]["api_key"]), "model": w["claude"]["model"]},
                 "local": dict({"base_url": w["local"]["base_url"], "model": w["local"]["model"],
                                "key_hint": key_hint(w["local"]["api_key"])}, **writer.local_options(w["local"])),
-                "fallback_to_claude": w["fallback_to_claude"], "suggest_replies": w["suggest_replies"]}
+                "fallback_to_claude": w["fallback_to_claude"], "suggest_replies": w["suggest_replies"],
+                "prompt_profiles": self._profiles(w), "active_profile": w["active_profile"],
+                "prompts": self.active_prompts(w), "prompt_defaults": dict(writer.DEFAULT_PROMPTS),
+                "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES}
 
     @staticmethod
     def _check_key(val, what):
@@ -609,6 +650,10 @@ class Store:
                             w["local"][k] = v
                         else:
                             raise InputError(f"local can't change {str(k)[:40]}.")
+                elif key == "active_profile":
+                    if not isinstance(val, str) or not any(x["id"] == val for x in self._profiles(w)):
+                        raise InputError("That writing profile doesn't exist.")
+                    w["active_profile"] = val
                 elif key in ("fallback_to_claude", "suggest_replies"):
                     if not isinstance(val, bool):
                         raise InputError(f"{key} must be true or false.")
@@ -616,6 +661,71 @@ class Store:
                 else:
                     raise InputError(f"The writer can't change {str(key)[:40]}.")
             w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return self.writer_public()
+
+    # --- writing-instruction profiles -------------------------------------
+    @staticmethod
+    def _check_profile_name(name):
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 40 or re.search(r"[\x00-\x1f]", name):
+            raise InputError("A profile name must be 1 to 40 characters.")
+        return name.strip()
+
+    @staticmethod
+    def _check_prompt(val):
+        """Text of at most 1500 characters; empty = the Default text."""
+        if not isinstance(val, str) or len(val) > writer.PROMPT_MAX:
+            raise InputError(f"Writing instructions must be text of at most {writer.PROMPT_MAX:,} characters.")
+        if re.search(r"[\x00-\x08\x0b-\x1f\x7f]", val):
+            raise InputError("Writing instructions can't contain control characters.")
+        return val.strip()
+
+    def add_profile(self, copy_from, name):
+        with self.lock:
+            w = self.writer_config()
+            src = next((x for x in self._profiles(w) if x["id"] == (copy_from or "default")), None)
+            if src is None:
+                raise NotFound("That writing profile doesn't exist.")
+            name = self._check_profile_name(name)
+            if len(w["prompt_profiles"]) >= MAX_PROFILES:
+                raise InputError(f"There can be at most {MAX_PROFILES} profiles of your own. Delete one first.")
+            prof = dict({k: src[k] for k in writer.PROMPT_KEYS}, id=new_id("prof"), name=name)
+            w["prompt_profiles"].append(prof)
+            w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return next(x for x in self._profiles(w) if x["id"] == prof["id"])
+
+    def update_profile(self, prof_id, patch):
+        if not isinstance(patch, dict):
+            raise InputError("Send the change as a JSON object.")
+        with self.lock:
+            w = self.writer_config()
+            if prof_id == "default":
+                raise InputError("The Default profile can't be changed. Copy it to make your own.")
+            prof = next((x for x in w["prompt_profiles"] if x["id"] == prof_id), None)
+            if prof is None:
+                raise NotFound("That writing profile doesn't exist.")
+            for k, v in patch.items():
+                if k == "name":
+                    prof["name"] = self._check_profile_name(v)
+                elif k in writer.PROMPT_KEYS:
+                    prof[k] = self._check_prompt(v) or writer.DEFAULT_PROMPTS[k]
+                else:
+                    raise InputError(f"Profiles can't change {str(k)[:40]}.")
+            w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return next(x for x in self._profiles(w) if x["id"] == prof_id)
+
+    def delete_profile(self, prof_id):
+        with self.lock:
+            w = self.writer_config()
+            if prof_id == "default":
+                raise InputError("The Default profile can't be deleted.")
+            if not any(x["id"] == prof_id for x in w["prompt_profiles"]):
+                raise NotFound("That writing profile doesn't exist.")
+            if w["active_profile"] == prof_id:
+                raise InputError("This profile is in use. Pick another one first.")
+            w["prompt_profiles"] = [x for x in w["prompt_profiles"] if x["id"] != prof_id]
             self._set_meta("writer", w)
         return self.writer_public()
 
@@ -644,6 +754,145 @@ class Store:
             w["local"]["base_url"], w["local"]["model"] = base_url, model.strip()
             self._set_meta("writer", w)
         return True
+
+    # --- Slack ------------------------------------------------------------
+    @staticmethod
+    def _slack_public(row):
+        state = json.loads(row["state"] or "{}")
+        return {"id": row["id"], "area_id": row["area_id"], "team_id": row["team_id"], "team_name": row["team_name"],
+                "domain": row["domain"], "user_id": row["user_id"], "user_name": row["user_name"],
+                "token_hint": key_hint(row["token"]), "status": row["status"], "error": row["error"],
+                "channels_total": len(state.get("channels") or []), "ignored": json.loads(row["ignored"] or "[]"),
+                "last_read_at": state.get("last_read_at")}
+
+    def slack_workspaces(self, area_id=None):
+        """Public workspace objects (no token)."""
+        with self.lock:
+            if area_id is None:
+                rows = self.db.execute("SELECT * FROM slack ORDER BY created_at, rowid").fetchall()
+            else:
+                rows = self.db.execute("SELECT * FROM slack WHERE area_id=? ORDER BY created_at, rowid",
+                                       (area_id,)).fetchall()
+        return [self._slack_public(r) for r in rows]
+
+    def slack_workspace(self, ws_id):
+        with self.lock:
+            row = self.db.execute("SELECT * FROM slack WHERE id=?", (ws_id,)).fetchone()
+        if row is None:
+            raise NotFound("That Slack workspace isn't connected.")
+        return self._slack_public(row)
+
+    def slack_secret(self, ws_id):
+        """Workspace with its token and saved state. Internal only (sync, channel list)."""
+        with self.lock:
+            row = self.db.execute("SELECT * FROM slack WHERE id=?", (ws_id,)).fetchone()
+        if row is None:
+            raise NotFound("That Slack workspace isn't connected.")
+        ws = self._slack_public(row)
+        ws.update(token=row["token"], state=json.loads(row["state"] or "{}"))
+        return ws
+
+    def save_slack(self, area_id, info, token, now, channels=None):
+        """Insert, or update the token (and area) of the workspace with this team id. Returns its id."""
+        self.area(area_id)
+        with self.lock:
+            row = self.db.execute("SELECT id, state FROM slack WHERE team_id=?", (info["team_id"],)).fetchone()
+            if row:
+                state = json.loads(row["state"] or "{}")
+                if info["user_id"] != self.db.execute("SELECT user_id FROM slack WHERE id=?",
+                                                      (row["id"],)).fetchone()[0]:
+                    state = {}  # another person's token: forget the old person's threads and mentions
+                if channels is not None:
+                    state["channels"] = channels
+                self.db.execute(
+                    "UPDATE slack SET area_id=?, team_name=?, domain=?, user_id=?, user_name=?, token=?, "
+                    "status='connected', error=NULL, state=? WHERE id=?",
+                    (area_id, info["team_name"], info["domain"], info["user_id"], info["user_name"], token,
+                     json.dumps(state), row["id"]))
+                return row["id"]
+            ws_id = new_id("slk")
+            self.db.execute(
+                "INSERT INTO slack (id, area_id, team_id, team_name, domain, user_id, user_name, token, status, "
+                "ignored, state, created_at) VALUES (?,?,?,?,?,?,?,?, 'connected', '[]', ?, ?)",
+                (ws_id, area_id, info["team_id"], info["team_name"], info["domain"], info["user_id"],
+                 info["user_name"], token, json.dumps({"channels": channels or []}), now))
+            return ws_id
+
+    def set_slack_ignored(self, ws_id, ignored):
+        with self.lock:
+            ws = self.slack_secret(ws_id)
+            known = {c["id"] for c in ws["state"].get("channels") or []}
+            if not isinstance(ignored, list) or len(ignored) > MAX_IGNORED or any(
+                    not isinstance(c, str) or c not in known for c in ignored):
+                raise InputError("ignored must be a list of this workspace's channel ids.")
+            self.db.execute("UPDATE slack SET ignored=? WHERE id=?", (json.dumps(list(dict.fromkeys(ignored))), ws_id))
+        return self.slack_workspace(ws_id)
+
+    def set_slack_state(self, ws_id, state=None, status=None, error=None):
+        with self.lock:
+            if state is not None:
+                self.db.execute("UPDATE slack SET state=? WHERE id=?", (json.dumps(state), ws_id))
+            if status is not None:
+                self.db.execute("UPDATE slack SET status=?, error=? WHERE id=?", (status, error, ws_id))
+
+    def delete_slack(self, ws_id):
+        with self.lock:
+            if self.db.execute("DELETE FROM slack WHERE id=?", (ws_id,)).rowcount == 0:
+                raise NotFound("That Slack workspace isn't connected.")
+
+    def has_sources(self):
+        """A Google account or a Slack workspace is connected (the brief is live)."""
+        with self.lock:
+            return self.has_accounts() or self.db.execute("SELECT 1 FROM slack LIMIT 1").fetchone() is not None
+
+    # --- doesn't need a reply ------------------------------------------------
+    def suppress_rules(self):
+        rules_list = self._get_meta("suppress", [])
+        return rules_list if isinstance(rules_list, list) else []
+
+    def add_suppress(self, kind, value, source, label, now_iso):
+        """Adds a rule, or returns the same existing one. Returns the rule."""
+        if kind not in SUPPRESS_KINDS:
+            raise InputError("Hide this thread, this sender or this domain.")
+        value = str(value or "").strip().lower()
+        if not value:
+            raise InputError("This row has nothing to hide it by.")
+        with self.lock:
+            rules_list = self.suppress_rules()
+            for r in rules_list:
+                if (r.get("kind"), r.get("value"), r.get("source")) == (kind, value, source):
+                    return r
+            if len(rules_list) >= MAX_SUPPRESS:
+                raise InputError(f"There are already {MAX_SUPPRESS} rules. Remove some in Setup first.")
+            rule = {"id": new_id("sup"), "kind": kind, "value": value[:300], "source": source,
+                    "created": now_iso, "label": str(label or value)[:120]}
+            self._set_meta("suppress", rules_list + [rule])
+        return rule
+
+    def delete_suppress(self, rule_id):
+        with self.lock:
+            rules_list = self.suppress_rules()
+            left = [r for r in rules_list if r.get("id") != rule_id]
+            if len(left) == len(rules_list):
+                raise NotFound("That rule doesn't exist.")
+            self._set_meta("suppress", left)
+
+    # --- new since, row refs ----------------------------------------------------
+    def seen_day(self):
+        """{date, keys: [row keys of every brief written that day], briefs: [ISO times]}."""
+        v = self._get_meta("seen_day", {})
+        return v if isinstance(v, dict) else {}
+
+    def set_seen_day(self, value):
+        self._set_meta("seen_day", value)
+
+    def brief_refs(self):
+        """Per row id of the cached brief: what "Doesn't need a reply" hides it by. Internal only."""
+        v = self._get_meta("brief_refs", {})
+        return v if isinstance(v, dict) else {}
+
+    def set_brief_refs(self, value):
+        self._set_meta("brief_refs", value)
 
     # --- writer evaluation (owner-run, see evaluate.py) -------------------
     def eval_settings(self):

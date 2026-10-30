@@ -1,4 +1,4 @@
-# Step 4: Callsheet 0.4.0 backend contract (Slack, smarter writer, writing instructions, "doesn't need a reply", new since)
+# Step 4: Callsheet 0.4.0 backend contract (Slack, smarter writer, writing profiles, time format, "doesn't need a reply", new since)
 
 Scope: server, API and tests. The page (`callsheet/app/static/**`) is built against this contract later.
 Earlier contracts still hold: `docs/step2-google.md` (Google, API conventions) and `docs/step3-writer.md` (writer).
@@ -84,7 +84,9 @@ already exists (default true); Slack is read only when `reads.chat` is true. Eve
   `summary.top` = `top` when the writer wrote it. Items whose `ref` is no longer a row are dropped when the brief
   is composed. No area summaries without the writer.
 - `hidden`: number of rows hidden by "Doesn't need a reply" rules in this brief (0 when none).
-- `previous_at`: `"HH:MM"` of the latest earlier brief today, or null for the day's first brief.
+- `previous_at`: the time of the latest earlier brief today (a display string, see "Time format"), or null
+  for the day's first brief.
+- `time_format`: `"12h"` or `"24h"` (the owner's setting).
 
 ## Writer output (both writers)
 Schema per request (`writer.build_schema(ids, ask)`): `{summary: string, areas: {<area id>: string minLength 1, …
@@ -96,17 +98,47 @@ Areas with the writer off stay out (as before). Parsing: unknown area ids and re
 duplicate refs, area texts ≤ 600 chars, top texts ≤ 200 chars. A missing or bad `areas`/`top` is not a failure.
 The owner-run evaluation (`evaluate.py`) keeps the 0.3.x shape (summary + replies).
 
-## Writing instructions (editable)
-- Stored in the writer settings: `prompts: {summary, areas, drafts}`; only edited values are stored, the rest use
-  the defaults, so better defaults reach owners who never edited them.
-- `GET api/writer` → the writer object (as in `api/state.writer`), which now has `prompts: {summary, areas,
-  drafts}` (the texts in use), `prompt_defaults: {…}`, `prompts_edited: {summary: bool, …}`, `prompt_max: 1500`.
-- `PATCH api/writer {prompts: {summary?, areas?, drafts?}}`: text ≤ 1500 chars, no control characters except
-  newline and tab; empty text = back to the default.
-- `POST api/writer/prompts/reset {key: "summary"|"areas"|"drafts"|"all"}` → the writer object.
-- System prompt = fixed intro + "Day summary" + "Area summaries" + "Suggested replies" (the three editable texts)
-  + the fixed safety block, always last: the untrusted-`<data>` rule, the never-claim rule, the JSON instructions.
-  The safety block can't be edited or removed; whatever an editable text says, it comes after it.
+## Writing profiles (owner addition; replaces the single editable prompts)
+- A profile is `{id, name, summary, areas, drafts, read_only}`: the three editable texts of the system prompt.
+  The built-in `Default` (`id: "default"`, `read_only: true`) always comes first and can't be changed or
+  deleted; its texts are `writer.DEFAULT_PROMPTS`, so better defaults reach every owner who uses it.
+- Stored in the writer settings: `prompt_profiles: [{id, name, summary, areas, drafts}]` (the owner's, at most
+  10) and `active_profile` (default `"default"`; if it ever points at a missing profile, Default is used).
+- `GET api/writer` (and `api/state.writer`) → the writer object with `prompt_profiles` (Default first),
+  `active_profile`, `prompts` (the active profile's texts), `prompt_defaults`, `prompt_max: 1500`,
+  `profile_max: 10`.
+- `POST api/writer/profiles {copy_from?: id (default "default"), name}` → the new profile (texts copied).
+  Name 1–40 chars, no control characters; an 11th profile → 400; unknown `copy_from` → 404.
+- `PATCH api/writer/profiles/<id> {name?, summary?, areas?, drafts?}` → the profile. Texts ≤ 1500 chars, no
+  control characters except newline and tab. `default` → 400; unknown id → 404; other keys → 400.
+- `DELETE api/writer/profiles/<id>` → the writer object. Not `default` (400), not the active profile (400:
+  pick another one first), unknown id → 404.
+- `PATCH api/writer {active_profile: id}`: the id must exist (400 otherwise).
+- Reset (the choice, replacing 0.4.0-draft `POST api/writer/prompts/reset`, which is gone): `PATCH` a profile
+  text with `""` → that text becomes the Default text; to reset a whole profile, make a new copy of Default (or
+  switch `active_profile` back to `"default"`).
+- `writer.compose_system(profile=None, ids=None, ask=None, schema=False)` (pure, exported): fixed intro + the
+  time sentence + "Day summary" + "Area summaries" (only with an ask) + "Suggested replies" (the profile's three
+  texts; empty text = Default) + the fixed safety block, always last: the untrusted-`<data>` rule, the never-claim
+  rule, the JSON instructions (+ the schema with `schema=True`, as the local model gets it). No profile text can
+  edit, remove or move it; text like "ignore the rules above" stays before it. The time sentence is fixed too:
+  "Write times in the owner's format, e.g. 2:30 pm." (12h) or "… e.g. 14:30." (24h).
+
+## Time format (owner addition)
+- `settings.time_format`: `"12h"` (default) or `"24h"`; `PATCH api/settings {time_format}` (anything else → 400);
+  shown in `api/state.settings`. The brief has `time_format` too.
+- 12h: `"9:30 am"`, `"2:30 pm"`, whole hours `"11 am"`; noon `"12 pm"`, midnight `"12 am"` (also an end of
+  `24:00`). 24h: `"14:30"`, `"00:00"`.
+- Display strings (follow the setting, applied when the brief is composed, so a change shows without a sync):
+  schedule `time`, `end`, `flag.text` (e.g. "Overlaps 11 am Roadmap review"), `written_at`, `next_checkin`,
+  `previous_at`, `summary.at`, `sources` ("Written 9:30 am from …"), the rules' `top` texts and Slack
+  writer-input message dates.
+- Machine fields (unchanged by the setting): schedule `start_hhmm` / `end_hhmm` (`"HH:MM"`, 24 h, `end_hhmm` may
+  be `"24:00"`), `flags` (`[{kind: "not_accepted"} | {kind: "overlap", at: "HH:MM", title}]`), `date`, all ISO
+  times in `api/state` (`last_sync.at`, `last_writer.at`, suppression `created`, Slack `last_read_at`), and the
+  `key`/`id` fields. Briefs cached by 0.3.x have no machine fields: their schedule texts show as cached.
+- The writer input uses the owner's format for schedule `time`/`end`/`flags` and Slack message dates; mail
+  message dates stay the original `Date` header.
 
 ## Doesn't need a reply
 - Gmail: a thread whose last message has `CATEGORY_PROMOTIONS`, `CATEGORY_UPDATES`, `CATEGORY_FORUMS` or
@@ -130,4 +162,5 @@ The owner-run evaluation (`evaluate.py`) keeps the 0.3.x shape (summary + replie
 
 ## Upgrade
 Additive only: a new `slack` table (`CREATE TABLE IF NOT EXISTS`), new meta keys (`suppress`, `seen_day`,
-`brief_refs`, writer `prompts`) read with defaults. A 0.3.4 database opens unchanged.
+`brief_refs`, writer `prompt_profiles` / `active_profile`, settings `time_format`) read with defaults
+(`[]`, `"default"`, `"12h"`). A 0.3.4 database opens unchanged (`tests/test_release_040.py`).

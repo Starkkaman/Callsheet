@@ -14,6 +14,7 @@ import writer
 
 import google
 import rules
+import slack
 from oauth import OAuthFlows
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
@@ -23,11 +24,15 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.3.4"
+APP_VERSION = "0.4.0"
 
 
 class MethodNotAllowed(Exception):
     pass
+
+
+class UpstreamError(RuntimeError):
+    """A service Callsheet reads (Slack) couldn't be reached (HTTP 502). The message is a plain sentence."""
 
 
 class Download:
@@ -72,7 +77,18 @@ class App:
             ("DELETE", r"vips/([\w-]+)", self.delete_vip),
             ("PATCH", r"settings", self.patch_settings),
             ("POST", r"sync", self.sync),
+            ("GET", r"writer", self.get_writer),
             ("PATCH", r"writer", self.patch_writer),
+            ("POST", r"writer/profiles", self.add_profile),
+            ("PATCH", r"writer/profiles/([\w-]+)", self.patch_profile),
+            ("DELETE", r"writer/profiles/([\w-]+)", self.delete_profile),
+            ("GET", r"slack/manifest", self.slack_manifest),
+            ("POST", r"slack/connect", self.slack_connect),
+            ("GET", r"slack/([\w-]+)/channels", self.slack_channels),
+            ("PATCH", r"slack/([\w-]+)", self.patch_slack),
+            ("DELETE", r"slack/([\w-]+)", self.delete_slack),
+            ("POST", r"suppress", self.add_suppress),
+            ("DELETE", r"suppress/([\w-]+)", self.delete_suppress),
             ("DELETE", r"writer/claude-key", self.delete_claude_key),
             ("POST", r"writer/test", self.test_writer),
             ("PATCH", r"eval/settings", self.patch_eval),
@@ -122,18 +138,22 @@ class App:
         s = self.store.settings()
         now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(s))
         return rules.compose_brief(load_sample(), s, self.store.areas(), self.store.cached_brief(),
-                                   self.store.has_accounts(), now,
+                                   self.store.has_sources(), now,
                                    writer_on=self.store.writer_config()["provider"] != "off")
 
     def state(self, _body=None):
         client = self.store.google_client_public()
         accounts = self.store.accounts()
+        workspaces = self.store.slack_workspaces()
         areas = []
         for a in self.store.areas():
             a = dict(a)
             a["accounts"] = [acc for acc in accounts if acc["area_id"] == a["id"]]
+            a["slack"] = [w for w in workspaces if w["area_id"] == a["id"]]
+            a["chat_available"] = any(w["status"] != "needs_reconnect" for w in a["slack"])
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
+                "suppress": self.store.suppress_rules(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
                 "eval": self.store.eval_settings(), "version": APP_VERSION,
@@ -151,7 +171,9 @@ class App:
 
     # --- areas ------------------------------------------------------------
     def _area_out(self, area):
-        return dict(area, accounts=self.store.accounts(area["id"]))
+        ws = self.store.slack_workspaces(area["id"])
+        return dict(area, accounts=self.store.accounts(area["id"]), slack=ws,
+                    chat_available=any(w["status"] != "needs_reconnect" for w in ws))
 
     def add_area(self, body):
         b = _obj(body)
@@ -194,15 +216,128 @@ class App:
         return self.store.update_settings(_obj(body))
 
     def sync(self, _body):
-        if not self.store.has_accounts():
-            raise InputError("Connect a Google account first.")
+        if not self.store.has_sources():
+            raise InputError("Connect a Google account or a Slack workspace first.")
         if self.evaluator.job is not None:  # the live writer would swap the local model mid-evaluation
             raise Conflict("An evaluation is running. Try again when it's finished.")
         return self.syncer.run_now()
 
     # --- AI writer --------------------------------------------------------
+    def get_writer(self, _body=None):
+        return self.store.writer_public()
+
     def patch_writer(self, body):
         return self.store.update_writer(_obj(body))
+
+    def add_profile(self, body):
+        b = _obj(body)
+        return self.store.add_profile(b.get("copy_from"), b.get("name"))
+
+    def patch_profile(self, body, prof_id):
+        return self.store.update_profile(prof_id, _obj(body))
+
+    def delete_profile(self, _body, prof_id):
+        return self.store.delete_profile(prof_id)
+
+    # --- Slack (read-only) ------------------------------------------------
+    def slack_manifest(self, _body=None):
+        return {"manifest": slack.MANIFEST, "manifest_json": slack.manifest_json(),
+                "manifest_yaml": slack.manifest_yaml(), "create_url": slack.create_url(), "scopes": list(slack.SCOPES)}
+
+    def slack_connect(self, body):
+        b = _obj(body)
+        area_id, token = b.get("area_id"), b.get("token")
+        if not isinstance(area_id, str):
+            raise InputError("Pick an area for this workspace.")
+        self.store.area(area_id)
+        token = token.strip() if isinstance(token, str) else ""
+        if not re.fullmatch(r"xoxp-[A-Za-z0-9-]{10,250}", token):
+            raise InputError("Paste the User OAuth Token. It starts with xoxp-.")
+        try:
+            info = slack.validate(token)
+        except slack.SlackError as e:
+            if e.code in slack.RECONNECT_CODES:
+                raise InputError("Slack didn't accept that token. Copy the User OAuth Token again.") from None
+            if e.code == "missing_scope":
+                raise InputError("The Slack app is missing a read permission. Create it again from the "
+                                 "manifest.") from None
+            if not e.code:
+                raise UpstreamError("Couldn't reach Slack. Try again in a minute.") from None
+            raise InputError(str(e)) from None
+        channels = None
+        try:
+            channels = slack.channel_list(slack.list_conversations(slack.Client(token, clock=self.clock)))
+        except (slack.SlackError, slack.Budget):
+            pass  # read again at the next sync
+        ws_id = self.store.save_slack(area_id, info, token, self.clock(), channels)
+        return self.store.slack_workspace(ws_id)
+
+    def slack_channels(self, _body, ws_id):
+        ws = self.store.slack_secret(ws_id)
+        ignored = set(ws["ignored"])
+        stale, chans = False, None
+        try:
+            chans = slack.channel_list(slack.list_conversations(slack.Client(ws["token"], clock=self.clock)))
+            state = dict(ws["state"], channels=chans)
+            self.store.set_slack_state(ws_id, state=state)
+        except (slack.SlackError, slack.Budget):
+            stale, chans = True, ws["state"].get("channels") or []
+        at = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat(timespec="seconds")
+        return {"channels": [dict(c, ignored=c["id"] in ignored) for c in chans],
+                "fetched_at": None if stale else at, "stale": stale}
+
+    def patch_slack(self, body, ws_id):
+        b = _obj(body)
+        self.store.slack_workspace(ws_id)
+        for k in b:
+            if k != "ignored":
+                raise InputError(f"Slack workspaces can't change {str(k)[:40]}.")
+        if "ignored" not in b:
+            return self.store.slack_workspace(ws_id)
+        return self.store.set_slack_ignored(ws_id, b["ignored"])
+
+    def delete_slack(self, _body, ws_id):
+        self.store.delete_slack(ws_id)
+        return {"ok": True}
+
+    # --- doesn't need a reply ----------------------------------------------
+    def add_suppress(self, body):
+        b = _obj(body)
+        row_id, scope, key = b.get("row_id"), b.get("scope"), b.get("key")
+        if scope not in ("thread", "sender", "domain"):
+            raise InputError("Hide this thread, this sender or this domain.")
+        brief = self.store.cached_brief() or {}
+        refs = self.store.brief_refs()
+        row = next((r for r in brief.get("replies") or [] if r.get("id") == row_id), None)
+        ref = refs.get(row_id) if isinstance(row_id, str) else None
+        if row is None or ref is None:
+            raise NotFound("That row isn't in the brief any more. Reload the page.")
+        if key is not None and key != row.get("key"):
+            raise Conflict("The brief has changed since the page loaded. Reload and try again.")
+        if scope == "domain" and not ref.get("domain"):
+            raise InputError("Slack rows can be hidden for this thread or this sender only.")
+        now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(self.store.settings()))
+        rule = self.store.add_suppress(scope, ref.get(scope), ref.get("source"),
+                                       (ref.get("labels") or {}).get(scope), now.isoformat(timespec="seconds"))
+        # hide the rows this rule covers in the brief now, not only at the next refresh
+        with self.store.lock:
+            brief = self.store.cached_brief() or {}
+            keep, gone = [], set()
+            for r in brief.get("replies") or []:
+                sup = refs.get(r.get("id"))
+                if sup is not None and r.get("key") == sup.get("key") and rules.suppressed(sup, sup.get("vip"), [rule]):
+                    gone.add(r.get("id"))
+                else:
+                    keep.append(r)
+            if gone:
+                brief["replies"] = keep
+                brief["hidden"] = int(brief.get("hidden") or 0) + len(gone)
+                self.store.set_cached_brief(brief)
+        return {"rule": rule, "hidden": int(brief.get("hidden") or 0)}
+
+    def delete_suppress(self, _body, rule_id):
+        self.store.delete_suppress(rule_id)
+        return {"ok": True}
 
     def delete_claude_key(self, _body):
         return self.store.clear_claude_key()

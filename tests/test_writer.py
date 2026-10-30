@@ -19,6 +19,14 @@ import writer  # noqa: E402
 from fake_google import thread  # noqa: E402
 from test_api_google import Base  # noqa: E402
 
+def schema_for(sent, ids):
+    """The schema a sync sends since 0.4.0: build_schema with the ask (area ids and row refs) it was sent with."""
+    ask = writer.make_ask(sent["properties"]["areas"]["required"],
+                          sent["properties"]["top"]["items"]["properties"]["ref"]["enum"])
+    assert set(ids) <= set(ask["refs"]), ask["refs"]
+    return writer.build_schema(ids, ask)
+
+
 try:
     import anthropic  # noqa: F401
     HAVE_SDK = True
@@ -91,11 +99,14 @@ class WriterBase(Base):
 class WriterSettingsTest(WriterBase):
     def test_defaults_off_and_brief_as_before(self):
         st = self.ok("GET", "/api/state")
-        self.assertEqual(st["writer"], {
+        w = st["writer"]
+        self.assertEqual({k: w[k] for k in ("provider", "claude", "local", "fallback_to_claude", "suggest_replies")}, {
             "provider": "off", "claude": {"key_hint": None, "model": "claude-opus-5-5"},
             "local": {"base_url": "", "model": "", "key_hint": None, "thinking": False, "reasoning_budget": 1536,
                       "max_tokens": 4096, "context": 32768, "timeout": 300},
             "fallback_to_claude": False, "suggest_replies": True})
+        self.assertEqual((w["active_profile"], [p["id"] for p in w["prompt_profiles"]], w["prompts"]),
+                         ("default", ["default"], writer.DEFAULT_PROMPTS))
         self.assertEqual(st["last_writer"]["ok"], None)
         self.seed()
         b = self.sync_brief()
@@ -147,7 +158,7 @@ class ClaudeWriterTest(WriterBase):
         b = self.sync_brief()
         self.assertEqual(b["summary"]["text"], "Two overlapping meetings before noon. Priya waits on the budget.")
         self.assertEqual(b["summary"]["by"], "Claude Opus 5.5")
-        self.assertRegex(b["summary"]["at"], r"^\d\d:\d\d$")
+        self.assertRegex(b["summary"]["at"], r"^\d{1,2}(:\d\d)? [ap]m$")
         self.assertEqual(b["sections"]["summary"], "live")
         sug = {r["id"]: r.get("suggestion") for r in b["replies"]}
         self.assertEqual(sug, {"r1": "Yes, I'll sign it off by [day].", "r2": "Friday works."})
@@ -163,7 +174,8 @@ class ClaudeWriterTest(WriterBase):
         self.assertEqual((body["model"], body["max_tokens"], body["fallbacks"]), ("claude-opus-5-5", 16000, "default"))
         self.assertEqual(body["output_config"], {"effort": "medium",
                                                  "format": {"type": "json_schema",
-                                                            "schema": writer.build_schema(["r1", "r2"])}})
+                                                            "schema": schema_for(body["output_config"]["format"]["schema"],
+                                                                                 ["r1", "r2"])}})
         self.assertEqual(body["output_config"]["format"]["schema"]["properties"]["replies"]["required"], ["r1", "r2"])
         self.assertIn("Never write that anything has been approved", body["system"])
         self.assertIn("untrusted content", body["system"])
@@ -201,11 +213,11 @@ class ClaudeWriterTest(WriterBase):
     def test_unknown_ids_dropped_and_clipped(self):
         self.seed()
         self.claude_on()
-        self.ant.output = {"summary": "x " * 500, "replies": [
+        self.ant.output = {"summary": "x " * 1000, "replies": [
             {"id": "r9", "suggestion": "nobody asked"}, {"id": "t1", "suggestion": "thread id, not ours"},
             {"id": "r1", "suggestion": "y" * 3000}]}
         b = self.sync_brief()
-        self.assertLessEqual(len(b["summary"]["text"]), 600)
+        self.assertLessEqual(len(b["summary"]["text"]), 1200)  # 3-6 sentences since 0.4.0
         self.assertEqual(len(b["replies"][0]["suggestion"]), 1500)
         self.assertNotIn("suggestion", b["replies"][1])
         self.assertNotIn("nobody asked", json.dumps(b))
@@ -361,14 +373,15 @@ class LocalWriterTest(WriterBase):
         self.assertEqual(b["replies"][1]["suggestion"], "Sure.")
         self.assertNotIn("suggestion", b["replies"][0])  # an empty string is no suggestion
         req = self.loc.chats()[0]
+        sent = req["body"]["response_format"]["json_schema"]["schema"]
         self.assertEqual(req["body"]["response_format"], {
             "type": "json_schema", "json_schema": {"name": "brief", "strict": True,
-                                                   "schema": writer.build_schema(["r1", "r2"])}})
+                                                   "schema": schema_for(sent, ["r1", "r2"])}})
         self.assertEqual(req["body"]["chat_template_kwargs"], {"enable_thinking": False})
         self.assertNotIn("reasoning_budget_tokens", req["body"])
         self.assertEqual(req["body"]["model"], "qwen3-coder")
         self.assertEqual(req["body"]["max_tokens"], 4096)
-        self.assertIn(json.dumps(writer.build_schema(["r1", "r2"])), req["body"]["messages"][0]["content"])
+        self.assertIn(json.dumps(sent), req["body"]["messages"][0]["content"])
         self.assertIn("an object keyed by row id", req["body"]["messages"][0]["content"])
         self.assertEqual(req["headers"]["authorization"], "Bearer " + LOCAL_KEY)
         self.assertIn("JSON schema", req["body"]["messages"][0]["content"])

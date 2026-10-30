@@ -14,6 +14,7 @@ import time
 
 import google
 import rules
+import slack
 import writer
 
 MAIL_QUERY = "in:inbox -category:promotions -category:social -category:forums newer_than:14d"
@@ -31,10 +32,11 @@ class _Stop(Exception):
 
 
 class Syncer:
-    def __init__(self, store, clock=time.time, log=_stderr):
+    def __init__(self, store, clock=time.time, log=_stderr, sleep=time.sleep):
         self.store = store
         self.clock = clock
         self.log = log
+        self.sleep = sleep  # Slack rate-limit waits (tests replace it)
         self.lock = threading.Lock()
 
     def run_now(self, wait=70):
@@ -163,39 +165,115 @@ class Syncer:
         if stopped:
             errors.append(f"Reading stopped after {DEADLINE_S} seconds, so some items were skipped.")
 
-        schedule, all_day = rules.build_schedule(events, tz, day)
-        replies = []
+        slack_rows, slack_heads, n["slack"] = self._read_slack(areas, vips, t0, tz, errors, live)
+        fmt = rules.time_format(settings)
+        schedule, all_day = rules.build_schedule(events, tz, day, fmt)
+        for i, row in enumerate(schedule, 1):
+            row["id"], row["key"] = f"s{i}", rules.row_key(row.pop("_key"))
+        suppress = self.store.suppress_rules()
+        replies, hidden = [], 0
         for th, addr, area_id, acc_id in threads:
             row = rules.reply_row(th, addr, area_id, t0, settings["reply_age_days"], vips)
             if row:
-                row["_ref"] = (acc_id, th.get("id"))
+                row["_ref"] = {"source": "mail", "acc": acc_id, "thread_id": th.get("id")}
                 replies.append(row)
-        rules.sort_replies(replies)
+        replies += slack_rows
+        shown = []
+        for row in replies:
+            if rules.suppressed(row["_sup"], row["vip"], suppress):
+                hidden += 1
+            else:
+                shown.append(row)
+        replies = rules.sort_replies(shown)
         refs = {}
         for i, row in enumerate(replies, 1):
-            row["id"] = f"r{i}"
-            refs[row["id"]] = row.pop("_ref")
-        heads_up = [f"All day: {title}" for title in all_day] + errors
+            row["id"], row["key"] = f"r{i}", rules.row_key(row.pop("_key"))
+            ref = row.pop("_ref", None) or {"source": "slack"}
+            ref.update(row.pop("_sup"), key=row["key"], vip=row["vip"])
+            if "_messages" in row:
+                ref["messages"] = row.pop("_messages")
+            refs[row["id"]] = ref
+        heads_up = [f"All day: {title}" for title in all_day] + slack_heads + errors
         written = now.isoformat(timespec="seconds")
         mailboxes = sum(1 for a in self.store.accounts() if a["services"].get("mail"))
+        tail = (f"from {mailboxes} mailbox{'es' if mailboxes != 1 else ''}, "
+                f"{n['calendars']} calendar{'s' if n['calendars'] != 1 else ''}")
+        if n["slack"]:
+            tail += f", {n['slack']} Slack workspace{'s' if n['slack'] != 1 else ''}"
+        sources = f"Written {rules.clock(now, fmt)} {tail}"
         brief = {
             "date": day.isoformat(), "written_at": written, "kind": rules.kind_for(settings, now),
-            "schedule": schedule, "replies": replies, "heads_up": heads_up,
-            "sources": f"Written {rules.hhmm(now)} from {mailboxes} mailbox{'es' if mailboxes != 1 else ''}, "
-                       f"{n['calendars']} calendar{'s' if n['calendars'] != 1 else ''}"}
+            "schedule": schedule, "replies": replies, "heads_up": heads_up, "sources": sources,
+            "sources_tail": tail, "hidden": hidden}
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
                 "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
+
+    def _read_slack(self, areas, vips, t0, tz, errors, live):
+        """Every connected Slack workspace whose area reads chat. Returns (rows, heads_up, workspaces read).
+        With live=False (the writer evaluation) neither the saved state nor the status changes."""
+        rows, heads, count = [], [], 0
+        for pub in self.store.slack_workspaces():
+            area = areas.get(pub["area_id"])
+            if area is None or not area["reads"].get("chat", True):
+                continue
+            ws = self.store.slack_secret(pub["id"])
+            name = ws["team_name"] or ws["domain"] or "workspace"
+            if ws["status"] == "needs_reconnect":
+                errors.append(f"Couldn't read Slack {name}: it needs to be connected again.")
+                continue
+            cl = slack.Client(ws["token"], clock=self.clock, sleep=self.sleep, deadline=self._deadline)
+            try:
+                data, state, problems = slack.read_workspace(cl, ws, self.clock(), self.log)
+            except (slack.SlackError, slack.Budget) as e:
+                reconnect = isinstance(e, slack.SlackError) and e.code in slack.RECONNECT_CODES
+                msg = str(e) if isinstance(e, slack.SlackError) else "Slack reading stopped before it started."
+                if live:
+                    self.store.set_slack_state(ws["id"], status="needs_reconnect" if reconnect else "error", error=msg)
+                errors.append(f"Couldn't read Slack {name}: {msg}")
+                continue
+            count += 1
+            if live:
+                self.store.set_slack_state(ws["id"], state=state, status="connected", error=None)
+            errors += [f"Slack {name}: {p}" for p in problems]
+            r, h = rules.slack_rows(data, ws, area["id"], t0, vips, tz, rules.time_format(self.store.settings()))
+            for row in r:
+                row["_ref"] = {"source": "slack", "ws": ws["id"]}
+            rows += r
+            heads += h
+        return rows, heads, count
+
+    def _mark_new(self, brief):
+        """New since: rows whose key wasn't in any earlier brief today get new: true; previous_at is the
+        latest earlier brief's time (None for the day's first)."""
+        seen = self.store.seen_day()
+        rows = brief["schedule"] + brief["replies"]
+        keys = [r["key"] for r in rows]
+        if seen.get("date") == brief["date"] and seen.get("briefs"):
+            known = set(seen.get("keys") or [])
+            for r in rows:
+                if r["key"] not in known:
+                    r["new"] = True
+            brief["previous_at"] = seen["briefs"][-1]
+            keys = list(dict.fromkeys((seen.get("keys") or []) + keys))[-3000:]
+            briefs = (seen["briefs"] + [brief["written_at"]])[-20:]
+        else:
+            brief["previous_at"] = None
+            briefs = [brief["written_at"]]
+        self.store.set_seen_day({"date": brief["date"], "keys": keys, "briefs": briefs})
 
     def _run(self):
         r = self._read()
         t0, brief, errors, n, schedule, replies = r["t0"], r["brief"], r["errors"], r["n"], r["schedule"], \
             r["brief"]["replies"]
         written = brief["written_at"]
+        self._mark_new(brief)
+        self.store.set_brief_refs({rid: {k: v for k, v in ref.items() if k != "messages"}
+                                   for rid, ref in r["refs"].items()})
         self.store.set_cached_brief(brief)
         last = {"at": written, "ok": not errors, "errors": errors}
         self.store.set_last_sync(last)
         self.log(f"Callsheet sync: {n['accounts']} accounts ({n['ok']} ok, {n['failed']} failed), "
-                 f"{n['calendars']} calendars, {n['events']} events, {n['threads']} threads, "
+                 f"{n['calendars']} calendars, {n['events']} events, {n['threads']} threads, {n['slack']} Slack, "
                  f"{len(schedule)} on schedule, {len(replies)} need a reply, {self.clock() - t0:.1f}s")
         wcfg = self.store.writer_config()
         if wcfg["provider"] != "off":
@@ -207,23 +285,34 @@ class Syncer:
         (same Google reads, rules, stripping and row ids) without storing anything: no cached brief, last
         sync, account status or last writer. The caller holds self.lock. Returns (data, ids, read_errors)."""
         r = self._read(live=False)
-        data, ids = self._writer_input(wcfg, r["brief"], r["refs"], r["events"], r["areas"], r["settings"],
-                                       r["tz"], r["day"], r["client"])
+        data, ids, _ask = self._writer_input(wcfg, r["brief"], r["refs"], r["events"], r["areas"], r["settings"],
+                                             r["tz"], r["day"], r["client"])
         return data, ids, len(r["errors"])
 
     # --- the AI writer ----------------------------------------------------
     def _writer_input(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
-        """The minimised writer input and the reply ids suggestions may be written for. Areas whose
-        reads.writer is off are left out entirely (their events don't even show up as overlaps)."""
+        """The minimised writer input, the reply ids suggestions may be written for, and the ask (area ids
+        and row ids in the input, the owner's writing instructions). Areas whose reads.writer is off are left
+        out entirely (their events don't even show up as overlaps)."""
         allowed = {aid for aid, a in areas.items() if a["reads"].get("writer", True)}
         name = {aid: a["name"] for aid, a in areas.items()}
-        sched, all_day = rules.build_schedule([e for e in events if e[1] in allowed], tz, day)
+        fmt = rules.time_format(settings)
+        sched, all_day = rules.build_schedule([e for e in events if e[1] in allowed], tz, day, fmt)
+        sid = {e["key"]: e["id"] for e in brief["schedule"] if e.get("key")}
+        for e in sched:
+            e["id"] = sid.get(rules.row_key(e.pop("_key")))
+        sched = [e for e in sched if e["id"]]
         rows = [r for r in brief["replies"] if r["area"] in allowed]
         bodies = {}
         if wcfg["suggest_replies"]:
             accs = {}
             for r in rows[:writer.MAX_SUGGEST_ROWS]:  # replies are sorted VIP first, then oldest
-                acc_id, thread_id = refs[r["id"]]
+                ref = refs[r["id"]]
+                if ref.get("source") == "slack":
+                    if ref.get("messages"):
+                        bodies[r["id"]] = [dict(m, text=writer.cap_text(m.get("text") or "")) for m in ref["messages"]]
+                    continue
+                acc_id, thread_id = ref["acc"], ref["thread_id"]
                 try:
                     if acc_id not in accs:
                         accs[acc_id] = self.store.account_secret(acc_id)
@@ -238,45 +327,50 @@ class Syncer:
         data = {
             "brief": brief["kind"], "date": day.isoformat(), "weekday": f"{day:%A}",
             "timezone": str(tz), "owner": settings.get("name") or "",
-            "schedule": [{"time": e.get("time"), "end": e.get("end"), "title": e.get("title"),
+            "areas": [{"id": aid, "name": name.get(aid, "")} for aid in dict.fromkeys(
+                [e["area"] for e in sched] + [r["area"] for r in rows])],
+            "schedule": [{"id": e["id"], "time": e.get("time"), "end": e.get("end"), "title": e.get("title"),
                           "area": name.get(e.get("area"), ""), "note": e.get("note") or "",
                           "flags": (e.get("flag") or {}).get("text", "")} for e in sched],
             "heads_up": [f"All day: {t}" for t in all_day],
             "replies": []}
         for r in rows:
-            item = {"id": r["id"], "who": r["who"], "area": name.get(r["area"], ""), "subject": r["text"],
+            item = {"id": r["id"], "who": r["who"], "area": name.get(r["area"], ""), "source": r.get("source", ""),
+                    "subject": r["text"],
                     "reasons": r["reasons"], "age": r["age"], "suggest": r["id"] in bodies}
             if r["id"] in bodies:
                 item["messages"] = bodies[r["id"]]
             data["replies"].append(item)
-        return data, list(bodies)  # row order (VIP first, then oldest)
+        ask = writer.make_ask([a["id"] for a in data["areas"]], [r["id"] for r in data["replies"]] +
+                              [e["id"] for e in data["schedule"]], self.store.active_prompts(wcfg), fmt)
+        return data, list(bodies), ask  # ids in row order (VIP first, then oldest)
 
     def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
         t0 = self.clock()
         provider, used, note = wcfg["provider"], wcfg["provider"], ""
         result, error, ids = None, None, set()
         try:
-            data, ids = self._writer_input(wcfg, brief, refs, events, areas, settings, tz, day, client)
+            data, ids, ask = self._writer_input(wcfg, brief, refs, events, areas, settings, tz, day, client)
             payload = writer.build_payload(data)
             if provider == "local":
                 loc = wcfg["local"]
                 opts = writer.local_options(loc)
                 try:
-                    local_payload = writer.fit_local(data, ids, opts, self.log)
+                    local_payload = writer.fit_local(data, ids, opts, self.log, ask=ask)
                     result = writer.local_write(loc["base_url"], loc["model"], loc["api_key"], local_payload, ids,
-                                                opts=opts, log=self.log)
+                                                opts=opts, log=self.log, ask=ask)
                 except writer.WriterError as e:
                     if not (wcfg["fallback_to_claude"] and wcfg["claude"]["api_key"]):
                         raise
                     used, note = "claude", "local failed"
                     try:
-                        result = self._claude(wcfg, payload, ids)
+                        result = self._claude(wcfg, payload, ids, ask)
                     except writer.Refused:
                         raise
                     except writer.WriterError as e2:
                         raise writer.WriterError(f"{e} Claude didn't run either: {e2}") from None
             else:
-                result = self._claude(wcfg, payload, ids)
+                result = self._claude(wcfg, payload, ids, ask)
         except writer.Refused as e:
             error = str(e)
             note = f"refused ({e.category or 'no category'})"
@@ -287,7 +381,8 @@ class Syncer:
             note = f"unexpected {type(e).__name__}"
         at = dt.datetime.fromtimestamp(self.clock(), tz).isoformat(timespec="seconds")
         if result:
-            brief["summary"] = {"text": result["summary"], "by": result["by"], "at": at}
+            brief["summary"] = {"text": result["summary"], "by": result["by"], "at": at,
+                                "areas": result.get("areas") or {}, "top": result.get("top") or []}
             flagged = set(result.get("flagged") or ())
             for r in brief["replies"]:
                 if r["id"] in result["replies"]:
@@ -314,5 +409,5 @@ class Syncer:
                     if result else "")
                  + (f", {note}" if note else "") + f", {self.clock() - t0:.1f}s")
 
-    def _claude(self, wcfg, payload, ids):
-        return writer.claude_write(wcfg["claude"]["api_key"], wcfg["claude"]["model"], payload, ids)
+    def _claude(self, wcfg, payload, ids, ask=None):
+        return writer.claude_write(wcfg["claude"]["api_key"], wcfg["claude"]["model"], payload, ids, ask=ask)

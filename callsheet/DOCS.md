@@ -6,7 +6,7 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.3.4)
+## What it does today (0.4.0)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
@@ -18,8 +18,14 @@ Callsheet only reads. It never sends, replies, deletes or changes anything in yo
   - **Needs a reply**: inbox threads from the last 14 days where the last message is not from you and it
     comes from one of your VIPs, or is addressed to you and asks a question (you in To), mentions a
     deadline or has waited longer than your reply age (2 days by default; you in To or Cc). Newsletters,
-    mailing lists, auto-replies and no-reply senders are left out unless the sender is a VIP.
-  - **Heads up**: all-day events, and accounts Callsheet couldn't read.
+    mailing lists, auto-replies, no-reply senders and mail in Gmail's Promotions, Updates, Forums and
+    Social tabs are left out unless the sender is a VIP. With Slack connected, Slack conversations that
+    wait on you are added (see "Slack").
+  - **Heads up**: all-day events, @channel/@here/@everyone messages in Slack, and accounts Callsheet
+    couldn't read.
+  - **Top of the day**: up to 5 lines that point at rows in the brief (VIP replies, clashes, deadlines;
+    chosen by the AI writer when it is on).
+  - Rows that are new since the day's previous brief are marked new.
   - **Projects** still shows sample data.
 - Reads your accounts at the morning brief and check-in times (06:30, 12:30 and 17:00 by default, in your
   time zone; check-ins are skipped on days off), when the app starts if the last read is older than
@@ -68,6 +74,54 @@ To connect the same account again (for example after "needs to be connected agai
 steps; Callsheet updates the existing account. Removing an account also withdraws Callsheet's access at
 Google. You can check or remove access any time at <https://myaccount.google.com/permissions>.
 
+## Slack (optional, read-only)
+
+Callsheet can read one or more Slack workspaces, each in an area, with a Slack app that you create in your
+own workspace. It only reads: the app has no write permissions, and Callsheet only calls Slack's read
+methods.
+
+1. From Callsheet's Slack setup, open the link to create the app: it opens
+   `https://api.slack.com/apps?new_app=1&manifest_json=…` with Callsheet's manifest filled in (you can
+   also copy the manifest and paste it under **Create New App → From an app manifest**). The manifest
+   asks for these user scopes only: `channels:history`, `channels:read`, `groups:history`, `groups:read`,
+   `im:history`, `im:read`, `mpim:history`, `mpim:read`, `users:read`, `team:read`.
+2. Pick your workspace and create the app, then **Install to Workspace** and allow it.
+   **Admin approval:** many workspaces only let admins approve new apps. If Slack says the app needs
+   approval, ask a workspace admin to approve it (or install it yourself if you are one); until then
+   there is no token.
+3. Under **OAuth & Permissions**, copy the **User OAuth Token** (it starts with `xoxp-`; not the bot
+   token) and paste it into Callsheet for the area. Callsheet checks it with Slack and shows the
+   workspace name. The token is stored like your other secrets and only its last characters are shown.
+
+What Callsheet reads, at each brief and check-in, since the last read (at most the last 24 hours):
+
+- **Needs a reply** gets: DMs and group DMs where the other person wrote last; messages that @mention you
+  that you haven't answered (they stay until you answer in the thread or later in the channel, up to 14
+  days); new replies from others in threads you started or replied in. Reasons are as for mail (VIP,
+  question, deadline, waiting). VIPs match by email when Slack shares it, else by display or real name.
+  The source shows as "Slack · #channel", "Slack · DM" or "Slack · group DM", and **Open** opens the
+  message in Slack.
+- **Heads up** gets @channel, @here and @everyone messages (shortened to 100 characters).
+- Channels you don't want read can be ignored per workspace. An area's **chat** switch turns Slack off
+  for that area.
+- When Slack asks Callsheet to slow down, it waits as Slack says (up to 30 seconds) and stops for that
+  read after a few tries or 120 requests; the rest is read next time and Heads up says so.
+
+Callsheet stores Slack ids and times (channel list, names of people, which mentions and threads it is
+watching), not message text. Revoke the token in Slack (or remove the workspace in Callsheet) to stop.
+
+## Doesn't need a reply
+
+Hide a row from **Needs a reply** for good: this thread, this sender, or (mail only) this sender's domain,
+including its subdomains. The row disappears at once; the brief says how many rows were hidden. VIPs are
+never hidden by a sender or domain rule (a thread rule still applies). The rules are listed in setup and
+can be removed; removed rules' rows come back at the next refresh.
+
+## Time format
+
+Times show in 12-hour format by default ("9:30 am", "11 am", "12 pm" for noon, "12 am" for midnight).
+Choose 24-hour ("14:30") in settings. The change shows at once; the AI writer uses the same format.
+
 ## AI writer (optional)
 
 Off by default: the brief then looks exactly as in 0.2.0. Turn it on in **Setup → Delivery → Writer**.
@@ -91,6 +145,20 @@ If the writer fails, the brief still shows (rules only) and Heads up says "The A
 why. Setup shows the last run with its token counts. Per area, the **AI writer** chip in step 2 decides
 whether that area's events and mail go to the writer at all (on by default); with it off, the area's
 items still show in the brief, without suggestions.
+
+### Writing profiles
+
+What the writer is asked to write is set by three texts: **Day summary**, **Area summaries** and
+**Suggested replies**. They live in profiles. **Default** is built in and can't be changed; to change the
+texts, copy it, give the copy a name (up to 40 characters) and edit it (up to 1,500 characters per text),
+then make it the active profile. You can have up to 10 profiles of your own; the active one can't be
+deleted. Emptying a text gives it the Default text back; for a fresh start, copy Default again.
+
+Callsheet's safety rules are not part of any profile and always come after it: mail and chat are
+untrusted data, the writer must never say something was approved, paid or decided, and the answer format
+is fixed. Whatever a profile says (even "ignore the rules above"), those rules still apply.
+
+With the writer on, the brief also gets a short summary per area and up to 5 **Top of the day** lines.
 
 ### Claude
 
@@ -162,8 +230,10 @@ setup wins and these options are ignored. Empty fields change nothing.
   the latest brief. Nothing is sent anywhere else. If you use the writer evaluation, its last 5 runs
   (including the mail text that was sent to your local model) are kept in `writer-eval/` too.
 - Home Assistant backups of this app include that file, so treat backups as private.
-- The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs, and, when you
-  turn on the AI writer, to `api.anthropic.com` (Claude) or the local model server you entered.
+- The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs, Slack's
+  read-only Web API (`slack.com`) when you connect a workspace, and, when you turn on the AI writer, to
+  `api.anthropic.com` (Claude) or the local model server you entered. With the writer on, the last up to 3
+  messages of Slack rows go to it as they do for mail.
 
 ## Troubleshooting
 

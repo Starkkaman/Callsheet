@@ -65,7 +65,7 @@ class UpgradeTest(unittest.TestCase):
         self.addCleanup(s.close)
         self.assertEqual(dump(self.dir / store.DB_NAME), self.before)   # opening rewrites nothing
         settings, areas, accounts, vips, client = self.public
-        self.assertEqual(s.settings(), settings)
+        self.assertEqual(s.settings(), dict(settings, time_format="12h"))  # 0.4.0 default
         self.assertEqual(s.accounts(), accounts)
         self.assertEqual(s.vips(), vips)
         self.assertEqual(s.google_client(), client)

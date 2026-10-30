@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0
+
+Server and API for this release; the page that uses them follows.
+
+- **Slack (read-only).** Connect a Slack workspace per area with a user token (`xoxp-`) from a Slack app
+  you create from Callsheet's manifest (read scopes only, no write scopes). Callsheet calls only Slack's
+  read methods (auth.test, team.info, users.info, users.list, conversations.list/history/replies/info),
+  waits when Slack asks it to slow down, and caps the requests per read. **Needs a reply** gains Slack rows:
+  DMs and group DMs where the other person spoke last, @mentions you haven't answered, and new replies in
+  threads you're in, with the same reasons as mail and VIPs matched by email (else by name). @channel,
+  @here and @everyone go to Heads up. Channels can be ignored. Areas get a **chat** read switch.
+- **Smarter writer.** A summary per area and up to 5 **Top of the day** items that point at rows in the
+  brief; the day summary is 3–6 sentences. Without the writer, Top of the day comes from the rules (VIPs,
+  clashes, deadlines). Slack rows go to the writer with their last 3 messages.
+- **Writing profiles.** The writer's three instruction texts (day summary, area summaries, suggested
+  replies) live in named profiles: a read-only Default plus up to 10 of your own (copy, rename, edit,
+  delete). The safety rules are fixed and always come last, whatever a profile says.
+- **Doesn't need a reply.** Gmail's Promotions, Updates, Forums and Social tabs no longer give reply rows
+  (VIPs still do). Hide a thread, a sender or a mail domain from Needs a reply; the brief says how many
+  rows are hidden, and rules can be removed again.
+- **New since.** Rows that weren't in the day's earlier brief are marked new, and the brief says when the
+  previous one was written.
+- **Time format.** Times show as 12-hour ("9:30 am", "12 pm") by default, or 24-hour ("14:30") in
+  settings. The writer uses the same format.
+
 ## 0.3.4
 
 - "Open in Gmail" links open the message directly in the right account, in Gmail's own link format

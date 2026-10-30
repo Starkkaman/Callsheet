@@ -293,15 +293,20 @@ class SyncTest(Base):
         self.assertEqual(b["sections"], {"schedule": "live", "replies": "live", "headsup": "live",
                                          "projects": "sample"})
         self.assertEqual(b["areas"], [{"id": "personal", "name": "Personal", "colour": 1}])
-        self.assertRegex(b["written_at"], r"^\d\d:\d\d$")
-        self.assertRegex(b["next_checkin"], r"^\d\d:\d\d$")
+        self.assertRegex(b["written_at"], r"^\d{1,2}(:\d\d)? [ap]m$")  # 12-hour clock by default (0.4.0)
+        self.assertRegex(b["next_checkin"], r"^\d{1,2}(:\d\d)? [ap]m$")
         self.assertEqual(b["date"], dt.datetime.now(UTC).date().isoformat())
         rows = {r["title"]: r for r in b["schedule"]}
         self.assertEqual(list(rows), ["Stand-up", "Roadmap review", "Vendor call"])
         self.assertTrue(rows["Stand-up"]["first"])
-        self.assertEqual(rows["Roadmap review"]["flag"]["text"], "Not accepted yet · Overlaps 11:30 Vendor call")
+        self.assertEqual(rows["Roadmap review"]["flag"]["text"], "Not accepted yet · Overlaps 11:30 am Vendor call")
         self.assertEqual(rows["Roadmap review"]["note"], "Room 4")
-        self.assertEqual(rows["Vendor call"]["flag"]["text"], "Overlaps 11:00 Roadmap review")
+        self.assertEqual(rows["Vendor call"]["flag"]["text"], "Overlaps 11 am Roadmap review")
+        self.assertEqual((rows["Vendor call"]["start_hhmm"], rows["Vendor call"]["time"]), ("11:30", "11:30 am"))
+        self.ok("PATCH", "/api/settings", {"time_format": "24h"})  # the cached brief is worded again, no sync
+        rows24 = {r["title"]: r for r in self.ok("GET", "/api/brief")["schedule"]}
+        self.assertEqual(rows24["Roadmap review"]["flag"]["text"], "Not accepted yet · Overlaps 11:30 Vendor call")
+        self.assertEqual(rows24["Vendor call"]["time"], "11:30")
         self.assertTrue(rows["Vendor call"]["clash"])
         self.assertEqual(b["heads_up"], ["All day: Holiday"])
         who = [r["who"] for r in b["replies"]]

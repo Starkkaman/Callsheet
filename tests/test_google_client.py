@@ -75,11 +75,11 @@ class SourceTest(unittest.TestCase):
 
     SDK = re.compile(r"^\s*(?:import|from)\s+(anthropic|openai|requests|httpx)\b", re.M)
 
-    def test_only_google_py_and_writer_py_open_connections(self):
+    def test_only_google_writer_and_slack_open_connections(self):
         for f in sorted(APP.glob("*.py")):
             src = f.read_text(encoding="utf-8")
             hits = self.NET.findall(src)
-            if f.name in ("google.py", "writer.py"):
+            if f.name in ("google.py", "writer.py", "slack.py"):
                 self.assertEqual(hits, ["urllib.request"], f.name)
             else:
                 self.assertEqual(hits, [], f.name)

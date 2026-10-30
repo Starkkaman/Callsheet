@@ -200,7 +200,7 @@ class ComposeTest(unittest.TestCase):
                                                                  "reads": {}, "fixed": True}], None, True, at(7))
         self.assertEqual((b["sample"], b["sections"]["schedule"], b["sections"]["projects"]), (False, "live", "sample"))
         self.assertEqual((b["schedule"], b["replies"], b["projects"]), ([], [], [1]))
-        self.assertEqual((b["next_checkin"], b["date_long"], b["date_short"]), ("12:30", "Wednesday 28 Oct", "Wed 28 Oct"))
+        self.assertEqual((b["next_checkin"], b["date_long"], b["date_short"]), ("12:30 pm", "Wednesday 28 Oct", "Wed 28 Oct"))
         self.assertEqual(b["areas"], [{"id": "personal", "name": "P", "colour": 1}])
 
 
