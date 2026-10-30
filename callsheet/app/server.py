@@ -11,6 +11,8 @@ body limit, and JSON errors. Nothing here sends mail or messages; the only outbo
 read-only Google client in google.py.
 """
 import argparse
+import hashlib
+import html
 import http.server
 import ipaddress
 import json
@@ -29,6 +31,13 @@ STATIC = HERE / "static"
 SAMPLE = api.SAMPLE
 MAX_BODY = 64 * 1024
 MUTATING = ("POST", "PATCH", "DELETE")
+VERSION = api.APP_VERSION
+
+# The page and its two assets: served with a strong ETag (content hash) and Cache-Control: no-cache.
+# index.html is a template: {{version}} becomes the app version, so the page asks for app.css?v=<version>
+# and app.js?v=<version> (a new URL after every update, even if a browser kept the old file) and carries
+# <meta name="callsheet-version"> for the page's own version check (app.js compares it with api/state).
+PAGE_FILES = {"/": "index.html", "/index.html": "index.html", "/app.css": "app.css", "/app.js": "app.js"}
 
 # The Supervisor's ingress proxy. Everything else is refused (HA ingress docs).
 # Loopback stays allowed for local testing and in-container health checks.
@@ -95,12 +104,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return False  # fall through to static files
 
     def do_GET(self):
-        if self._route(head=False) is False:
+        if self._route(head=False) is False and not self._page_file(head=False):
             super().do_GET()
 
     def do_HEAD(self):
-        if self._route(head=True) is False:
+        if self._route(head=True) is False and not self._page_file(head=True):
             super().do_HEAD()
+
+    def _page_file(self, head):
+        """index.html, app.css, app.js (the query string, e.g. ?v=0.3.4, is ignored when finding the file).
+        Returns False for any other path."""
+        name = PAGE_FILES.get(urllib.parse.urlsplit(self.path).path)
+        if name is None:
+            return False
+        try:
+            body = (STATIC / name).read_bytes()
+        except OSError:
+            self.send_error(404, "Not found")
+            return True
+        if name == "index.html":
+            body = body.replace(b"{{version}}", html.escape(VERSION).encode())
+        etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        if self._etag_matches(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return True
+        self.send_response(200)
+        self.send_header("Content-Type", TYPES[pathlib.PurePath(name).suffix])
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.end_headers()
+        if not head:
+            self.wfile.write(body)
+        return True
+
+    def _etag_matches(self, etag):
+        """If-None-Match uses the weak comparison (RFC 9110 13.1.2): W/ is ignored."""
+        inm = self.headers.get("If-None-Match")
+        if not inm:
+            return False
+        tags = [t.strip() for t in inm.split(",")]
+        return "*" in tags or etag in (t[2:] if t.startswith("W/") else t for t in tags)
 
     def _mutate(self):
         if not client_allowed(self.allow, self.client_address[0]):

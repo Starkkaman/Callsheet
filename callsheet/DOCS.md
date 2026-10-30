@@ -6,7 +6,7 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.3.3)
+## What it does today (0.3.4)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
@@ -168,6 +168,8 @@ setup wins and these options are ignored. Empty fields change nothing.
 ## Troubleshooting
 
 - The page is blank or unstyled: restart the app and reload the page. Check the **Log** tab.
+- "Callsheet was updated. Reload to see the new version.": the page was opened before an update. Click
+  **Reload**. The version that runs is shown at the bottom of Setup.
 - "That sign-in code was already used or expired": start the connection again and paste the new address.
 - "Tick both Gmail and Calendar on Google's consent screen": start again and tick both boxes.
 - An account says it needs to be connected again: Google ended the sign-in (password change, access

@@ -443,9 +443,23 @@
     if (LOOKS.indexOf(st.look) >= 0 && st.look !== app.dataset.look) setLook(st.look, true);
     if (MODES.indexOf(st.mode) >= 0 && st.mode !== app.dataset.mode) setMode(st.mode, true);
   }
+  /* ---------- version check: this page's version (the meta that server.py fills in) against the server's ---------- */
+  var PAGE_VERSION = (function () {
+    var m = document.querySelector('meta[name="callsheet-version"]');
+    return m ? m.getAttribute('content') || '' : '';
+  })();
+  var updateNote = document.getElementById('update-note');
+  function checkVersion(v) {
+    if (!updateNote || typeof v !== 'string' || !v || v === PAGE_VERSION || !updateNote.hidden) return;
+    updateNote.textContent = '';
+    add(updateNote, [h('p', null, 'Callsheet was updated. Reload to see the new version.'),
+      btn('btn primary', 'Reload', null, function () { location.reload(); })]);
+    updateNote.hidden = false;
+  }
   function loadState() {
     return api('GET', 'api/state').then(function (s) {
       S = s || {};
+      checkVersion(S.version);
       S.areas = S.areas || []; S.vips = S.vips || []; S.settings = S.settings || {};
       S.google_client = S.google_client || {}; S.last_sync = S.last_sync || {};
       applyServerLook();
@@ -508,7 +522,8 @@
         h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Step'), h('div', { class: 'disp' }, n + ' / 6')])]),
       rail, prail,
       h('section', { class: 'step', 'aria-labelledby': 'wiz-title' }, [h('p', { class: 'err', id: 'wiz-err', role: 'alert' }), body]),
-      wnav]);
+      wnav,
+      h('p', { class: 'ver' }, 'Callsheet ' + (S.version || PAGE_VERSION))]);
     main.textContent = '';
     add(main, sheet);
     press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);

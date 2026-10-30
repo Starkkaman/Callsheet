@@ -6,6 +6,11 @@
   (`/mail/u/?authuser=<email>#all/thread-f:<id>|msg-f:<id>`), so they work when several Google accounts
   are signed in to one browser (they used to show Gmail's "account temporarily unavailable" page).
   This is the 0.3.1 work: 0.3.1 was never released on its own and ships here for the first time.
+- After an update the page no longer keeps the old version in Home Assistant's frame: the page asks for
+  `app.css` and `app.js` with the app version in the address, and the server sends a content hash (ETag)
+  so the browser checks each file instead of reusing an old copy.
+- If the page is still older than the running app, a line at the top says "Callsheet was updated. Reload
+  to see the new version." with a **Reload** button. Setup shows the version at the bottom.
 
 ## 0.3.3
 

@@ -5,13 +5,13 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.3, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.3.4, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`).
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
 - `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, AI writer (Claude, local model, app options), data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
-- `callsheet/app/server.py`: stdlib web server (thin): static files, `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors (409 for conflicts), attachment downloads; refuses to start if the database can't be opened.
-- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state, Google client, areas, accounts, VIPs, settings, sync, writer, writer evaluation); seeds the local writer from `options.json`.
+- `callsheet/app/server.py`: stdlib web server (thin): static files (index.html filled in with the app version, `?v=` asset URLs, ETag and 304 for the page, app.css and app.js), `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors (409 for conflicts), attachment downloads; refuses to start if the database can't be opened.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer, writer evaluation); seeds the local writer from `options.json`.
 - `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
 - `callsheet/app/writer.py`: the AI writer: minimised payload, prompt and per-request output schema (replies keyed by row id), HTML to text, quoted history and signature stripping, decision/payment post-check, local options (thinking, max tokens, context fit, timeout, retry while loading), Claude via the `anthropic` SDK (lazy import), local OpenAI-compatible server via urllib (`/models`, `/chat/completions` only), plain-word errors.
@@ -22,12 +22,12 @@
 - `callsheet/app/sync.py`: one sync over all accounts (token refresh, per-account errors; the read path is shared with the writer evaluation), caches the brief, then runs the AI writer when on (summary, suggestions, or a Heads up line); counts-only log lines.
 - `callsheet/app/scheduler.py`: background thread: sync at call times in the configured time zone, and at start-up when stale.
 - `callsheet/app/sample_brief.json`: sample Daily Brief data (v3 example, `"sample": true`, all `sections` "sample").
-- `callsheet/app/static/index.html`: page shell: header (wordmark, sample tag, look picker) and main.
+- `callsheet/app/static/index.html`: page shell (a template: `{{version}}` in the version meta and the asset URLs): header (wordmark, sample tag, look picker), the update notice and main.
 - `callsheet/app/static/app.css`: theme tokens (from themes.css) + Daily Brief styles, phone under 700px.
-- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block; the Writer evaluation page (#eval).
+- `callsheet/app/static/app.js`: fetches `api/brief`, renders the brief (summary band, Suggested reply with Copy), look/mode, area filter, tabs; setup steps incl. the Writer block; the Writer evaluation page (#eval); the version check (page meta against `api/state`) and its Reload notice.
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin).
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
-- `tests/test_server.py`: stdlib unittest: routes, headers, 403 for other clients, relative and offline URLs.
+- `tests/test_server.py`: stdlib unittest: routes, headers, versioned assets and ETag/304, app version equals config.yaml, 403 for other clients, relative and offline URLs.
 - `tests/fake_google.py`: fake Google HTTP server for tests (token/revoke with PKCE checks, Gmail and Calendar reads; records requests).
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.

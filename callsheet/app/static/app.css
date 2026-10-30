@@ -392,6 +392,7 @@ input[type=checkbox]{width:20px;height:20px;margin:0;flex:none;accent-color:var(
 .banner{max-width:1180px;margin:0 0 16px;display:flex;gap:10px 20px;align-items:center;flex-wrap:wrap;padding:12px 16px;background:var(--panel);color:var(--on-panel);border:var(--frame-w) solid var(--rule);border-radius:var(--radius)}
 .banner p{margin:0;font-weight:700;font-size:var(--fs-md)}
 .banner .btn.primary{background:var(--accent);color:var(--on-accent)}
+.banner.update{margin:16px 28px 0}
 .sec-h .tag,.callout .h .tag{font-family:var(--font-body);font-size:var(--fs-xs);line-height:1.35;align-self:center}
 .callout .h .tag{margin-left:8px;vertical-align:middle}
 .callout p{margin:0;padding:12px 18px;display:flex;gap:12px;align-items:center;font-size:var(--fs-md)}
@@ -548,10 +549,12 @@ button.opt{width:100%;text-align:left}
 .syncst{font-size:var(--fs-md);margin:14px 0 4px}
 .syncerr{color:var(--alert);font-size:var(--fs-sm);margin:0;padding-left:1.2em}
 .wnav{display:flex;justify-content:flex-end;gap:10px;padding:20px 26px 26px;border-top:var(--rule-mid) solid var(--rule);margin-top:18px}
+.wiz .ver{margin:0;padding:0 26px 16px;font-size:var(--fs-xs);color:var(--muted)}
 
 /* ================= setup: phone ================= */
 @media (max-width:700px){
 .banner{margin:12px 14px 0}
+.banner.update{margin:12px 14px 0}
 .wiz .mast.two{grid-template-columns:1fr}
 .wiz .mast .t{padding:18px 16px}
 .wiz .mast .box{padding:10px 16px;border-left:0;display:flex;align-items:baseline;gap:12px}
@@ -572,6 +575,7 @@ button.opt{width:100%;text-align:left}
 .review .sum{grid-column:2/3}
 .review .tbtn{grid-column:3;grid-row:1}
 .wnav{display:grid;grid-template-columns:1fr 1fr;gap:0;padding:0;margin-top:22px;border-top:0}
+.wiz .ver{padding:12px 16px 16px}
 .wnav .btn{padding:16px 10px;text-align:center;border-radius:0}
 .wnav .btn.primary{grid-column:2}
 .wnav .btn:only-child{grid-column:1/-1}

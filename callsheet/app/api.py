@@ -21,6 +21,9 @@ from sync import Syncer
 
 HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
+# The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
+# kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
+APP_VERSION = "0.3.4"
 
 
 class MethodNotAllowed(Exception):
@@ -133,7 +136,7 @@ class App:
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
-                "eval": self.store.eval_settings(),
+                "eval": self.store.eval_settings(), "version": APP_VERSION,
                 "setup_done": self.store.setup_done() or (client["configured"] and bool(accounts))}
 
     # --- Google client ----------------------------------------------------

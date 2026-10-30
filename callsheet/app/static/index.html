@@ -5,8 +5,10 @@
 <title>Daily Brief · Callsheet</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<!-- Every URL in this app is relative: Home Assistant Ingress serves it under /api/hassio_ingress/<token>/ -->
-<link rel="stylesheet" href="app.css">
+<meta name="callsheet-version" content="{{version}}">
+<!-- Every URL in this app is relative: Home Assistant Ingress serves it under /api/hassio_ingress/<token>/.
+     server.py fills in the app version (?v= and the meta): new asset URLs after every update. -->
+<link rel="stylesheet" href="app.css?v={{version}}">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -40,11 +42,13 @@
   </div>
 </header>
 
+<div class="banner update" id="update-note" role="status" hidden></div>
+
 <main class="main" id="main">
   <p class="status" id="status" role="status">Loading…</p>
 </main>
 
 </div>
-<script src="app.js"></script>
+<script src="app.js?v={{version}}"></script>
 </body>
 </html>
