@@ -40,7 +40,9 @@ run with Playwright outside the repo, loading the page through a prefix-strippin
 `/api/hassio_ingress/<token>/`.
 
 ## Packaging
-- `callsheet/config.yaml`: bump `version` and add a `CHANGELOG.md` entry for every release.
+- `callsheet/config.yaml`: bump `version` and add a `CHANGELOG.md` entry for every release. Bump
+  `APP_VERSION` in `callsheet/app/api.py` to the same value (it drives the `?v=` asset URLs and the
+  "Callsheet was updated" notice; a test fails if the two differ).
 - `callsheet/Dockerfile`: pinned `ghcr.io/home-assistant/base-python` tag (see home-assistant/docker-base
   README); no build.yaml (deprecated). `run.sh` must keep LF line endings.
 - There is no Docker in the dev container: the image is built by the Supervisor on install.
