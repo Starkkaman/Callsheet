@@ -66,8 +66,8 @@ class SchemaTest(unittest.TestCase):
         for a in (None, ask):
             text = writer.local_system(ids, a)
             flat = " ".join(text.split())
-            for part in ("Lead with the oldest wait (with its day count), then the clashes in time order, then "
-                         "what's due when.",  # 0.4.1: the V3 texts
+            for part in ("Lead with what needs the owner today: the oldest wait (with its day count), then the "
+                         "clashes in time order, then what's due when.",  # 0.4.1: the V3 texts
                          "Answer each question or request in the thread directly and specifically:",
                          "Acknowledge what the sender said.",
                          "keep them short and concrete.",

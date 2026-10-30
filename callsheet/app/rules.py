@@ -187,10 +187,10 @@ def overlaps(a, b):
 
 def unanswered(msgs):
     """msgs: [(time, from_owner)] of one thread or chat in time order. The messages by others after the owner's
-    last message: {"first": time of the first of them (None when there are none), "chases": how many}."""
+    last message: {"first": time of the first of them (None when there are none), "count": how many}."""
     last_mine = max((i for i, (_, mine) in enumerate(msgs) if mine), default=-1)
     after = [t for t, mine in msgs[last_mine + 1:] if not mine]
-    return {"first": after[0] if after else None, "chases": len(after)}
+    return {"first": after[0] if after else None, "count": len(after)}
 
 
 def build_schedule(items, tz, day, fmt="24h"):
@@ -457,7 +457,7 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
         c = cands.get(key)
         if c is None or _f(msg["ts"]) >= _f(c["msg"]["ts"]):
             cands[key] = {"ch": ch, "msg": msg, "ctx": ctx, "root": root,
-                          "facts": facts or {"first": _f(msg["ts"]), "chases": 1},
+                          "facts": facts or {"first": _f(msg["ts"]), "count": 1},
                           "mentioned": mentioned or bool(c and c["mentioned"]),
                           "in_thread": in_thread or bool(c and c["in_thread"])}
         else:

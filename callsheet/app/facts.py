@@ -1,5 +1,6 @@
 """Facts for the writer (0.4.1): numbers the rules compute from the owner's mail and calendar, so the writer
-only words them (waiting time, chases, clashes, what's due today). Pure: no network, no AI.
+only words them (waiting time, unanswered messages and follow-ups, clashes, what's due today). Pure: no network,
+no AI.
 
 The facts go to the writer in their own <facts> block after the <data> block (writer.build_payload), built only
 here; every text from mail or calendars in them is clipped, and build_payload escapes < and > as in <data>.
@@ -164,10 +165,12 @@ def _display_date(ts, tz, fmt):
 def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
     """The facts block's content.
     replies: [{id, who, text (subject or quoted message), vip, facts: {first (epoch s of the first unanswered
-    message, or None), chases, last (epoch s of the last message), text (where to look for a deadline)}}] in
-    brief order; schedule: writer-input rows (clashes()); day: the brief's date; tz: the owner's time zone.
+    message, or None), count (messages by others since the owner's last one), last (epoch s of the last message),
+    text (where to look for a deadline)}}] in brief order; schedule: writer-input rows (clashes()); day: the
+    brief's date; tz: the owner's time zone. Each row gets unanswered_messages = count and follow_ups = count - 1.
     waiting_days = calendar days in the owner's time zone from the first unanswered message to the brief's
-    date; overdue = rows waiting more than reply_age_days (0 = off, as for the "Waiting" reason)."""
+    date; overdue = rows waiting more than reply_age_days (0 = no age rule, so overdue
+    is 0, as for the "Waiting" reason)."""
     rows, today, oldest = {}, [], None
     vip = overdue = 0
     for r in replies:
@@ -177,7 +180,9 @@ def build(replies, schedule, day, tz, fmt="24h", reply_age_days=0):
             continue
         first = dt.datetime.fromtimestamp(f["first"], tz)
         waiting = max(0, (day - first.date()).days)
-        row = {"waiting_days": waiting, "chases": int(f.get("chases") or 0),
+        n = int(f.get("count") or 0)
+        # unanswered_messages counts the first one too; follow_ups = the times they chased (one message = 0)
+        row = {"waiting_days": waiting, "unanswered_messages": n, "follow_ups": max(0, n - 1),
                "first_unanswered": _display_date(f["first"], tz, fmt)}
         d = due(f.get("text"), dt.datetime.fromtimestamp(f.get("last") or f["first"], tz).date())
         if d:
