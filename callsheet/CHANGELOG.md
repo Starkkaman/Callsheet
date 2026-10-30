@@ -36,6 +36,14 @@ Server and API for this release; the page that uses them follows.
   **Done today**; **Undo** brings it back. A new message in that thread or chat brings it back by itself.
   Done marks are forgotten after 30 days.
 
+## 0.3.5
+
+- Local writer: more specific replies and day summaries, short placeholders like [day], each reply answers
+  only its own thread (tested on synthetic data: placeholders where needed 61/65 vs 44/65, invented values
+  2 vs 8; the safety rule still held). The Claude writer is unchanged.
+- Local model: the safety sentence is repeated after the answer schema, matching the tested prompt shape.
+- Local model: optional server slot (llama.cpp id_slot) in Advanced; off by default.
+
 ## 0.3.4
 
 - "Open in Gmail" links open the message directly in the right account, in Gmail's own link format

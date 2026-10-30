@@ -82,10 +82,12 @@ def config_body(cfg, model, payload_text, ids, opts):
     return body, o
 
 
-def reload_body(model):
-    return {"model": model, "stream": False, "max_tokens": RELOAD_MAX_TOKENS,
+def reload_body(model, opts=None):
+    """The tiny Gemma reload request; opts carries the owner's server slot, if any."""
+    body = {"model": model, "stream": False, "max_tokens": RELOAD_MAX_TOKENS,
             "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "user", "content": "Reply with OK."}]}
+    return writer.with_slot(body, opts or {})
 
 
 def fit_opts(opts):
@@ -323,7 +325,7 @@ class Evaluator:
             if qwen_ran:
                 self.job.update(step=STEPS, config=RELOAD)
                 try:
-                    writer._post(loc["base_url"], loc["api_key"], reload_body(es["gemma_model"]),
+                    writer._post(loc["base_url"], loc["api_key"], reload_body(es["gemma_model"], opts),
                                  {"timeout": opts["timeout"]}, self.log, self.monotonic)
                 except writer.WriterError as e:
                     info["errors"].append(f"{RELOAD}: {e}")

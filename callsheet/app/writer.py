@@ -39,9 +39,11 @@ LOCAL_TEST_TIMEOUT = 20   # Test connection is only GET /models
 # llama.cpp spent the answer's room on reasoning and big briefs came back empty (finish_reason length).
 LOCAL_DEFAULTS = {"thinking": False, "reasoning_budget": 1536, "max_tokens": 4096,
                   "context": 32768,   # the server's context per request (llama.cpp --ctx-size); only to warn
-                  "timeout": 300}     # a cold model load takes ~50 s on the owner's server, then the answer
+                  "timeout": 300,     # a cold model load takes ~50 s on the owner's server, then the answer
+                  "id_slot": None}    # llama.cpp slot to pin requests to (0..ID_SLOT_MAX); None = not sent
 LOCAL_LIMITS = {"reasoning_budget": (256, 32768), "max_tokens": (512, 32768), "context": (2048, 1048576),
                 "timeout": (30, 1800)}
+ID_SLOT_MAX = 63
 LOAD_WAIT = 10            # seconds before the one retry while the server loads the model
 CHARS_PER_TOKEN = 3.5     # rough prompt estimate
 FIT_CAPS = (2000, 1000, 500)  # per-message caps tried when the prompt doesn't fit the context
@@ -219,9 +221,16 @@ def compose_system(profile=None, ids=None, ask=None, schema=False):
 SYSTEM_PROMPT = compose_system()
 
 
+# The safety sentence again after the schema: the evaluated shape (0.3.5, the LLM eval's --rule) had it last.
+LOCAL_RULE = ("Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, and never "
+              "commit the owner to an amount, date or decision. Where a reply needs any of these, write a "
+              "[placeholder] for the owner to fill in.")
+
+
 def local_system(ids, ask=None):
-    """The local model's system message: the prompt plus this request's schema."""
-    return compose_system(None, ids, ask, schema=True)
+    """The local model's system message, in the evaluated shape: the composed prompt (safety block last), this
+    request's schema, then the safety sentence once more."""
+    return compose_system(None, ids, ask, schema=True) + "\n\n" + LOCAL_RULE
 
 
 class WriterError(Exception):
@@ -422,7 +431,17 @@ def local_options(cfg):
         v = cfg.get(k)
         if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
             out[k] = v
+    v = cfg.get("id_slot")
+    if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= ID_SLOT_MAX:
+        out["id_slot"] = v
     return out
+
+
+def with_slot(body, opts):
+    """Add "id_slot" to a request body when the owner set a server slot; without one the key is left out."""
+    if opts.get("id_slot") is not None:
+        body["id_slot"] = opts["id_slot"]
+    return body
 
 
 def local_max_tokens(opts):
@@ -813,7 +832,7 @@ def local_body(model, payload_text, ids, opts, ask=None):
                          {"role": "user", "content": payload_text}]}
     if opts["thinking"]:
         body["reasoning_budget_tokens"] = opts["reasoning_budget"]
-    return body
+    return with_slot(body, opts)
 
 
 def _json_in(text):

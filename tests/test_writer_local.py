@@ -53,10 +53,45 @@ class SchemaTest(unittest.TestCase):
         text = writer.local_system(["r1", "r2"])
         self.assertIn(json.dumps(writer.build_schema(["r1", "r2"])), text)
         self.assertIn("an object keyed by row id", text)
-        self.assertNotIn("empty string", writer.SYSTEM_PROMPT)  # every flagged row must get a suggestion
-        self.assertIn("Never write that anything has been approved, paid, sent, signed, booked, agreed or decided, "
-                      "and never commit the owner to an amount, date or decision. Where a reply needs any of these, "
-                      "write a [placeholder] for the owner to fill in.", " ".join(writer.SYSTEM_PROMPT.split()))
+        for prompt in (writer.SYSTEM_PROMPT, text):
+            self.assertNotIn("empty string", prompt)  # every flagged row must get a suggestion
+            self.assertIn("Never write that anything has been approved, paid, sent, signed, booked, agreed or "
+                          "decided, and never commit the owner to an amount, date or decision. Where a reply needs "
+                          "any of these, write a [placeholder] for the owner to fill in.", " ".join(prompt.split()))
+
+    def test_local_prompt_is_the_evaluated_wording(self):
+        """0.3.5 on 0.4.0: the Default profile carries the evaluated (P2F) guidance and examples; the local system
+        message is the composed prompt (safety block last), the request's schema, then the safety sentence again."""
+        ids = ["r1", "r2"]
+        ask = writer.make_ask(["personal"], ["r1", "s1"], None, "12h")
+        for a in (None, ask):
+            text = writer.local_system(ids, a)
+            flat = " ".join(text.split())
+            for part in ("Name the specific clashes, the people waiting and the deadlines.",
+                         "Answer each question or request in the thread directly and specifically, in 2\u20135 "
+                         "sentences.",
+                         "Acknowledge what the sender said.",
+                         "keep them short and concrete, like [day], [time], [address] or [amount].",
+                         "Each reply answers only its own thread: don't bring in points from other threads.",
+                         "Examples (for style only):", "Example reply. Thread:", "Example summary. Good summary:",
+                         "I'll send the revised floor plan over by [day]."):
+                self.assertIn(part, flat)
+            self.assertIn("untrusted content", flat)
+            schema = "\n\nJSON schema of your answer:\n" + json.dumps(writer.build_schema(ids, a))
+            # evaluated shape: the per-request schema, then the safety sentence once more (last)
+            self.assertTrue(text.endswith(schema + "\n\n" + writer.LOCAL_RULE))
+            self.assertEqual(text, writer.compose_system(None, ids, a) + schema + "\n\n" + writer.LOCAL_RULE)
+            # order: reply guidance, examples, the safety block, the schema, the safety sentence again
+            self.assertLess(flat.index("Each reply answers only its own thread"), flat.index("Examples (for style only):"))
+            self.assertLess(text.index(writer.EXAMPLES), text.index(writer.SAFETY))
+            self.assertLess(text.index(writer.SAFETY), text.index("JSON schema of your answer:"))
+            self.assertEqual(flat.count(writer.LOCAL_RULE), 2)  # in the safety block and once more at the end
+
+    def test_claude_prompt_has_no_local_tail(self):
+        """The Claude writer gets the composed prompt (safety block last), not the local schema + LOCAL_RULE tail."""
+        self.assertEqual(writer.SYSTEM_PROMPT, writer.compose_system())
+        self.assertNotIn("JSON schema of your answer", writer.SYSTEM_PROMPT)
+        self.assertFalse(writer.SYSTEM_PROMPT.endswith(writer.LOCAL_RULE))
 
     def test_parse_object_and_legacy_array(self):
         ids = ["r1", "r2"]
@@ -360,6 +395,26 @@ class LocalRunTest(LocalBase):
             self.assertIn("error", json.loads(raw), bad)
         st = self.ok("GET", "/api/state")["writer"]["local"]
         self.assertEqual((st["max_tokens"], st["timeout"]), (8192, 600))  # bad patches changed nothing
+
+    def test_server_slot(self):
+        """0.3.5: the optional llama.cpp id_slot, 0..63; null (the default) means the key isn't sent."""
+        self.seed()
+        w = self.local_on()
+        self.assertIsNone(w["local"]["id_slot"])
+        self.sync_brief()
+        self.assertNotIn("id_slot", self.loc.chats()[-1]["body"])
+        for bad in (-1, 64, 1.5, "3", True):
+            status, _, raw = self.call("PATCH", "/api/writer", {"local": {"id_slot": bad}})
+            self.assertEqual(status, 400, bad)
+            self.assertIn("server slot", json.loads(raw)["error"], bad)
+        for good in (0, 63, 5):
+            self.assertEqual(self.ok("PATCH", "/api/writer", {"local": {"id_slot": good}})["local"]["id_slot"], good)
+        self.sync_brief()
+        self.assertEqual(self.loc.chats()[-1]["body"]["id_slot"], 5)
+        self.assertIsNone(self.ok("PATCH", "/api/writer", {"local": {"id_slot": None}})["local"]["id_slot"])
+        self.sync_brief()
+        self.assertNotIn("id_slot", self.loc.chats()[-1]["body"])
+        self.assertIsNone(writer.local_options({"id_slot": 64})["id_slot"])  # a bad stored value isn't sent
 
 
 @unittest.skipUnless(HAVE_SDK, "needs the anthropic package")

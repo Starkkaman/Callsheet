@@ -103,7 +103,7 @@ class WriterSettingsTest(WriterBase):
         self.assertEqual({k: w[k] for k in ("provider", "claude", "local", "fallback_to_claude", "suggest_replies")}, {
             "provider": "off", "claude": {"key_hint": None, "model": "claude-opus-5-5"},
             "local": {"base_url": "", "model": "", "key_hint": None, "thinking": False, "reasoning_budget": 1536,
-                      "max_tokens": 4096, "context": 32768, "timeout": 300},
+                      "max_tokens": 4096, "context": 32768, "timeout": 300, "id_slot": None},
             "fallback_to_claude": False, "suggest_replies": True})
         self.assertEqual((w["active_profile"], [p["id"] for p in w["prompt_profiles"]], w["prompts"]),
                          ("default", ["default"], writer.DEFAULT_PROMPTS))
@@ -128,7 +128,7 @@ class WriterSettingsTest(WriterBase):
         self.assertEqual(w["claude"], {"key_hint": "…abcd", "model": "claude-haiku-5-5"})
         self.assertEqual(w["local"], {"base_url": "http://192.168.10.157:8080/v1", "model": "qwen3",
                                       "key_hint": "…5555", "thinking": False, "reasoning_budget": 1536,
-                                      "max_tokens": 4096, "context": 32768, "timeout": 300})
+                                      "max_tokens": 4096, "context": 32768, "timeout": 300, "id_slot": None})
         self.assertEqual((w["fallback_to_claude"], w["suggest_replies"]), (True, False))
         for bad in ({"provider": "gpt"}, {"claude": {"api_key": "hello"}}, {"claude": {"model": "gpt-4"}},
                     {"local": {"base_url": "ftp://x"}}, {"local": {"base_url": "http://u:p@host/v1"}},
@@ -179,6 +179,11 @@ class ClaudeWriterTest(WriterBase):
         self.assertEqual(body["output_config"]["format"]["schema"]["properties"]["replies"]["required"], ["r1", "r2"])
         self.assertIn("Never write that anything has been approved", body["system"])
         self.assertIn("untrusted content", body["system"])
+        # the composed prompt with the safety block last, without the local tail (schema + LOCAL_RULE, 0.3.5)
+        self.assertTrue(body["system"].startswith(writer.INTRO))
+        self.assertIn(writer.SAFETY, body["system"])
+        self.assertNotIn("JSON schema of your answer", body["system"])
+        self.assertFalse(body["system"].endswith(writer.LOCAL_RULE))
         for banned in ("thinking", "temperature", "top_p", "top_k", "budget_tokens", "betas", "tools"):
             self.assertNotIn(banned, body)
         # input: minimised, bodies for suggestions, all inside <data>

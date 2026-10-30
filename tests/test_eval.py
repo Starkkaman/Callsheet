@@ -216,6 +216,7 @@ class RunTest(EvalBase):
             self.assertEqual(body["response_format"], g0["response_format"])
         self.assertEqual(reload["max_tokens"], 8)
         self.assertEqual(len(reload["messages"]), 1)
+        self.assertFalse(any("id_slot" in c["body"] for c in chats))  # no server slot set: never sent
         self.assertTrue(all(c["headers"].get("authorization") == "Bearer " + LOCAL_KEY for c in chats))
         self.assertEqual(evaluate.config_body(evaluate.CONFIGS[1], Q, "p", [], writer.local_options({}))[1]["timeout"],
                          450)
@@ -330,6 +331,14 @@ class RunTest(EvalBase):
         self.assertEqual(runs, ["20200103T000000Z", "20200104T000000Z", "20200105T000000Z", "20200106T000000Z",
                                 run, "notes"])
         self.assertEqual(self.ok("GET", "/api/eval/status")["runs"][1]["status"], "unreadable")
+
+    def test_server_slot_in_every_eval_body(self):
+        opts = writer.local_options({"id_slot": 7})
+        for cfg in evaluate.CONFIGS:
+            self.assertEqual(evaluate.config_body(cfg, Q, "p", ["r1"], opts)[0]["id_slot"], 7, cfg["name"])
+            self.assertNotIn("id_slot", evaluate.config_body(cfg, Q, "p", ["r1"], writer.local_options({}))[0])
+        self.assertEqual(evaluate.reload_body(G, opts)["id_slot"], 7)
+        self.assertNotIn("id_slot", evaluate.reload_body(G, writer.local_options({})))
 
     def test_failures_are_plain_and_reload_still_runs(self):
         self.setup_all()

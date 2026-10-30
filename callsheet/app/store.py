@@ -630,7 +630,7 @@ class Store:
                 elif key == "local":
                     if not isinstance(val, dict):
                         raise InputError("local takes base_url, model, api_key, thinking, reasoning_budget, "
-                                         "max_tokens, context and timeout.")
+                                         "max_tokens, context, timeout and id_slot.")
                     for k, v in val.items():
                         if k == "base_url":
                             w["local"]["base_url"] = self._check_base_url(v)
@@ -645,6 +645,12 @@ class Store:
                             if not isinstance(v, bool):
                                 raise InputError("thinking must be true or false.")
                             w["local"]["thinking"] = v
+                        elif k == "id_slot":
+                            if v is not None and (isinstance(v, bool) or not isinstance(v, int)
+                                                  or not 0 <= v <= writer.ID_SLOT_MAX):
+                                raise InputError(f"The server slot must be a whole number from 0 to "
+                                                 f"{writer.ID_SLOT_MAX}, or empty.")
+                            w["local"]["id_slot"] = v
                         elif k in writer.LOCAL_LIMITS:
                             lo, hi = writer.LOCAL_LIMITS[k]
                             if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
