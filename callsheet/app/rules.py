@@ -317,6 +317,7 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     return {"who": _clip(who, 60), "area": area, "source": "Mail", "via": "mail", "text": text,
             "short": _clip(text, 40), "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
             "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s,
+            "_last": int(last.get("internalDate") or 0) / 1000,
             "_sup": {"source": "mail", "thread": str(thread.get("id", "")).lower(), "sender": addr,
                      "domain": domain or None,
                      "labels": {"thread": "Mail · " + _clip(subject or snippet or "this thread", 60),
@@ -503,7 +504,8 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
             "short": _clip(quote, 40),
             "age": f"{int(age_s // 86400)}d" if age_s >= 86400 else f"{max(1, int(age_s // 3600))}h",
             "reasons": reasons, "vip": vip, "action": "Open", "link": slack_link(domain, c["ch"], m["ts"], root),
-            "_age_s": age_s,
+            "_age_s": age_s, "_last": _f(m["ts"]),
+            "_done": f"slack:{ws.get('team_id', '')}:{c['ch']}:{root or m['ts']}",
             "_sup": {"source": "slack", "thread": thread_value, "sender": uid.lower(), "domain": None,
                      "labels": {"thread": source + (" thread" if root else " message"),
                                 "sender": f"{who(uid)} (Slack)"}},
@@ -562,6 +564,34 @@ def date_fields(day):
             "date_short": f"{day:%a} {day.day} {day:%b}"}
 
 
+def fallback_gist(row):
+    """A reply row's gist without the writer: its text (the subject, or the quoted message), no details."""
+    return {"summary": row.get("text") or "", "details": []}
+
+
+def with_gist(row, writer_on=True):
+    """The row with a gist: the writer's (only while the writer is on), else the fallback."""
+    g = row.get("gist")
+    if not (writer_on and isinstance(g, dict) and isinstance(g.get("summary"), str) and g["summary"].strip()
+            and isinstance(g.get("details"), list)):
+        g = fallback_gist(row)
+    return dict(row, gist=g)
+
+
+def done_list(rows, tz, fmt, writer_on=True):
+    """The brief's "Done today": [{id, who, summary, done_at (display)}], most recently done first."""
+    out = []
+    for r in rows or []:
+        try:
+            at = dt.datetime.fromisoformat(r["done_at"]).astimezone(tz)
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append((at, {"id": r.get("id"), "who": r.get("who") or "",
+                         "summary": with_gist(r, writer_on)["gist"]["summary"], "done_at": clock(at, fmt)}))
+    out.sort(key=lambda x: x[0], reverse=True)
+    return [x[1] for x in out]
+
+
 def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
     """sample: the bundled sample brief. cache: the brief saved by the last sync (or None).
     live: at least one account is connected. now: aware datetime. writer_on: show the AI writer's
@@ -571,6 +601,8 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
         brief = dict(sample)
         brief["sample"] = True
         brief["sections"] = dict(SECTIONS_SAMPLE)
+        brief["replies"] = [r if "gist" in r else with_gist(r) for r in brief.get("replies") or []]
+        brief.setdefault("done", [])
         return brief
     tz = tzinfo(settings)
     fmt = time_format(settings)
@@ -613,9 +645,11 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
         if not writer_on:
             brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
                                 for r in brief["replies"]]
+        brief["replies"] = [with_gist(r, writer_on) for r in brief["replies"]]
+        brief["done"] = done_list(cache.get("done"), tz, fmt, writer_on)
     else:
         brief.update(date_fields(now.date()))
         brief.update(kind=kind_for(settings, now), written_at=None, schedule=[], replies=[],
                      heads_up=["Callsheet hasn't read your accounts yet. It reads them at the next check-in."],
-                     sources="Not read yet", top=[], top_by="rules", hidden=0, previous_at=None)
+                     sources="Not read yet", top=[], top_by="rules", hidden=0, previous_at=None, done=[])
     return brief

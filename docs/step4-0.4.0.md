@@ -164,3 +164,65 @@ The owner-run evaluation (`evaluate.py`) keeps the 0.3.x shape (summary + replie
 Additive only: a new `slack` table (`CREATE TABLE IF NOT EXISTS`), new meta keys (`suppress`, `seen_day`,
 `brief_refs`, writer `prompt_profiles` / `active_profile`, settings `time_format`) read with defaults
 (`[]`, `"default"`, `"12h"`). A 0.3.4 database opens unchanged (`tests/test_release_040.py`).
+
+## Additions (owner feedback, 2026-10-29): email summaries, global rules, done
+
+### Email and message summaries ("gists")
+- Writer schema (with an ask, both writers, shared `build_schema`/`parse_output`) gains `gists`: an object keyed
+  by the same ids as `replies` (the rows sent with `"suggest": true` and their messages, mail and Slack), all
+  required, `additionalProperties: false`; each value `{summary: string minLength 1, details: array maxItems 6 of
+  {label: string, value: string} (both required, nothing else)}`, both required. Required order:
+  `summary, areas, top, gists, replies`. The 0.3.x shape (no ask, the evaluation) has no gists.
+- `summary`: 1–2 sentences, what they want in plain words, not a quote (clipped to 300 chars). `details`: only
+  exact facts copied verbatim from that row's thread (dates, times, amounts, addresses, reference numbers,
+  deadlines); label ≤ 40 chars.
+- Parsing (lenient, a missing/bad `gists` is not a failure): unknown ids dropped; empty summary → no gist for
+  that row; at most 6 details; a detail is dropped unless its `value` (≤ 200 chars, whitespace collapsed) occurs
+  verbatim (case-sensitive, whitespace collapsed) in the text the writer saw for that row: its `subject` and the
+  `from`, `date` and `text` of its messages, read back from the payload actually sent (so the local model's
+  shortened messages count, not the full thread). Duplicate values are dropped.
+- Brief JSON: every reply row has `gist: {summary, details: [{label, value}]}`. Rows without a writer gist (the
+  writer is off or didn't run, the row had no messages, or the writer gave none) get `{summary: <the row's
+  text (the subject, or the quoted message)>, details: []}`; with the writer turned off, writer gists are hidden
+  like suggestions. Briefs cached before this get the fallback when composed.
+
+### Writing profiles: two more sections
+- Profiles are `{id, name, rules, summary, areas, emails, drafts, read_only}`; `writer.PROMPT_KEYS` =
+  `("rules", "summary", "areas", "emails", "drafts")`. `rules` = "Global rules" (applied to everything the
+  writer writes), `emails` = "Email summaries" (default: "One line on what they want; quote only exact dates,
+  amounts, addresses and reference numbers."). Same limits as the other texts (≤ 1500 chars, `""` = Default);
+  `PATCH api/writer/profiles/<id>` accepts them; `prompt_defaults` and `prompts` include them.
+- `compose_system` order: intro + time sentence, `Global rules:`, `Day summary:`, `Area summaries:` (with an
+  ask), `Email summaries:` (with an ask), `Suggested replies:`, the fixed style examples (`writer.EXAMPLES`),
+  then the fixed safety block, last and unchanged.
+- Default texts carry the evaluated "P2F" wording: the day summary keeps the 3–6 sentence hint and says "Name
+  the specific clashes, the people waiting and the deadlines."; suggested replies: "Answer each question or
+  request in the thread directly and specifically, in 2–5 sentences. Acknowledge what the sender said. Use
+  [placeholders] only for facts or decisions only the owner knows, and keep them short and concrete, like
+  [day], [time], [address] or [amount]. Each reply answers only its own thread: don't bring in points from other
+  threads." (plus reply body only, same language, no subject line or sign-off name).
+- `writer.EXAMPLES` ("Examples (for style only):" with P2F's example reply and example summary) is FIXED: not
+  part of any profile, not editable, in every composed prompt (with and without an ask) just before the safety
+  block, so profile edits can't remove the style anchors.
+- Upgrade: an owner profile saved before has no `rules`/`emails`; they read as the Default texts (nothing is
+  rewritten in the database).
+
+### Done
+- `POST api/done {row_id, done: true|false, key?}` → `{ok: true, done: [...]}` (the brief's `done` list after
+  the change). `done` not a boolean → 400; a row id that isn't a reply row or a done row of the cached brief
+  → 404; `key` given and different from the row's → 409. Idempotent.
+- Stored in meta `done`: `{<done key>: {done_at: ISO time, last: last message time (epoch seconds)}}`. Done key:
+  mail `mail:<account id>:<thread id>`; Slack `slack:<team id>:<channel>:<thread_ts, or the message ts outside
+  threads>` (DM rows: the ts of their last message, so a new DM message is a new row).
+- A done row is left out of `replies` (so out of `top`, the writer's input and every count), not counted in
+  `hidden`, and listed in brief `done: [{id, who, summary (its gist summary), done_at (display time, owner's
+  format)}]`, most recently done first, for the rows marked done today (owner's time zone, the brief's date).
+  Rows done on an earlier day stay hidden but aren't listed. Done rows keep their reply id (`r…`), so reply ids
+  can have gaps.
+- `done: true` moves the row from `replies` to `done` in the cached brief at once; `done: false` (Undo) deletes
+  the key and moves it back (in id order) at once.
+- Reopen: when a sync sees the row's last message time newer than the stored `last`, the key is deleted and the
+  row shows again (also new messages in a DM give a new row).
+- Keys are kept 30 days from `done_at`, then pruned (at every sync and every `api/done`); at most 2000 keys.
+- Upgrade: meta `done` read with default `{}`; the brief always has `done` (`[]` when none; the sample brief has
+  demo gists and one demo done row).

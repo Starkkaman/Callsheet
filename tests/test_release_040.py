@@ -68,7 +68,7 @@ class ComposeTest(unittest.TestCase):
     def test_schema_with_areas_and_top(self):
         ask = writer.make_ask(["personal", "work"], ["r1", "r2", "s1"])
         s = writer.build_schema(["r1"], ask)
-        self.assertEqual(s["required"], ["summary", "areas", "top", "replies"])
+        self.assertEqual(s["required"], ["summary", "areas", "top", "gists", "replies"])
         self.assertEqual(s["properties"]["areas"]["required"], ["personal", "work"])
         self.assertEqual(s["properties"]["areas"]["properties"]["work"], {"type": "string", "minLength": 1})
         self.assertFalse(s["properties"]["areas"]["additionalProperties"])

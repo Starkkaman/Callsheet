@@ -44,6 +44,9 @@
 - `tests/fake_slack.py`: fake Slack Web API (read methods, 429 with Retry-After, request log).
 - `tests/test_slack.py`: Slack against the fake: allowlist, manifest scopes, connect and channels API, DM/mention/thread rules, Heads up, ignore list, VIPs, rate limits and the request cap, reconnect, suppression.
 - `tests/test_release_040.py`: writing profiles and the safety block, writer schema with areas/top, rules' Top of the day, 12h/24h times, Gmail categories, mail suppression, new-since, upgrade from 0.3.4.
+- `tests/test_release_040_more.py`: email/message summaries (gists) with the verbatim-details guard, the global
+  rules and email summary profile sections with the fixed style examples, and the done state (hide, undo, reopen,
+  prune) for mail and Slack.
 - LICENSE: MIT licence (fonts keep their own OFL licences in callsheet/app/static/fonts/).
 - `callsheet/icon.png`, `callsheet/logo.png`: app icon (128x128) and wordmark logo (250x100) shown by Home Assistant.
 - `callsheet/app/static/favicon.svg`: page icon (the sunrise mark).

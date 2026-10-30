@@ -192,6 +192,12 @@ class Syncer:
             ref.update(row.pop("_sup"), key=row["key"], vip=row["vip"])
             if "_messages" in row:
                 ref["messages"] = row.pop("_messages")
+            # done: mail by account + thread, Slack by team + channel + thread (or message) ts
+            done_key = row.pop("_done", None)
+            if ref.get("source") == "mail":
+                done_key = f"mail:{ref.get('acc')}:{ref.get('thread_id')}"
+            ref.update(done_key=done_key, last=float(row.pop("_last", 0) or 0))
+            row["gist"] = rules.fallback_gist(row)
             refs[row["id"]] = ref
         heads_up = [f"All day: {title}" for title in all_day] + slack_heads + errors
         written = now.isoformat(timespec="seconds")
@@ -204,7 +210,8 @@ class Syncer:
         brief = {
             "date": day.isoformat(), "written_at": written, "kind": rules.kind_for(settings, now),
             "schedule": schedule, "replies": replies, "heads_up": heads_up, "sources": sources,
-            "sources_tail": tail, "hidden": hidden}
+            "sources_tail": tail, "hidden": hidden, "done": []}
+        self._apply_done(brief, refs, tz, live)
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
                 "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
 
@@ -241,6 +248,35 @@ class Syncer:
             rows += r
             heads += h
         return rows, heads, count
+
+    def _apply_done(self, brief, refs, tz, live=True):
+        """Splits the brief's reply rows (and rows already under "done") by the stored done keys: a done row
+        leaves replies; it is listed under "done" (with done_at) when it was marked done on the brief's date.
+        A row whose last message is newer than the one seen when it was marked done reopens: its key is
+        deleted (live only) and it stays in replies. Live runs also prune keys older than 30 days."""
+        done = self.store.done_keys()
+        rows = list(brief.get("replies") or []) + [{k: v for k, v in r.items() if k != "done_at"}
+                                                    for r in brief.get("done") or []]
+        rows.sort(key=lambda r: int(str(r.get("id") or "r0")[1:] or 0))
+        keep, out, reopened = [], [], []
+        for r in rows:
+            ref = refs.get(r.get("id")) or {}
+            entry = done.get(ref.get("done_key")) if ref.get("done_key") else None
+            if entry is None:
+                keep.append(r)
+            elif float(ref.get("last") or 0) > float(entry.get("last") or 0):
+                reopened.append(ref["done_key"])
+                keep.append(r)
+            else:
+                try:
+                    day = dt.datetime.fromisoformat(entry["done_at"]).astimezone(tz).date().isoformat()
+                except (KeyError, TypeError, ValueError):
+                    day = None
+                if day == brief.get("date"):
+                    out.append(dict(r, done_at=entry["done_at"]))
+        brief["replies"], brief["done"] = keep, out
+        if live:
+            self.store.clear_done(reopened, self.clock())
 
     def _mark_new(self, brief):
         """New since: rows whose key wasn't in any earlier brief today get new: true; previous_at is the
@@ -384,7 +420,10 @@ class Syncer:
             brief["summary"] = {"text": result["summary"], "by": result["by"], "at": at,
                                 "areas": result.get("areas") or {}, "top": result.get("top") or []}
             flagged = set(result.get("flagged") or ())
+            gists = result.get("gists") or {}
             for r in brief["replies"]:
+                if r["id"] in gists:
+                    r["gist"] = gists[r["id"]]
                 if r["id"] in result["replies"]:
                     r["suggestion"] = result["replies"][r["id"]]
                     if r["id"] in flagged:
@@ -396,6 +435,7 @@ class Syncer:
                 note = (note + "; " if note else "") + "beta not accepted, sent without fallbacks"
         else:
             brief["heads_up"].append(f"The AI writer didn't run: {error}")
+        self._apply_done(brief, refs, tz)  # rows marked done (or undone) while the writer ran
         self.store.set_cached_brief(brief)
         self.store.set_last_writer({
             "at": at, "ok": bool(result), "by": result["by"] if result else None,

@@ -30,15 +30,27 @@
   ],
   "replies": [
     {"who": "Priya N.", "area": "co-b", "source": "Mail", "text": "\"Can you sign off the budget by Thursday?\"",
-     "short": "budget sign-off by Thu", "age": "3d", "action": "Draft ready"},
+     "short": "budget sign-off by Thu", "age": "3d", "action": "Draft ready",
+     "gist": {"summary": "Priya wants you to sign off the Q4 budget.",
+              "details": [{"label": "Deadline", "value": "Thursday 30 Oct"}, {"label": "Amount", "value": "€48,500"}]}},
     {"who": "#ops-alerts", "area": "co-a", "source": "Slack", "text": "Asked you directly about the deploy window",
-     "short": "deploy window question", "age": "18h", "action": "Draft ready"},
+     "short": "deploy window question", "age": "18h", "action": "Draft ready",
+     "gist": {"summary": "The team wants to know which deploy window you prefer.",
+              "details": [{"label": "Window", "value": "Thu 22:00–23:00"}]}},
     {"who": "Amber", "area": "personal", "source": "WhatsApp", "text": "\"Did you book the plumber?\"",
-     "age": "1d", "action": "Draft ready"},
+     "age": "1d", "action": "Draft ready",
+     "gist": {"summary": "Amber asks whether the plumber is booked.", "details": []}},
     {"who": "J. Ortiz", "area": "co-c", "source": "Mail", "text": "Contract redlines, deadline Fri 31 Oct",
-     "short": "contract redlines by Fri", "age": "2d", "action": "Open"},
+     "short": "contract redlines by Fri", "age": "2d", "action": "Open",
+     "gist": {"summary": "J. Ortiz sent contract redlines and needs your comments.",
+              "details": [{"label": "Deadline", "value": "Fri 31 Oct"}, {"label": "Reference", "value": "CTR-2026-114"}]}},
     {"who": "Landlord", "area": "personal", "source": "Mail", "text": "Inspection date — needs a yes/no",
-     "short": "inspection date, yes/no", "age": "4d", "action": "Draft ready"}
+     "short": "inspection date, yes/no", "age": "4d", "action": "Draft ready",
+     "gist": {"summary": "Your landlord needs a yes or no on the inspection date.",
+              "details": [{"label": "Date", "value": "Tue 4 Nov, 10:00"}, {"label": "Address", "value": "Flat 3, 12 Elm Road"}]}}
+  ],
+  "done": [
+    {"id": "d1", "who": "Theo", "summary": "Theo asked for the slides from Monday.", "done_at": "08:10"}
   ],
   "heads_up": [
     "Invoice from CO. C due Fri — not paid",

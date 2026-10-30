@@ -26,6 +26,7 @@ Callsheet only reads. It never sends, replies, deletes or changes anything in yo
   - **Top of the day**: up to 5 lines that point at rows in the brief (VIP replies, clashes, deadlines;
     chosen by the AI writer when it is on).
   - Rows that are new since the day's previous brief are marked new.
+  - Rows you mark **done** leave Needs a reply and are listed under **Done today** (see "Done").
   - **Projects** still shows sample data.
 - Reads your accounts at the morning brief and check-in times (06:30, 12:30 and 17:00 by default, in your
   time zone; check-ins are skipped on days off), when the app starts if the last read is older than
@@ -117,6 +118,15 @@ including its subdomains. The row disappears at once; the brief says how many ro
 never hidden by a sender or domain rule (a thread rule still applies). The rules are listed in setup and
 can be removed; removed rules' rows come back at the next refresh.
 
+## Done
+
+Mark a reply row **done** when you've dealt with it (for example, you answered by phone). It leaves Needs a
+reply, Top of the day and the counts at once and is listed under **Done today** with the time you marked
+it; **Undo** puts it back. Callsheet remembers the thread (mail: the Gmail thread in that account; Slack:
+the thread, or the message outside threads) and the time of its last message. When a newer message arrives
+there, the row comes back by itself at the next read. Rows marked done on an earlier day stay hidden but
+aren't listed. Done marks are forgotten after 30 days. Nothing is changed in Gmail or Slack.
+
 ## Time format
 
 Times show in 12-hour format by default ("9:30 am", "11 am", "12 pm" for noon, "12 am" for midnight).
@@ -132,6 +142,10 @@ the quoted lines below it, Outlook reply headers; forwarded mail is kept whole),
 my …" footer and long legal disclaimer, and is cut at 4,000 characters. Mail bodies are not stored; only the suggestions are.
 It adds:
 
+- a short summary per reply row it read (mail and Slack): one line on what they want, plus up to 6 exact
+  details such as dates, times, amounts, addresses and reference numbers. Callsheet keeps a detail only
+  when it appears word for word in the messages the writer read, so a fact the writer made up is dropped.
+  Rows the writer didn't read show their subject instead;
 - a summary band under the date ("Written by Claude Opus 5.5" or "Written by Local · <model>");
 - a **Suggested reply** under each reply row it could help with: open it, **Copy**, then paste the text
   into your reply in Gmail. Placeholders in [square brackets] are facts only you know. Nothing is sent.
@@ -148,13 +162,16 @@ items still show in the brief, without suggestions.
 
 ### Writing profiles
 
-What the writer is asked to write is set by three texts: **Day summary**, **Area summaries** and
+What the writer is asked to write is set by five texts: **Global rules** (applied to everything it
+writes), **Day summary**, **Area summaries**, **Email summaries** (the one-line summaries of reply rows) and
 **Suggested replies**. They live in profiles. **Default** is built in and can't be changed; to change the
 texts, copy it, give the copy a name (up to 40 characters) and edit it (up to 1,500 characters per text),
 then make it the active profile. You can have up to 10 profiles of your own; the active one can't be
-deleted. Emptying a text gives it the Default text back; for a fresh start, copy Default again.
+deleted. Emptying a text gives it the Default text back; for a fresh start, copy Default again. Profiles
+you saved earlier get the Default texts for Global rules and Email summaries.
 
-Callsheet's safety rules are not part of any profile and always come after it: mail and chat are
+Two short style examples (a good reply and a good day summary) are also fixed: they are added after the
+profile's texts whatever it says. Callsheet's safety rules are not part of any profile and always come last: mail and chat are
 untrusted data, the writer must never say something was approved, paid or decided, and the answer format
 is fixed. Whatever a profile says (even "ignore the rules above"), those rules still apply.
 

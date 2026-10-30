@@ -89,6 +89,7 @@ class App:
             ("DELETE", r"slack/([\w-]+)", self.delete_slack),
             ("POST", r"suppress", self.add_suppress),
             ("DELETE", r"suppress/([\w-]+)", self.delete_suppress),
+            ("POST", r"done", self.set_done),
             ("DELETE", r"writer/claude-key", self.delete_claude_key),
             ("POST", r"writer/test", self.test_writer),
             ("PATCH", r"eval/settings", self.patch_eval),
@@ -334,6 +335,43 @@ class App:
                 brief["hidden"] = int(brief.get("hidden") or 0) + len(gone)
                 self.store.set_cached_brief(brief)
         return {"rule": rule, "hidden": int(brief.get("hidden") or 0)}
+
+    def set_done(self, body):
+        """Marks a reply row done (hidden from Needs a reply, listed under Done today) or undoes it. The cached
+        brief changes at once; the stored key also hides the row in later briefs until a newer message."""
+        b = _obj(body)
+        row_id, done, key = b.get("row_id"), b.get("done"), b.get("key")
+        if not isinstance(done, bool):
+            raise InputError("done must be true or false.")
+        s = self.store.settings()
+        tz = rules.tzinfo(s)
+        now_ts = self.clock()
+        now_iso = dt.datetime.fromtimestamp(now_ts, tz).isoformat(timespec="seconds")
+        refs = self.store.brief_refs()
+        ref = refs.get(row_id) if isinstance(row_id, str) else None
+        with self.store.lock:
+            brief = self.store.cached_brief() or {}
+            replies, done_rows = brief.get("replies") or [], brief.get("done") or []
+            row = next((r for r in replies if r.get("id") == row_id), None)
+            drow = next((r for r in done_rows if r.get("id") == row_id), None)
+            if (row is None and drow is None) or ref is None or not ref.get("done_key"):
+                raise NotFound("That row isn't in the brief any more. Reload the page.")
+            if key is not None and key != (row or drow).get("key"):
+                raise Conflict("The brief has changed since the page loaded. Reload and try again.")
+            if done and row is not None:
+                self.store.set_done(ref["done_key"], ref.get("last"), now_iso, now_ts)
+                brief["replies"] = [r for r in replies if r is not row]
+                brief["done"] = done_rows + [dict(row, done_at=now_iso)]
+                self.store.set_cached_brief(brief)
+            elif not done:
+                self.store.clear_done([ref["done_key"]], now_ts)
+                if drow is not None:
+                    back = {k: v for k, v in drow.items() if k != "done_at"}
+                    brief["done"] = [r for r in done_rows if r is not drow]
+                    brief["replies"] = sorted(replies + [back], key=lambda r: int(str(r.get("id") or "r0")[1:] or 0))
+                    self.store.set_cached_brief(brief)
+        return {"ok": True, "done": rules.done_list(brief.get("done"), tz, rules.time_format(s),
+                                                    self.store.writer_config()["provider"] != "off")}
 
     def delete_suppress(self, _body, rule_id):
         self.store.delete_suppress(rule_id)

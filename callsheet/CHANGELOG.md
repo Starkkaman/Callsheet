@@ -24,6 +24,17 @@ Server and API for this release; the page that uses them follows.
   previous one was written.
 - **Time format.** Times show as 12-hour ("9:30 am", "12 pm") by default, or 24-hour ("14:30") in
   settings. The writer uses the same format.
+- **Email and message summaries.** With the writer on, each reply row it reads (mail and Slack) gets a
+  one-line summary of what they want plus up to 6 exact details (dates, times, amounts, addresses,
+  reference numbers, deadlines). A detail is only shown when it appears word for word in the messages the
+  writer read, so invented facts are dropped. Without the writer the row shows its subject.
+- **Two more writing sections.** Profiles gain **Global rules** (applied to everything the writer writes)
+  and **Email summaries**. Your saved profiles get the Default texts for both. The Default texts for the day
+  summary and suggested replies use the wording that did best in the writer evaluation, and two fixed style
+  examples (one reply, one summary) are always added before the safety rules.
+- **Done.** Mark a reply row done: it leaves Needs a reply, Top of the day and the counts and shows under
+  **Done today**; **Undo** brings it back. A new message in that thread or chat brings it back by itself.
+  Done marks are forgotten after 30 days.
 
 ## 0.3.4
 

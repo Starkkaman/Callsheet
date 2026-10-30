@@ -5,6 +5,7 @@ One connection shared by all threads behind a lock. The database file is created
 because it holds the Google client secret, the account tokens and the writer API keys. Nothing in
 here logs values.
 """
+import datetime as dt
 import json
 import os
 import pathlib
@@ -52,6 +53,8 @@ SUPPRESS_KINDS = ("thread", "sender", "domain")
 MAX_SUPPRESS = 500
 MAX_IGNORED = 500
 MAX_PROFILES = 10
+DONE_KEEP_S = 30 * 86400
+MAX_DONE = 2000
 
 
 class InputError(ValueError):
@@ -876,6 +879,41 @@ class Store:
             if len(left) == len(rules_list):
                 raise NotFound("That rule doesn't exist.")
             self._set_meta("suppress", left)
+
+    # --- done ------------------------------------------------------------------
+    def done_keys(self):
+        """{done key: {done_at: ISO time, last: last message time (epoch seconds)}}."""
+        v = self._get_meta("done", {})
+        return {k: e for k, e in v.items() if isinstance(e, dict)} if isinstance(v, dict) else {}
+
+    @staticmethod
+    def _prune_done(done, now_ts):
+        def at(e):
+            try:
+                return dt.datetime.fromisoformat(e.get("done_at")).timestamp()
+            except (TypeError, ValueError):
+                return 0.0
+        keep = {k: e for k, e in done.items() if now_ts - at(e) <= DONE_KEEP_S}
+        if len(keep) > MAX_DONE:
+            keep = dict(sorted(keep.items(), key=lambda kv: at(kv[1]))[-MAX_DONE:])
+        return keep
+
+    def set_done(self, key, last, now_iso, now_ts):
+        """Marks a row's thread done (with the last message time seen); prunes keys older than 30 days."""
+        with self.lock:
+            done = self.done_keys()
+            done[str(key)] = {"done_at": now_iso, "last": float(last or 0)}
+            self._set_meta("done", self._prune_done(done, now_ts))
+
+    def clear_done(self, keys, now_ts=None):
+        """Removes these keys (Undo, or reopened by a newer message); with now_ts also prunes old keys."""
+        with self.lock:
+            done = self.done_keys()
+            left = {k: e for k, e in done.items() if k not in set(keys)}
+            if now_ts is not None:
+                left = self._prune_done(left, now_ts)
+            if left != done:
+                self._set_meta("done", left)
 
     # --- new since, row refs ----------------------------------------------------
     def seen_day(self):
