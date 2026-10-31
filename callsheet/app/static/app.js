@@ -308,10 +308,11 @@
 
   /* ----- shared pieces ----- */
   function npBtn(kind, id, anc, wide) {
-    var open = !!(U.pop && U.pop.anc === anc);
-    return h('button', { type: 'button', class: 'np' + (wide ? ' wide' : ''), 'data-np': kind + ':' + id, 'data-anc': anc,
-      'aria-haspopup': 'true', 'aria-expanded': String(open), 'aria-label': wide ? null : 'More: hide or dismiss', title: 'Hide, dismiss or note' },
-    [ico('note'), wide ? 'More' : null]);
+    var open = !!(U.pop && U.pop.anc === anc), nt = noteOf(kind, id);
+    return h('button', { type: 'button', class: 'np' + (wide ? ' wide' : '') + (nt ? ' has' : ''), 'data-np': kind + ':' + id, 'data-anc': anc,
+      'aria-haspopup': 'true', 'aria-expanded': String(open), 'aria-label': wide ? null : (nt ? 'Note and dismiss (has a note)' : 'Note and dismiss'),
+      title: nt ? 'Note saved: ' + nt.text : 'Note for Callsheet, or dismiss' },
+    [ico('note'), wide ? (nt ? 'Note saved' : 'Note or dismiss') : null]);
   }
   function rdot(r) {
     var x = reasonOf(r);
@@ -501,7 +502,8 @@
     var evs = events();
     return [h('h2', { class: 'sec-h' }, ['Today ', h('span', { class: 'n' }, [B.date_short || '', evs.some(function (e) { return e.clash; }) ? ' · clashes in red' : ''])]),
       headsStrip(),
-      evs.length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.')];
+      evs.length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.'),
+      possibleSection()];
   }
   function T_areas() {
     var list = (B.areas || []).filter(function (a) { return !U.area || a.id === U.area; });
@@ -581,7 +583,8 @@
   function popEl() {
     var P = U.pop;
     if (!P) return null;
-    var items = [];
+    if (P.mode === 'note') return notePop(P);
+    var items = [noteItem(P)];
     if (P.kind === 'reply') {
       var r = replyById(P.id);
       if (!r) { U.pop = null; return null; }
@@ -597,8 +600,7 @@
     } else {
       items.push(h('button', { type: 'button', 'data-dismiss': '1' }, ['Dismiss', h('span', { class: 's' }, 'On this device, until tomorrow')]));
     }
-    items.push(h('button', { type: 'button', disabled: true, class: 'later' }, ['Note for Callsheet…', h('span', { class: 's' }, 'Notes arrive in 0.5')]));
-    return h('div', { class: 'pop', role: 'group', 'aria-label': 'More', 'data-pop': '1' }, items);
+    return h('div', { class: 'pop', role: 'group', 'aria-label': 'Note and dismiss', 'data-pop': '1' }, items);
   }
   function placePop() {
     var el = layer.querySelector('[data-pop]');
@@ -629,6 +631,100 @@
     layer.textContent = '';
     add(layer, [popEl(), toastEl()]);
     placePop();
+  }
+
+  /* ----- 0.5.0: notes to Callsheet (memory.md) and possible events -----
+     A note belongs to a brief item through its ref (the row, event or possible event key; 'area:<id>' for a
+     briefing paragraph; 'hu:<hash>' for a heads-up). The server adds the metadata (people, emails, area, topics)
+     from its own copy of the brief; api/brief lists the saved notes by ref in B.notes. */
+  var NOTE_MAX = 500;
+  function peById(id) { return ((B && B.possible) || []).filter(function (p) { return p.id === id; })[0] || null; }
+  function possibles() { return ((B && B.possible) || []).filter(function (p) { return !isDismissed('pe:' + (p.key || p.id)); }); }
+  function headsText(k) { return ((B && B.heads_up) || []).filter(function (x) { return hashOf(x) === k; })[0] || ''; }
+  function noteRef(kind, id) {
+    var x;
+    if (kind === 'reply') { x = replyById(id); return x && x.key ? x.key : null; }
+    if (kind === 'event') { x = eventById(id); return x && x.key ? x.key : null; }
+    if (kind === 'pe') { x = peById(id); return x && x.key ? 'pe:' + x.key : null; }
+    if (kind === 'para') return 'area:' + id;
+    if (kind === 'heads') return 'hu:' + id;
+    return null;
+  }
+  function noteOf(kind, id) {
+    var ref = noteRef(kind, id), n = B && B.notes;
+    return ref && n && typeof n === 'object' && n[ref] && typeof n[ref].text === 'string' ? n[ref] : null;
+  }
+  function clipText(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function noteItem(P) {
+    var nt = noteOf(P.kind, P.id), ok = !B.sample && !!noteRef(P.kind, P.id);
+    return h('button', { type: 'button', 'data-pnote': '1', disabled: !ok }, [nt ? 'Edit note for Callsheet…' : 'Note for Callsheet…',
+      h('span', { class: 's' }, !ok ? 'Works once Callsheet has read your accounts' : nt ? clipText(nt.text, 90) : 'Read before each brief when it fits the day')]);
+  }
+  function notePop(P) {
+    var nt = noteOf(P.kind, P.id);
+    var ta = h('textarea', { class: 'inp', id: 'bv-note', rows: '3', maxlength: String(NOTE_MAX), 'data-ntext': '1',
+      placeholder: 'e.g. “Jordan’s volunteer requests can wait until Sunday.”' });
+    ta.value = P.text != null ? P.text : (nt ? nt.text : '');
+    return h('div', { class: 'pop', role: 'group', 'aria-label': 'Note for Callsheet', 'data-pop': '1' }, h('div', { class: 'nt' }, [
+      h('label', { class: 'label', for: 'bv-note' }, 'Note for Callsheet'), ta,
+      P.err ? h('p', { class: 'err', role: 'alert' }, P.err) : null,
+      h('div', { class: 'btns' }, [h('button', { type: 'button', class: 'act', 'data-nsave': '1', disabled: !!P.busy }, 'Save'),
+        h('button', { type: 'button', class: 'tbtn', 'data-ncancel': '1' }, 'Cancel'),
+        nt ? h('button', { type: 'button', class: 'tbtn', 'data-ndel': '1', disabled: !!P.busy }, 'Delete note') : null]),
+      h('div', { class: 'hint' }, 'Callsheet reads it before each brief when it fits the day. All notes are in Setup → Delivery → Memory.')]));
+  }
+  function focusLayer(sel) { var f = layer.querySelector(sel); if (f) f.focus(); }
+  function noteAction(d, P) {
+    if (d.pnote) { P.mode = 'note'; P.text = null; P.err = null; renderLayer(); focusLayer('[data-ntext]'); return; }
+    if (d.ncancel) { P.mode = null; P.err = null; renderLayer(); focusLayer('[data-pnote]'); return; }
+    var nt = noteOf(P.kind, P.id), ref = noteRef(P.kind, P.id), anc = P.anc, req;
+    if (!ref || P.busy) return;
+    if (d.nsave) {
+      var txt = String(P.text != null ? P.text : (nt ? nt.text : '')).trim();
+      if (!txt) { P.err = 'Write the note first.'; renderLayer(); focusLayer('[data-ntext]'); return; }
+      var body = { kind: P.kind, id: P.id, ref: ref, text: txt };
+      if (P.kind === 'heads') body.item = headsText(P.id);
+      req = nt ? function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(nt.id), { text: txt }); }
+        : function () { return api('POST', 'api/memory/notes', body); };
+    } else if (nt) req = function () { return api('DELETE', 'api/memory/notes/' + encodeURIComponent(nt.id)); };
+    else return;
+    P.busy = true; P.err = null; renderLayer();
+    mutate(req).then(function (res) {
+      B.notes = B.notes && typeof B.notes === 'object' ? B.notes : {};
+      if (d.nsave) B.notes[ref] = { id: res && res.id, text: res && typeof res.text === 'string' ? res.text : '' };
+      else delete B.notes[ref];
+      MEM.data = null; /* Setup → Memory loads the file again */
+      if (U.pop === P) U.pop = null;
+      showToast(d.nsave ? 'Note saved.' : 'Note deleted.', d.nsave ? 'Callsheet reads it before each brief when it fits the day.' : 'It’s gone from the memory too.');
+      renderBrief('[data-anc="' + cssq(anc) + '"]');
+    }, function (e) {
+      if (U.pop !== P) return;
+      P.busy = false; P.err = e && e.message ? e.message : 'Something went wrong.';
+      renderLayer(); focusLayer('[data-ntext]');
+    });
+  }
+  /* Possible events: dates the rules found in a reply's latest message (not on the calendar yet). "Add to
+     calendar" is a link the server built (a filled-in Google Calendar page in the right account), opened in a
+     new tab like the Gmail links; the owner saves it there. */
+  function peCard(p) {
+    var url = safeHttps(p.url), r = replyById(p.row), slackRow = p.via === 'slack';
+    return h('div', { class: 'pe cn' + (p.kind === 'deadline' ? ' due' : '') }, [
+      h('div', { class: 'l1' }, [h('span', { class: 'ri' }, ico(slackRow ? 'slack' : 'mail', slackRow ? 'Slack' : 'Gmail')),
+        h('span', { class: 'w' }, p.title || ''), h('span', { class: 'when' }, p.when || ''), tagOf(p.area)]),
+      h('div', { class: 'from' }, [(p.kind === 'deadline' ? 'Possible deadline' : 'Possible event') + ' · from ',
+        r ? h('button', { type: 'button', class: 'tbtn plain', 'data-open': 'reply:' + r.id }, p.who || '') : (p.who || ''),
+        p.phrase ? ' · “' + p.phrase + '”' : '']),
+      url ? h('div', { class: 'acts' }, h('a', { class: 'act', href: url, target: '_blank', rel: 'noopener noreferrer',
+        'aria-label': 'Add to calendar: ' + (p.title || '') + ', ' + (p.when || '') + ' (opens Google Calendar)' }, 'Add to calendar')) : null,
+      npBtn('pe', p.id, 'pe-' + p.id)]);
+  }
+  function possibleSection() {
+    var ps = possibles();
+    if (!ps.length) return null;
+    return h('section', { class: 'pesec', 'aria-labelledby': 'pe-h' }, [
+      h('h2', { class: 'sec-h', id: 'pe-h' }, ['Possible events ', h('span', { class: 'n' }, ps.length + ' · found in your mail and chat')]),
+      h('p', { class: 'pehint' }, 'Not on your calendar yet. Add to calendar opens a filled-in Google Calendar page; nothing is saved until you save it there.'),
+      h('div', { class: 'pgrid' }, ps.map(peCard))]);
   }
 
   /* ----- the whole view ----- */
@@ -757,8 +853,10 @@
   }
   function dismiss(P) {
     var key = P.kind === 'event' ? 'ev:' + ((eventById(P.id) || {}).key || P.id) : P.kind === 'heads' ? 'hu:' + P.id
+      : P.kind === 'pe' ? 'pe:' + ((peById(P.id) || {}).key || P.id)
       : 'ar:' + P.id + ':' + hashOf(((B.summary || {}).areas || {})[P.id]);
-    var what = P.kind === 'event' ? (eventById(P.id) || {}).title : P.kind === 'heads' ? 'Heads up' : areaOf(P.id).name + ' summary';
+    var what = P.kind === 'event' ? (eventById(P.id) || {}).title : P.kind === 'heads' ? 'Heads up'
+      : P.kind === 'pe' ? (peById(P.id) || {}).title : areaOf(P.id).name + ' summary';
     setDismissed(key, true);
     if (U.open && U.open.kind === 'event' && P.kind === 'event' && U.open.id === P.id) U.open = null;
     U.pop = null;
@@ -834,6 +932,7 @@
     }
     else if (d.pnnr && P) { P.sub = !P.sub; renderLayer(); var nb = layer.querySelector(P.sub ? '[data-sup]' : '[data-pnnr]'); if (nb) nb.focus(); }
     else if (d.sup && P) suppress(P.id, d.sup);
+    else if ((d.pnote || d.ncancel || d.nsave || d.ndel) && P) noteAction(d, P);
     else if (d.dismiss && P) dismiss(P);
     else if (d.undo) {
       var u = U.toast && U.toast.undo;
@@ -847,6 +946,7 @@
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (ui.view === 'brief' && t.dataset && t.dataset.draft) U.drafts[t.dataset.draft] = t.value;
+    if (ui.view === 'brief' && t.dataset && t.dataset.ntext && U.pop) U.pop.text = t.value;
   });
   document.addEventListener('keydown', function (e) {
     if (ui.view !== 'brief' || !B) return;
@@ -1538,7 +1638,7 @@
       h('div', { class: 'opts' }, [
         row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
         row(false, 'Phone push', 'via the Home Assistant app', 'Coming later')]),
-      writerBlock(), writingBlock()];
+      writerBlock(), writingBlock(), memoryBlock()];
   }
 
   /* step 5: writing instructions. Profiles (Default is built in and read-only); five texts per profile, each saved
@@ -1903,6 +2003,70 @@
       err,
       h('p', { class: 'syncst', role: 'status' }, ls.at ? 'Last refreshed ' + fmtWhen(ls.at, true) + (ls.ok === false ? ', with problems:' : '.') : 'Not refreshed yet.'),
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+
+  /* ---------- 0.5.0: Setup → Delivery → Memory: the whole memory.md (view, edit, clear) ----------
+     GET api/memory when the step is shown; Save = PATCH api/memory {text} (the server validates the file and says
+     what's wrong); Clear = POST api/memory/reset after a confirmation. The fixed sentence the writer gets with the
+     notes is shown as it is (api/memory rule). */
+  var MEM = { data: null, draft: null, err: null, seq: 0, loading: false };
+  function loadMemory() {
+    var seq = ++MEM.seq;
+    MEM.loading = true;
+    function done() { MEM.loading = false; if (seq === MEM.seq && ui.view === 'setup' && ui.step === 5) renderSetup(); }
+    return api('GET', 'api/memory').then(function (m) { if (seq !== MEM.seq) return; MEM.data = m; MEM.err = null; done(); },
+      function (e) { if (seq !== MEM.seq) return; MEM.err = e && e.message ? e.message : 'error'; done(); });
+  }
+  function memoryBlock() {
+    if (!MEM.data && !MEM.err && !MEM.loading) loadMemory();
+    var m = MEM.data, cap = m && Number(m.cap) || 1500;
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory')]);
+    var intro = h('p', { class: 'note' }, 'Your notes to Callsheet, kept as one Markdown file on this box. Before each brief the writer gets ' +
+      'the notes that fit the day (the same people, email domains, area or topic words), up to about ' + fmtNum(cap) + ' characters. ' +
+      'Add notes from the notepad icon on any reply, event or briefing paragraph, or write them here.');
+    if (!m) {
+      return h('div', { class: 'where mem', role: 'region', 'aria-labelledby': 'mem-h' }, [head, intro,
+        MEM.err ? h('p', { class: 'err', role: 'alert' }, ['Couldn’t load the memory (' + MEM.err + '). ',
+          btn('tbtn', 'Try again', null, function () { MEM.err = null; loadMemory(); })]) : h('p', { class: 'muted' }, 'Loading…')]);
+    }
+    var max = Number(m.max) || 20000, saved = typeof m.text === 'string' ? m.text : '', cur = MEM.draft != null ? MEM.draft : saved;
+    var err = errBox(), said = h('span', { class: 'said', role: 'status', 'data-said': 'mem' });
+    var ta = h('textarea', { class: 'inp memta', id: 'mem-text', rows: '16', maxlength: String(max), spellcheck: 'false',
+      'aria-describedby': 'mem-help mem-cnt', 'data-fk': 'mem-text' });
+    ta.value = cur;
+    var cnt = h('span', { class: 'cnt' + (cur.length >= max ? ' full' : ''), id: 'mem-cnt' }, fmtNum(cur.length) + ' / ' + fmtNum(max) + ' characters');
+    var undoB = btn('tbtn', 'Undo changes', { 'data-fk': 'mem-undo', disabled: cur === saved }, function () { MEM.draft = null; renderSetup('[data-fk="mem-text"]'); });
+    var saveB = btn('act', 'Save', { 'data-fk': 'mem-save', disabled: cur === saved }, function () {
+      var text = ta.value;
+      run([saveB, undoB], err, function () { return api('PATCH', 'api/memory', { text: text }); }, function (r) {
+        MEM.data = r; MEM.draft = null; renderSetup('[data-fk="mem-text"]');
+        var sd = main.querySelector('[data-said="mem"]'); if (sd) sd.textContent = 'Saved';
+      });
+    });
+    on(ta, 'input', function () {
+      MEM.draft = ta.value === saved ? null : ta.value; said.textContent = '';
+      cnt.textContent = fmtNum(ta.value.length) + ' / ' + fmtNum(max) + ' characters';
+      cnt.classList.toggle('full', ta.value.length >= max);
+      saveB.disabled = undoB.disabled = ta.value === saved;
+    });
+    var n = (m.notes || []).length;
+    var clear = ui.confirm === 'mem-reset' ? confirmRow('Clear the memory? Every note is deleted for good.', 'Clear memory', function (y, c, e) {
+      run([y, c], e, function () { return api('POST', 'api/memory/reset', { confirm: true }); }, function (r) {
+        MEM.data = r; MEM.draft = null; ui.confirm = null; renderSetup('[data-fk="ask:mem-reset"]');
+      });
+    }) : askBtn('mem-reset', 'Clear memory');
+    return h('div', { class: 'where mem', role: 'region', 'aria-labelledby': 'mem-h' }, [head, intro,
+      m.error ? h('p', { class: 'err', role: 'alert' }, 'The file has a problem, so no notes are read until it’s fixed: ' + m.error) : null,
+      h('label', { class: 'label', for: 'mem-text' }, 'memory.md'),
+      h('p', { class: 'help', id: 'mem-help' }, 'Each note starts with “### ” and a title, then “- key: value” lines (people, emails, domains, topics, area), a blank line and the note. ' +
+        'A note without people, emails, domains or topics applies to its whole area. Profile and Answers are for a later version.'),
+      ta,
+      h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, undoB, saveB])]), err,
+      h('div', { class: 'memfoot' }, [h('span', { class: 'muted' }, m.error ? 'Notes aren’t read right now.' : plural(n, 'note', 'notes') + ' in the memory.'), clear]),
+      h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'mem-lock' }, [
+        h('div', { class: 'lh', id: 'mem-lock' }, [ico('lock'), 'Sent with your notes (can’t be changed)']),
+        h('p', { class: 'fixtext' }, m.rule || ''),
+        h('p', { class: 'muted' }, 'Your notes go to the writer in their own block, apart from mail and chat. The safety rules still come first.')])]);
   }
 
   /* ---------- writer evaluation (#eval): owner-run contenders (0.5.0), blind A/B, from Setup, Delivery, Advanced ---------- */

@@ -868,3 +868,34 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .evlist .evacts{grid-column:3;grid-row:1;flex-direction:column;align-items:flex-end}
   .evform .lm{grid-template-columns:1fr}
 }
+
+/* ===== 0.5.0: notes to Callsheet (notepad menu, Setup → Memory) and possible events (Agenda) ===== */
+.bv .np.has::after{content:"";position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--surface)}
+.bv .np.wide.has::after{top:-3px;right:-3px}
+.bv-layer .pop .nt{padding:10px 12px;display:grid;gap:6px}
+.bv-layer .pop .nt textarea{min-height:76px;margin:0;font-size:var(--fs-md)}
+.bv-layer .pop .nt .btns{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.bv-layer .pop .nt .hint{font-size:var(--fs-xs);color:var(--muted)}
+.bv-layer .pop .nt .err{margin:0;font-size:var(--fs-sm)}
+.bv-layer .pop .nt button[disabled]{opacity:.6}
+.bv .pesec{margin-top:26px}
+.bv .pehint{margin:0 0 6px;font-size:var(--fs-sm);color:var(--muted)}
+.bv .pgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}
+.bv .pe{border:var(--rule-w) dashed var(--muted);border-radius:var(--radius);padding:8px 40px 9px 12px;margin:8px 0;background:var(--surface);color:var(--text);min-width:0}
+.bv .pe.due{border-color:var(--alert)}
+.bv .pe .l1{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:var(--fs-md);min-width:0}
+.bv .pe .l1 .ri{display:inline-grid;place-items:center;color:var(--muted)}
+.bv .pe .w{font-weight:700;overflow-wrap:anywhere;min-width:0}
+.bv .pe .when{font-family:var(--font-display);font-weight:var(--display-weight);font-variant-numeric:tabular-nums}
+.bv .pe .from{font-size:var(--fs-sm);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.bv .pe .from .tbtn.plain{font-size:inherit;letter-spacing:normal;text-transform:none;font-weight:600;color:var(--text);padding:0}
+.bv .pe .acts{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin-top:6px}
+.bv .pe>.np{top:3px;right:3px}
+.mem{margin-top:34px;padding-top:18px;border-top:var(--rule-mid) solid var(--rule);max-width:860px}
+.mem .memta{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:var(--fs-sm);line-height:1.45;min-height:260px;max-height:70vh;margin-bottom:6px}
+.mem .help{font-size:var(--fs-sm);color:var(--muted);margin:2px 0 6px}
+.mem .wfoot .btns{display:flex;align-items:center;gap:10px}
+.mem .memfoot{display:flex;justify-content:space-between;align-items:center;gap:6px 12px;flex-wrap:wrap;margin:10px 0 12px;font-size:var(--fs-sm)}
+.mem .memfoot .tbtn{color:var(--alert)}
+@container pane (max-width:640px){.bv .pgrid{grid-template-columns:1fr}}
+@media (max-width:700px){.bv .pgrid{grid-template-columns:1fr}}

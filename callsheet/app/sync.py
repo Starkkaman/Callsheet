@@ -13,8 +13,10 @@ import sys
 import threading
 import time
 
+import dates
 import facts
 import google
+import memory
 import rules
 import slack
 import writer
@@ -40,6 +42,21 @@ def inbound_claim(row):
     [bracketed] text, questions and conditions don't count). Pops `_inbound`, so no message text is stored."""
     return bool(writer.states_decision(row.pop("_inbound", "") or ""))
 
+def _today(ev, tz, day, day_start, day_end):
+    """True when an event read from the calendar window belongs to today's schedule: all-day events that cover
+    day, timed events that overlap it (as build_schedule keeps them); unreadable ones too (it drops them)."""
+    start, all_day = rules._when(ev.get("start"), tz)
+    if start is None:
+        return True
+    end, _ = rules._when(ev.get("end"), tz)
+    if all_day:
+        last = end - dt.timedelta(days=1) if isinstance(end, dt.date) and end > start else start
+        return start <= day <= last
+    if end is None or end < start:
+        end = start
+    return not (end <= day_start or start >= day_end)
+
+
 class _Stop(Exception):
     pass
 
@@ -50,6 +67,7 @@ class Syncer:
         self.clock = clock
         self.log = log
         self.sleep = sleep  # Slack rate-limit waits (tests replace it)
+        self.memory = memory.Memory(store.dir)  # the owner's notes (0.5.0), shared with api.App
         self.lock = threading.Lock()
 
     def run_now(self, wait=70):
@@ -107,7 +125,10 @@ class Syncer:
         vips = {v["email"].lower(): v["name"] for v in self.store.vips()}
         client = self.store.google_client()
 
-        events, threads, errors = [], [], []
+        # 0.5.0: the calendars are read LOOKAHEAD_DAYS ahead in the same request, for the possible events'
+        # already-on-calendar check; only today's events go into the schedule (upcoming is never stored)
+        look_end = rules.day_bounds(day + dt.timedelta(days=dates.LOOKAHEAD_DAYS - 1), tz)[1]
+        events, upcoming, threads, errors = [], [], [], []
         n = {"accounts": 0, "ok": 0, "failed": 0, "calendars": 0, "events": 0, "threads": 0}
         stopped = False
         for pub in self.store.accounts():
@@ -140,10 +161,12 @@ class Syncer:
                             if not cal.get("selected"):
                                 continue
                             items = self._call(acc, client, google.calendar_events, cal["id"],
-                                               day_start.isoformat(), day_end.isoformat(), str(tz))
+                                               day_start.isoformat(), look_end.isoformat(), str(tz))
                             n["calendars"] += 1
-                            n["events"] += len(items)
-                            events += [(ev, area["id"]) for ev in items]
+                            for ev in items:
+                                (events if _today(ev, tz, day, day_start, day_end) else upcoming).append(
+                                    (ev, area["id"]))
+                            n["events"] = len(events)
                     else:
                         listing = self._call(acc, client, google.gmail_threads, MAIL_QUERY, 50)
                         for t in listing.get("threads") or []:
@@ -198,7 +221,7 @@ class Syncer:
             else:
                 shown.append(row)
         replies = rules.sort_replies(shown)
-        refs = {}
+        refs, inbound = {}, {}
         for i, row in enumerate(replies, 1):
             row["id"], row["key"] = f"r{i}", rules.row_key(row.pop("_key"))
             ref = row.pop("_ref", None) or {"source": "slack"}
@@ -207,6 +230,7 @@ class Syncer:
                 ref["messages"] = row.pop("_messages")
             if "_facts" in row:  # for the writer's facts block only; never stored
                 ref["facts"] = row.pop("_facts")
+            inbound[row["id"]] = row.get("_inbound") or ""  # for the possible events below; never stored
             row["claim"] = inbound_claim(row)
             # the wait wording for the page (0.4.1), from the same facts and rule as the writer's: no message text
             wait = facts.row_wait(ref.get("facts"), day, tz)
@@ -219,6 +243,7 @@ class Syncer:
             ref.update(done_key=done_key, last=float(row.pop("_last", 0) or 0))
             row["gist"] = rules.fallback_gist(row)
             refs[row["id"]] = ref
+        possible = self._possible(replies, refs, inbound, events + upcoming, areas, tz, day)
         heads_up = [f"All day: {title}" for title in all_day] + slack_heads + errors
         written = now.isoformat(timespec="seconds")
         mailboxes = sum(1 for a in self.store.accounts() if a["services"].get("mail"))
@@ -230,10 +255,37 @@ class Syncer:
         brief = {
             "date": day.isoformat(), "written_at": written, "kind": rules.kind_for(settings, now),
             "schedule": schedule, "replies": replies, "heads_up": heads_up, "sources": sources,
-            "sources_tail": tail, "hidden": hidden, "done": []}
+            "sources_tail": tail, "hidden": hidden, "done": [], "possible": possible}
         self._apply_done(brief, refs, tz, live)
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
                 "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
+
+    def _possible(self, replies, refs, inbound, cal_events, areas, tz, day):
+        """The brief's possible events (dates.possible_events) from each reply row's latest incoming message
+        (inbound: row id -> the rules' `_inbound` text). The Add to calendar link opens the Google account the
+        mail came from; a Slack row uses the first account of its area that reads the calendar, else none."""
+        accounts = self.store.accounts()
+        email_of = {a["id"]: a["email"] for a in accounts}
+        cal_of = {}
+        for a in accounts:
+            if a["services"].get("calendar"):
+                cal_of.setdefault(a["area_id"], a["email"])
+        rows = []
+        for r in replies:
+            ref = refs.get(r["id"]) or {}
+            last = ref.get("last") or 0
+            if not last:
+                continue
+            acc = email_of.get(ref.get("acc")) if ref.get("source") == "mail" else cal_of.get(r.get("area"))
+            rows.append({"id": r["id"], "key": r.get("key"), "who": r.get("who"), "source": r.get("source"),
+                         "via": r.get("via") or ref.get("source"), "area": r.get("area"), "subject": r.get("text"),
+                         "text": inbound.get(r["id"]), "sent": dt.datetime.fromtimestamp(last, tz).date(),
+                         "account": acc, "link": r.get("link") if ref.get("source") == "mail" else None})
+        try:
+            return dates.possible_events(rows, dates.calendar_items(cal_events, tz, day), day)
+        except Exception as e:  # noqa: BLE001 (a rule bug must never break the brief)
+            self.log(f"Callsheet sync: possible events skipped ({type(e).__name__})")
+            return []
 
     def _read_slack(self, areas, vips, t0, tz, errors, live):
         """Every connected Slack workspace whose area reads chat. Returns (rows, heads_up, workspaces read).
@@ -417,9 +469,29 @@ class Syncer:
         sent = {e["id"] for e in data["schedule"]} | {r["id"] for r in data["replies"]}
         top = rules.rules_top([e for e in brief["schedule"] if e.get("id") in sent],
                               [r for r in brief["replies"] if r.get("id") in sent])
+        # the owner's notes (0.5.0): only those relevant to the rows and events sent, in their own block
+        notes = self._notes(rows, refs, sched, name)
+        if notes:
+            data[writer.NOTES_KEY] = notes
         ask = writer.make_ask([a["id"] for a in data["areas"]], [t["ref"] for t in top],
-                              self.store.active_prompts(wcfg), fmt)
+                              self.store.active_prompts(wcfg), fmt, notes=bool(notes))
         return data, list(bodies), ask  # ids in row order (VIP first, then oldest)
+
+    def _notes(self, rows, refs, sched, name):
+        """memory.relevant() for the writer input's reply rows (sender address and domain from the row refs:
+        mail only) and events."""
+        entries = self.memory.entries()
+        if not entries:
+            return []
+        m_rows = []
+        for r in rows:
+            ref = refs.get(r["id"]) or {}
+            mail = ref.get("source") == "mail"
+            m_rows.append({"id": r["id"], "who": r.get("who"), "email": ref.get("sender") if mail else "",
+                           "domain": ref.get("domain") if mail else "", "area": name.get(r.get("area"), ""),
+                           "subject": r.get("text") or ""})
+        m_events = [{"id": e["id"], "title": e.get("title") or "", "area": name.get(e.get("area"), "")} for e in sched]
+        return memory.relevant(entries, m_rows, m_events)
 
     def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
         t0 = self.clock()
