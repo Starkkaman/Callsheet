@@ -79,6 +79,26 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(len(self.ix.search("kitch")), 3)   # the last word is a prefix
         self.assertEqual(len(self.ix.search('"renovation quote"')), 1)
 
+    def test_relaxed_retry_for_several_words(self):
+        # 0.6.0 fix: several words with no item holding them all: one retry with OR and prefixes, ranked as usual
+        self.ix.upsert([item("e1", "Dentist - Dr. Chen", "Check-up and cleaning", source="calendar", kind="event"),
+                        item("m1", "Your appointment is confirmed", "Chen Family Dental, Friday 2:30 pm"),
+                        item("m2", "Lunch", "nothing here")])
+        res = self.ix.search("dentist appointment")
+        self.assertEqual([r["title"] for r in res], ["Dentist - Dr. Chen", "Your appointment is confirmed"])
+        self.assertTrue(all(r["relaxed"] for r in res))
+        self.assertEqual(len(self.ix.search("dent appoint")), 2)          # every word a prefix
+        self.assertTrue(all("relaxed" not in r for r in self.ix.search("dentist chen")))   # AND still wins
+        self.assertEqual(len(self.ix.search("dentist")), 1)
+        self.assertNotIn("relaxed", self.ix.search("dentist")[0])
+        self.assertEqual(self.ix.search("zebra"), [])                     # one word: no retry
+        self.assertEqual(self.ix.search('"dentist appointment"'), [])     # one phrase: no retry
+        self.assertEqual(self.ix.search("dentist appointment", offset=1), [])   # first page only
+        self.assertEqual(self.ix.search("dentist appointment", source="gmail")[0]["title"],
+                         "Your appointment is confirmed")                 # filters still apply
+        self.assertEqual(ix.fts_query("dentist appointment"), '"dentist" "appointment"*')
+        self.assertEqual(ix.fts_query('dentist "dr chen"', relaxed=True), '"dr chen" OR "dentist"*')
+
     def test_filters(self):
         old = (T0 - dt.timedelta(days=400)).timestamp()
         self.ix.upsert([item("m1", "Invoice", "pay", people="Jonas <jonas@mlw.example>"),

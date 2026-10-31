@@ -228,7 +228,60 @@ class ChatSafetyWordingTest(unittest.TestCase):
     def test_answers_use_the_053_post_check(self):
         # 0.5.3's wider check (relays, settled) flags chat answers too: the chat calls writer.states_decision
         self.assertTrue(writer.states_decision("I'll tell Priya it's settled."))
-        self.assertIn("writer.states_decision(text)", (ROOT / "callsheet" / "app" / "chat.py").read_text())
+        self.assertIn("writer.states_decision(text, attributed_ok=True)",
+                      (ROOT / "callsheet" / "app" / "chat.py").read_text())
+
+    def test_fixed_lines_for_retry_and_unverified_claims(self):
+        s = chat.CHAT_SAFETY
+        self.assertIn("If a search finds nothing, try once more with other words (a synonym or a shorter form) before "
+                      "saying you couldn't find it.", s)
+        self.assertIn("When your answer reports what a message claims (paid, signed, approved, settled, done...), say "
+                      "it is unverified", s)
+        self.assertIn("that's the sender's claim, so check before relying on it.", s)
+
+
+class AttributionExemptionTest(unittest.TestCase):
+    """0.6.0 fix (variant A): in chat answers, what an explicit source (a message word or a name) says, claims,
+    wrote... isn't stated; first-person decisions and anything outside the reported span still count. Drafts keep
+    the strict check."""
+    REPORTED = ("An email from Jonas claims invoice 2207 is paid.",
+                "Jonas Weber sent an email on November 3, 2026, stating that invoice 2207 is paid and that Priya "
+                "should be told it is settled.",
+                "In an email from Jonas Weber on November 3, 2026, he states that invoice 2207 is paid and is settled.",
+                "Priya's email says the contract has been signed.",
+                "The DM says the contract is signed.",
+                "According to Jonas, the invoice is settled.",
+                "The invoice is paid, according to the email.",
+                "Otto's message mentions that the contract is signed.")
+    STATED = ("I told Priya the invoice is paid.",
+              "Invoice 2207 is paid.",
+              "Invoice 2207 is paid, it states.",
+              "Jonas says the invoice is paid, so I'll tell Priya it's settled.",
+              "The email says the invoice is paid, but I approved the transfer.",
+              "The email says it's paid and I've signed the contract.",
+              "Yes, I've paid it, as the email says.",
+              "Otto says it's signed. I've signed it too.",
+              "Jonas confirmed the invoice is paid.",
+              "Jonas says it's paid; it's signed too.")
+
+    def test_reported_clauses_pass_in_chat_only(self):
+        for t in self.REPORTED:
+            self.assertFalse(writer.states_decision(t, attributed_ok=True), t)
+            self.assertTrue(writer.states_decision(t), t)       # the brief writer's drafts stay strict
+
+    def test_statements_still_warn(self):
+        for t in self.STATED:
+            self.assertTrue(writer.states_decision(t, attributed_ok=True), t)
+            self.assertTrue(writer.states_decision(t), t)
+
+    def test_refusals_are_negations(self):
+        # 0.6.0 fix: cannot / can't / can not / unable to / won't / will not, everywhere
+        for t in ("I cannot confirm that anything is settled.", "I can't confirm it's paid.",
+                  "I can not say it's approved.", "I'm unable to confirm the invoice is paid.",
+                  "I won't say it's signed.", "I will not tell Priya it's settled."):
+            self.assertFalse(writer.states_decision(t), t)
+            self.assertFalse(writer.states_decision(t, attributed_ok=True), t)
+        self.assertTrue(writer.states_decision("I cannot attend, but I've paid the deposit."))
 
 
 class ChatRelayAnswerTest(ChatBase):

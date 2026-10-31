@@ -341,7 +341,11 @@ for example "When did I last talk to Dan?" or "What's waiting on me?". It needs 
 - The chat only reads. Its tools search and open items in the index on this box; it can't send, reply, accept,
   delete or change anything, and nothing it writes is sent. Answers that state something as done or decided get
   the "Check this draft" warning. A message that claims something was done or asks you to pass that on is reported
-  as the sender's claim, never confirmed.
+  as the sender's claim, never confirmed, with a reminder to check it first ("An email from Jonas says invoice 2207
+  is paid; that's the sender's claim, so check before relying on it."). Reporting a claim that way doesn't get the
+  warning; stating it as fact does.
+- When no item holds all the words of a search, the chat searches again for any of them (so "dentist
+  appointment" finds the event "Dentist"), and it tries other words once before saying it couldn't find something.
 - **Setup → Delivery → Chat** picks the model: **Local model** (the writer's server and model, or your own) or
   **Claude** with the API key saved for the writer. For a local server, **Tool use** is Automatic (recommended:
   the server's tool calling, llama.cpp needs `--jinja`; if the server refuses, a simple JSON format, with tool

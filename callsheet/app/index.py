@@ -131,9 +131,10 @@ def _hash(row):
     return hashlib.sha256(json.dumps([row[f] for f in _FIELDS], ensure_ascii=False).encode()).hexdigest()
 
 
-def fts_query(q):
+def fts_query(q, relaxed=False):
     """The owner's words as a safe FTS5 query: "quoted phrases" stay phrases, other words are quoted terms (AND),
-    the last word also matches as a prefix. Returns "" when nothing searchable is left."""
+    the last word also matches as a prefix. relaxed (0.6.0): terms joined with OR and every word a prefix. Returns ""
+    when nothing searchable is left."""
     q = str(q or "")[:500]
     terms = []
     for phrase in re.findall(r'"([^"]+)"', q):
@@ -143,8 +144,9 @@ def fts_query(q):
     rest = re.sub(r'"[^"]*"?', " ", q)
     words = [w for w in re.findall(r"\w+", rest) if w.upper() not in ("AND", "OR", "NOT", "NEAR")]
     for i, w in enumerate(words):
-        terms.append('"' + w + '"' + ("*" if i == len(words) - 1 and not q.rstrip().endswith('"') else ""))
-    return " ".join(terms[:MAX_TERMS])
+        prefix = relaxed or (i == len(words) - 1 and not q.rstrip().endswith('"'))
+        terms.append('"' + w + '"' + ("*" if prefix else ""))
+    return (" OR " if relaxed else " ").join(terms[:MAX_TERMS])
 
 
 def _segments(marked):
@@ -378,11 +380,14 @@ class Index:
                offset=0):
         """Ranked rows for the owner's words (FTS5 bm25: title x8, people x4, body x1; then newest first), or the
         newest rows matching the filters when q is empty. Each row: id, source, account, kind, thread, title, people,
-        area, ts, date (UTC ISO), url, snippet (plain text) and highlight ([[text, matched], ...])."""
+        area, ts, date (UTC ISO), url, snippet (plain text) and highlight ([[text, matched], ...]). 0.6.0: when
+        several words match nothing together, the first page is searched again with any of the words (each a prefix)
+        and those rows carry relaxed: true."""
         limit = max(1, min(int(limit or 20), MAX_LIMIT))
         offset = max(0, int(offset or 0))
         where, args = self._filters(source, account, area, people, since, until)
         match = fts_query(q)
+        relaxed = False
         with self.lock:
             if match:
                 sql = ("SELECT i.*, snippet(items_fts, -1, char(2), char(3), '…', 18) AS marked, "
@@ -393,6 +398,15 @@ class Index:
                     rows = self.db.execute(sql, [match] + args + [limit, offset]).fetchall()
                 except sqlite3.OperationalError:
                     rows = []
+                # 0.6.0: several words and nothing has them all: retry once with any word, each as a prefix
+                # ("dentist appointment" finds the event "Dentist - Dr. Chen"); first page only
+                loose = fts_query(q, relaxed=True)
+                if not rows and not offset and len(re.findall(r'"[^"]*"', loose)) > 1:
+                    try:
+                        rows = self.db.execute(sql, [loose] + args + [limit, offset]).fetchall()
+                    except sqlite3.OperationalError:
+                        rows = []
+                    relaxed = bool(rows)
             else:
                 sql = ("SELECT i.*, i.snippet AS marked FROM items i" + (" WHERE " + " AND ".join(where) if where else "")
                        + " ORDER BY i.ts DESC LIMIT ? OFFSET ?")
@@ -404,6 +418,8 @@ class Index:
                 [[r["snippet"], False]]
             row["highlight"] = segs
             row["snippet"] = "".join(s for s, _ in segs)
+            if relaxed:
+                row["relaxed"] = True
             out.append(row)
         return out
 

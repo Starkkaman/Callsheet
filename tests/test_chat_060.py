@@ -268,6 +268,15 @@ class ToolsTest(Base):
     def tools(self, index=None):
         return chat.Tools(index or self.index, UTC, self.store.areas(), "24h", clock=lambda: self.now[0])
 
+    def test_search_relaxes_once_and_says_so(self):
+        # 0.6.0 fix: "dentist appointment" has no item with both words; the retry with any word finds "Dentist"
+        res, _ = self.tools().run("search", {"q": "dentist appointment"})
+        self.assertEqual([r["title"] for r in res["items"]], ["Dentist"])
+        self.assertTrue(res["relaxed"])
+        self.assertIn("note", res)
+        res, _ = self.tools().run("search", {"q": "invoice"})
+        self.assertNotIn("relaxed", res)
+
     def test_allowlist_is_exactly_four_reads(self):
         self.assertEqual(chat.TOOL_NAMES, ("search", "get_item", "list_events", "stats"))
         self.assertEqual(set(chat.Tools.ALLOWED), set(chat.TOOL_NAMES))
@@ -369,6 +378,15 @@ class AnswerCheckTest(Base):
         self.local.messages = [say("Jonas asks you to approve the budget. Once you approve, he will book it.")]
         _, msg = self.ask("What does Jonas want?")
         self.assertIsNone(msg["warning"])
+
+    def test_attributed_claims_dont_warn_but_statements_do(self):
+        # 0.6.0 fix: a clause reported from a named source with a reporting verb isn't stated (chat answers only)
+        for text, warned in (("An email from Jonas claims invoice 2207 is paid.", False),
+                             ("I told Priya the invoice is paid.", True),
+                             ("Invoice 2207 is paid.", True)):
+            self.local.messages = [say(text)]
+            _, msg = self.ask("Is invoice 2207 paid?")
+            self.assertEqual(msg["warning"], writer.WARNING if warned else None, text)
 
     def test_cite(self):
         seen = {12: {"id": 12}, 15: {"id": 15}}

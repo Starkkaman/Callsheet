@@ -847,30 +847,80 @@ _DECISION = (
 # A clause is cut at these words: what follows is a condition, not a statement ("once it's approved").
 _CONDITION = re.compile(r"\b(?:if|once|when|whenever|after|as soon as|until|unless|before|whether|in case|"
                         r"provided|assuming)\b")
-_NEGATION = re.compile(r"\b(?:not|never|nothing|nobody|no one|yet to)\b|n't\b")
+# 0.6.0: "cannot", "unable to", "won't", "will not" too ("I cannot confirm that it's settled" is a refusal)
+_NEGATION = re.compile(r"\b(?:not|never|nothing|nobody|no one|yet to|cannot|can't|can not|unable to|won't|will not)\b"
+                       r"|n't\b")
 
 
-def states_decision(text):
+# 0.6.0, chat answers only: a clause the answer reports from an explicit source doesn't count as stating it.
+# The source is a message word ("the email", "a DM", "Priya's note") or a person's name, followed in the same
+# sentence by a reporting verb ("says", "claimed", "wrote", "mentions"...), or "according to". The reported span runs
+# from the verb to the end of the sentence, or to a contrast ("but", "however", "so", "and I"...), where checking
+# starts again. What comes before the verb is still checked, and first-person decisions ("I've paid", "we approved")
+# are never exempt. The brief writer's drafts keep the strict check (attributed_ok=False).
+_ATTR_SOURCE = (r"(?:(?i:email|e-mail|message|mail|note|letter|text|doc|document|reply|thread|dm|post|event|invoice|"
+                r"sender)|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?|[A-Z][a-z]+'s\s+(?i:email|message|note|reply))")
+_ATTR_VERB = (r"(?:says|said|saying|states|stated|stating|claims|claimed|claiming|wrote|writes|mentions|mentioned|"
+              r"reports|reported|notes|noted|indicates|indicated)")
+_ATTRIBUTED = re.compile(r"\b" + _ATTR_SOURCE + r"\b[^.!?]{0,80}?\b(?P<verb>" + _ATTR_VERB + r")\b(?:\s+that)?")
+_ACCORDING = re.compile(r"(?i)\baccording\s+to\b")
+_CONTRAST = re.compile(r"(?i)\b(?:but|however|although|though|yet|so|and\s+then|and\s+(?=(?:i|we)\b))\b|;")
+# the first-person decision patterns, checked even inside a reported span
+_FIRST_PERSON = tuple(p for p in _DECISION if p.pattern.startswith(r"\b(?:i|we)")
+                      or r"(?:my|our)\s+(?:side|end)" in p.pattern or r"by\s+(?:me|us)" in p.pattern)
+
+
+def _unattributed(sentence):
+    """The sentence with its reported spans (see above) blanked; case matters for names."""
+    for _ in range(5):
+        m = _ACCORDING.search(sentence)
+        if m:
+            before = [c.end() for c in _CONTRAST.finditer(sentence, 0, m.start())]
+            lo = before[-1] if before else 0
+            c = _CONTRAST.search(sentence, m.end())
+            sentence = sentence[:lo] + " " + (sentence[c.start():] if c else "")
+            continue
+        m = _ATTRIBUTED.search(sentence)
+        if not m:
+            break
+        c = _CONTRAST.search(sentence, m.end())
+        sentence = sentence[:m.start("verb")] + " " + (sentence[c.start():] if c else "")
+    return sentence
+
+
+def _clause_states(sentence, patterns):
+    for clause in re.split(r"[,;:]|\s[-–—]\s|\b(?:but|so|and then)\b", sentence):
+        m = _CONDITION.search(clause)
+        if m:
+            clause = clause[:m.start()]
+        clause = clause.strip()
+        if clause and not _NEGATION.search(clause) and any(p.search(clause) for p in patterns):
+            return True
+    return False
+
+
+def states_decision(text, attributed_ok=False):
     """True when a draft says that something has been approved, paid, released, sent, signed, booked,
     agreed or decided, as a fact or in the first person, or takes a sender's claim as done ("I note the
     contract has been signed", "to confirm the signed contract"). Text in [brackets], questions, conditions
     ("Once you approve, I'll book it.") and requests for a signed or paid document ("Please send me the signed
     copy") don't count. Plain text, so it also reads an incoming message (its "Sent from my phone" and
-    "Sent: <date>" lines are skipped)."""
+    "Sent: <date>" lines are skipped). attributed_ok (0.6.0, chat answers only): what the answer reports from a named
+    source with a reporting verb ("An email from Jonas claims the invoice is paid") doesn't count."""
     if not isinstance(text, str):
         return False
-    text = re.sub(r"\[[^\]]*\]", " ", text.replace("’", "'").lower())
-    text = re.sub(r"(?m)^[\s>]*sent(?:\s*:|\s+from\s+(?!(?:my|our)\s+(?:side|end)\b)).*$", " ", text)
+    text = re.sub(r"\[[^\]]*\]", " ", text.replace("’", "'"))
+    text = re.sub(r"(?mi)^[\s>]*sent(?:\s*:|\s+from\s+(?!(?:my|our)\s+(?:side|end)\b)).*$", " ", text)
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
         if not sentence.strip() or sentence.rstrip().endswith("?"):
             continue
-        for clause in re.split(r"[,;:]|\s[-–—]\s|\b(?:but|so|and then)\b", sentence):
-            m = _CONDITION.search(clause)
-            if m:
-                clause = clause[:m.start()]
-            clause = clause.strip()
-            if clause and not _NEGATION.search(clause) and any(p.search(clause) for p in _DECISION):
+        if not attributed_ok:
+            if _clause_states(sentence.lower(), _DECISION):
                 return True
+            continue
+        if _clause_states(sentence.lower(), _FIRST_PERSON) or \
+                _clause_states(_unattributed(sentence).lower(), _DECISION):
+            return True
     return False
 
 

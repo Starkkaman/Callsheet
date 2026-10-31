@@ -67,6 +67,7 @@ ix = index.Index(data_dir)                         # opens/creates index.db (060
 ix.search(q="", source=None, account=None, area=None, people=None, since=None, until=None, limit=20, offset=0)
 # -> [{id, source, account, kind, thread, title, people, area, ts, date, url, snippet, highlight}]
 #    highlight = [[text, is_match], ...]; q="" -> newest first; source may be "gmail,slack" or a list; limit <= 100
+#    0.6.0: several terms and 0 hits on the first page -> one retry with OR and every word a prefix; rows get relaxed: true
 ix.get(item_id)   # -> the row plus body, snippet, source_id; None if gone
 ix.stats()        # -> {total, bytes, oldest, newest, sources: {src: {items, years: {YYYY: n}, accounts: {acc: n}}}}
 ix.upsert(items) / ix.commit_step(items, source, account, key="scan", cursor=None, clear_cursor=False)
