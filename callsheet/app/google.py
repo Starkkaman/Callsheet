@@ -2,7 +2,9 @@
 
 Read-only by construction: every request goes through `request()`, which checks it against an
 explicit allowlist of (method, URL prefix) pairs. Gmail and Calendar are GET only; the only POSTs
-go to the OAuth token and revoke endpoints. Anything else raises NotAllowed before any network I/O.
+go to the OAuth token and revoke endpoints. 0.6.0 (Know me index): GET only to Drive's files.list
+(`/drive/v3/files`), files.get (`/drive/v3/files/<id>`, metadata or alt=media for plain text) and
+files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately. Anything else raises NotAllowed before any network I/O.
 Redirects are not followed.
 
 Base URLs can be overridden by env for tests only: CALLSHEET_GOOGLE_AUTH_BASE,
@@ -12,6 +14,7 @@ Errors carry plain sentences and Google's short error code, never tokens or requ
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +23,7 @@ SCOPES = ("openid email https://www.googleapis.com/auth/gmail.readonly "
           "https://www.googleapis.com/auth/calendar.readonly")
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"  # 0.6.0: only asked for by "Grant Drive access"
 REDIRECT_URI = "http://127.0.0.1:8765/"
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date", "List-Id", "List-Unsubscribe", "Precedence",
                     "Auto-Submitted", "Reply-To")
@@ -55,7 +59,15 @@ def allowlist():
         ("POST", revoke_url()),
         ("GET", api + "/gmail/v1/users/me/"),
         ("GET", api + "/calendar/v3/"),
+        ("GET", api + "/drive/v3/files"),     # 0.6.0: files.list (exact)
+        ("GET", api + "/drive/v3/files/"),    # 0.6.0: files.get / files.export, checked by _DRIVE_PATH below
     )
+
+
+# 0.6.0: under /drive/v3/files/ only "<file id>" and "<file id>/export" (files.get and files.export); nothing else,
+# e.g. not files/generateIds or any comments/permissions/revisions sub-resource.
+_DRIVE_PATH = re.compile(r"[A-Za-z0-9_-]{1,200}(?:/export)?")
+_DRIVE_NOT_IDS = ("generateIds", "trash")
 
 
 class NotAllowed(Exception):
@@ -90,6 +102,10 @@ def check_allowed(method, url):
         if m != method:
             continue
         if plain == prefix or (prefix.endswith("/") and plain.startswith(prefix)):
+            if prefix.endswith("/drive/v3/files/"):
+                rest = plain[len(prefix):]
+                if not _DRIVE_PATH.fullmatch(rest) or rest.split("/")[0] in _DRIVE_NOT_IDS:
+                    continue
             return
     raise NotAllowed(f"{method} {parts.path} is not allowed")
 
@@ -119,6 +135,12 @@ def request(method, url, params=None, form=None, token=None):
             code = err
         elif isinstance(err, dict):
             code = str(err.get("status", ""))
+            # 0.6.0: Gmail/Drive quota answers (403/429 with a reason) are told apart from "no access"
+            reasons = [e.get("reason") for e in err.get("errors") or [] if isinstance(e, dict)]
+            for r in reasons:
+                if r in RATE_REASONS or r in ("accessNotConfigured", "insufficientPermissions"):
+                    code = r
+                    break
         else:
             code = ""
         raise GoogleError(_plain(e.code, code), e.code, code) from None
@@ -135,7 +157,16 @@ def request(method, url, params=None, form=None, token=None):
         raise GoogleError("Google sent an answer Callsheet can't read.", 200) from None
 
 
+RATE_REASONS = ("rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded")
+
+
 def _plain(status, code):
+    if code in RATE_REASONS:
+        return "Google asked Callsheet to slow down (usage limit reached). It will try again later."
+    if code == "accessNotConfigured":
+        return "This Google API isn't turned on in your Google Cloud project. Turn it on, then try again."
+    if code == "insufficientPermissions":
+        return "Google said this account hasn't given Callsheet that permission."
     if code == "invalid_grant":
         return "Google asked to sign in again."
     if code in ("invalid_client", "unauthorized_client"):
@@ -156,12 +187,14 @@ def _plain(status, code):
 
 
 # --- OAuth -----------------------------------------------------------------
-def build_auth_url(client_id, state, code_challenge):
+def build_auth_url(client_id, state, code_challenge, extra_scopes=(), login_hint=None):
+    """extra_scopes (0.6.0): added to the usual scopes for an incremental grant (include_granted_scopes keeps the
+    scopes the account already gave); login_hint picks the account on Google's page."""
     q = {
         "client_id": client_id,
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "scope": SCOPES,
+        "scope": " ".join([SCOPES] + [s for s in extra_scopes if s not in SCOPES.split()]),
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",
@@ -169,6 +202,8 @@ def build_auth_url(client_id, state, code_challenge):
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if login_hint:
+        q["login_hint"] = login_hint
     return auth_url() + "?" + urllib.parse.urlencode(q, quote_via=urllib.parse.quote)
 
 
@@ -248,3 +283,87 @@ def calendar_events(token, calendar_id, time_min, time_max, tz):
         if not page:
             break
     return items
+
+
+# --- 0.6.0: Know me index reads (GET only; paged by the caller so a scan can resume) ----------------------
+def gmail_messages(token, q, page_token=None, max_results=100):
+    params = {"q": q, "maxResults": max_results, "includeSpamTrash": "false"}
+    if page_token:
+        params["pageToken"] = page_token
+    return request("GET", api_base() + "/gmail/v1/users/me/messages", token=token, params=params)
+
+
+def gmail_message_full(token, message_id):
+    """One message with its body parts (format=full); the index keeps only the text parts."""
+    return request("GET", api_base() + "/gmail/v1/users/me/messages/" + _q(message_id), token=token,
+                   params={"format": "full"})
+
+
+def calendar_events_page(token, calendar_id, time_min, time_max, page_token=None, max_results=250, fields=None):
+    params = {"timeMin": time_min, "timeMax": time_max, "singleEvents": "true", "maxResults": max_results,
+              "showDeleted": "false"}
+    if page_token:
+        params["pageToken"] = page_token
+    if fields:
+        params["fields"] = fields
+    return request("GET", api_base() + "/calendar/v3/calendars/" + _q(calendar_id) + "/events", token=token,
+                   params=params)
+
+
+def drive_files(token, q, page_token=None, page_size=100, fields=None):
+    params = {"q": q, "pageSize": page_size, "orderBy": "modifiedTime desc", "spaces": "drive",
+              "includeItemsFromAllDrives": "true", "supportsAllDrives": "true", "corpora": "allDrives",
+              "fields": fields or "nextPageToken,files(id,name,mimeType,modifiedTime,owners(displayName,emailAddress),"
+                                  "webViewLink,size)"}
+    if page_token:
+        params["pageToken"] = page_token
+    return request("GET", api_base() + "/drive/v3/files", token=token, params=params)
+
+
+def drive_export(token, file_id, mime):
+    """Text of a Google Docs/Sheets/Slides file (files.export). Returns str."""
+    return request_text("GET", api_base() + "/drive/v3/files/" + _q(file_id) + "/export", token=token,
+                        params={"mimeType": mime})
+
+
+def drive_media(token, file_id):
+    """Content of a small plain-text file (files.get alt=media). Returns str."""
+    return request_text("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
+                        params={"alt": "media", "supportsAllDrives": "true"})
+
+
+MAX_TEXT_BYTES = 2_000_000
+
+
+def request_text(method, url, params=None, token=None):
+    """Like request() for a text body (Drive export/media): the same allowlist and errors; at most MAX_TEXT_BYTES
+    are read."""
+    if params:
+        url = url + "?" + urllib.parse.urlencode(params, doseq=True)
+    check_allowed(method, url)
+    req = urllib.request.Request(url, method=method.upper())
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with _opener.open(req, timeout=TIMEOUT) as resp:
+            body = resp.read(MAX_TEXT_BYTES)
+    except urllib.error.HTTPError as e:
+        try:
+            payload = json.loads(e.read() or b"{}")
+        except (ValueError, OSError):
+            payload = {}
+        err = payload.get("error") if isinstance(payload, dict) else None
+        code = ""
+        if isinstance(err, dict):
+            code = str(err.get("status", ""))
+            for r in [x.get("reason") for x in err.get("errors") or [] if isinstance(x, dict)]:
+                if r in RATE_REASONS or r in ("accessNotConfigured", "insufficientPermissions", "exportSizeLimitExceeded"):
+                    code = r
+                    break
+        raise GoogleError(_plain(e.code, code), e.code, code) from None
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason):
+            raise GoogleError("Google didn't answer in time.") from None
+        raise GoogleError("Couldn't reach Google. Check the internet connection.") from None
+    return body.decode("utf-8", "replace")

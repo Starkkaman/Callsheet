@@ -100,7 +100,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         path = urllib.parse.urlsplit(self.path).path
         if path.startswith("/api/"):
-            return self._api("GET", path, head)
+            # GET query parameters reach the handler as its body (0.6.0: api/index/search?q=...)
+            try:
+                qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, max_num_fields=20)
+            except ValueError:
+                qs = {}
+            return self._api("GET", path, head, {k: v[-1] for k, v in qs.items()} if qs else None)
         if path != "/" and pathlib.Path(self.translate_path(path)).is_dir():
             # no directory listings, and no redirect to an absolute "dir/" URL (breaks under ingress)
             self.send_error(404, "Not found")
@@ -274,6 +279,8 @@ def main(argv=None):
         sys.exit(1)
     if not args.no_scheduler:
         httpd.app.scheduler.start()
+        if httpd.app.scanner:  # 0.6.0 index: the Know me scan (resumes a scan that was running)
+            httpd.app.scanner.start_thread()
     httpd.app.signal.service.start()  # Signal (0.5.1): signal-cli runs only once Signal is linked
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)
     try:

@@ -11,6 +11,8 @@ When you connect a Google account, Callsheet asks Google for read-only access:
   a short snippet and list headers).
 - `calendar.readonly`: to show today's events and flag clashes.
 - `openid` and `email`: to know which account you connected.
+- `drive.readonly` (only if you choose "Grant Drive access" in Get to know me): to read the text of your
+  Docs, Sheets, Slides and text files into the local index. Callsheet never changes, shares or deletes files.
 
 Callsheet never sends, deletes, moves or changes email, and never creates, changes or deletes calendar events.
 
@@ -36,6 +38,10 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   no tracking, no third parties.
 - If you later turn on an AI writer (a cloud model such as Claude, or a local model on your network), only
   the items Callsheet has picked for your brief are sent to the writer you chose. This is off until you turn it on.
+- Get to know me (0.6.0) keeps a full-text index of what it read (mail, events, Slack messages, Drive files,
+  Obsidian notes) in its own file on your Home Assistant machine. It is left out of Home Assistant backups,
+  never leaves the machine, and in 0.6.0 is not sent to any AI writer. You can delete it from the page at any
+  time; turning a source off or disconnecting an account removes what was read from it.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

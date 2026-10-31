@@ -34,7 +34,8 @@ class OAuthFlows:
         for fid in [f for f, v in self.flows.items() if v["expires"] < now]:
             del self.flows[fid]
 
-    def start(self, area_id):
+    def start(self, area_id, extra_scopes=(), login_hint=None):
+        """extra_scopes/login_hint (0.6.0): the incremental Drive grant for an account already connected."""
         client = self.store.google_client()
         if not client:
             raise InputError("Add your Google client ID and secret first.")
@@ -49,7 +50,8 @@ class OAuthFlows:
             self._prune()
             self.flows[flow_id] = {"area_id": area_id, "state": state, "verifier": verifier,
                                    "expires": self.clock() + FLOW_TTL}
-        return {"flow_id": flow_id, "auth_url": google.build_auth_url(client["client_id"], state, challenge)}
+        return {"flow_id": flow_id, "auth_url": google.build_auth_url(client["client_id"], state, challenge,
+                                                                       extra_scopes, login_hint)}
 
     def finish(self, flow_id, pasted):
         if not isinstance(flow_id, str) or not isinstance(pasted, str) or not pasted.strip():
