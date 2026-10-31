@@ -261,6 +261,26 @@ The app's **Configuration** tab in Home Assistant has two optional fields, `writ
 turns on the local writer with that server and model at start-up. Once you change the writer in setup,
 setup wins and these options are ignored. Empty fields change nothing.
 
+## Phone notifications (optional)
+
+Setup → Delivery → Phone notifications. Install the Home Assistant app on your phone and sign in: Home Assistant
+then has a `notify.mobile_app_<phone>` service, and Callsheet lists it. Pick one or more phones, then turn on:
+
+- **At call times**: after each scheduled brief, how many replies and events there are and the top item
+  (sender and subject, or an event title).
+- **Urgent alerts between briefs**: every 10 minutes between call times Callsheet looks at new inbox mail
+  (headers and Gmail's short preview) and at Slack DMs from your VIPs, with fixed rules and no AI. It alerts for
+  a VIP; for mail that says emergency or ASAP, or urgent or today together with a deadline ("due", "by 5pm",
+  "end of day"); and for a sender saying something was approved, paid or signed. Newsletters, automated mail,
+  Gmail's other tabs and senders you marked "Doesn't need a reply" are skipped. Each message alerts once; at
+  most 3 an hour by default (the rest are grouped into one alert); never in quiet hours (22:00 to 07:00 by
+  default) and not on days off when check-ins skip them.
+
+A notification shows who wrote and the subject only. Tapping it opens Callsheet in the Home Assistant app.
+Home Assistant delivers it through Apple's or Google's push service, so the sender's name and the subject pass
+through that service. Use **Send a test notification** to check; if Home Assistant no longer knows a phone,
+open the Home Assistant app on it or pick another phone.
+
 ## Your data
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable

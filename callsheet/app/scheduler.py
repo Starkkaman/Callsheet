@@ -1,5 +1,7 @@
 """Background thread that runs a sync at each enabled call time in the configured time zone
 (check-ins skipped on days off when set), plus once at start-up if the last sync is older than 30 min.
+0.5.1: after a scheduled brief the notifier sends the phone summary; between call times it runs the urgent light
+check when push.check_due says so (every ~10 min, never in quiet hours, on days off or near a call time).
 """
 import datetime as dt
 import sys
@@ -13,9 +15,10 @@ TICK_S = 30
 
 
 class Scheduler:
-    def __init__(self, store, syncer, clock=time.time, tick=TICK_S):
+    def __init__(self, store, syncer, clock=time.time, tick=TICK_S, notifier=None):
         self.store = store
         self.syncer = syncer
+        self.notifier = notifier
         self.clock = clock
         self.tick = tick
         self.stop_event = threading.Event()
@@ -49,13 +52,27 @@ class Scheduler:
         nxt, _ = rules.next_call(settings, dt.datetime.fromtimestamp(last_check, tz))
         return nxt is not None and nxt.timestamp() <= now
 
-    def _sync(self):
+    def _sync(self, scheduled=False):
         if not self.store.has_sources():
             return
         try:
             self.syncer.run_now()
         except Exception as e:  # keep the scheduler alive; the message has no secrets (type only)
             sys.stderr.write(f"Callsheet sync failed: {type(e).__name__}\n")
+        if scheduled and self.notifier:
+            try:
+                self.notifier.after_brief()
+            except Exception as e:  # noqa: BLE001 (type only, no secrets)
+                sys.stderr.write(f"Callsheet push failed: {type(e).__name__}\n")
+
+    def _urgent(self, now):
+        if not self.notifier or not self.store.has_sources():
+            return
+        try:
+            if self.notifier.due(now):
+                self.notifier.check()
+        except Exception as e:  # noqa: BLE001 (type only, no secrets)
+            sys.stderr.write(f"Callsheet urgent check failed: {type(e).__name__}\n")
 
     def _loop(self):
         if self.startup_due():
@@ -64,5 +81,7 @@ class Scheduler:
         while not self.stop_event.wait(self.tick):
             now = self.clock()
             if self.due(last, now):
-                self._sync()
+                self._sync(scheduled=True)
+            else:
+                self._urgent(now)
             last = now

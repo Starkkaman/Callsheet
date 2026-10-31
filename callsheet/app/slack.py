@@ -294,6 +294,9 @@ def read_workspace(cl, ws, now_ts, log=None):
     pending = [tuple(p) for p in state.get("mentions") or [] if isinstance(p, list) and len(p) == 3]
     convs = list_conversations(cl)  # a failure here is a failure of the whole workspace
     state["channels"] = channel_list(convs)
+    # 0.5.1: DM channel per person (ids only), for the urgent check's VIP DMs (push.py)
+    state["dms"] = dict(list({c["user"]: c["id"] for c in convs
+                              if c["kind"] == "dm" and c.get("user") and c["id"] not in ignored}.items())[:500])
     readable = [c for c in convs if c["id"] not in ignored]
     data["convs"] = {c["id"]: {"kind": c["kind"], "name": c["name"], "user": c.get("user")} for c in readable}
     skipped = 0
