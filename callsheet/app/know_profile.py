@@ -311,8 +311,9 @@ def build_draft(index, owner_emails, owner_names, areas, vips, tz, now, fmt="12h
                     p["subjects"].append((ts, subj))
             if ts >= now - PROJECT_DAYS * 86400 and subj:
                 d = docs.setdefault(ckey, {"subject": subj, "people": set(), "areas": collections.Counter(),
-                                           "last": 0.0})
-                d["people"] |= {p["id"] for p in parts if p}
+                                           "last": 0.0, "mine": False})
+                d["people"] |= {p["id"] for p in parts if p and not p["auto"]}
+                d["mine"] = d["mine"] or bool(out)
                 d["areas"][area] += 1
                 d["last"] = max(d["last"], ts)
         elif src in ("slack", "signal"):
@@ -352,7 +353,7 @@ def build_draft(index, owner_emails, owner_names, areas, vips, tz, now, fmt="12h
             subj = subject(r["title"])
             if subj:
                 docs[("obsidian", r["id"])] = {"subject": subj, "people": set(), "areas": collections.Counter({area: 1}),
-                                               "last": ts}
+                                               "last": ts, "mine": True}
     # reply times: an owner message answers the incoming messages since the owner's last one in that conversation
     area_replies = collections.defaultdict(list)
     for ckey, evs in convs.items():
@@ -470,14 +471,15 @@ def _projects(docs, reg, areas, now):
                 grams[(a.lower(), b.lower())] = a + " " + b
         for g, orig in grams.items():
             st = terms.setdefault(g, {"docs": set(), "people": collections.Counter(), "areas": collections.Counter(),
-                                      "case": collections.Counter(), "last": 0.0})
+                                      "case": collections.Counter(), "last": 0.0, "mine": 0})
             st["docs"].add(did)
+            st["mine"] += 1 if d["mine"] else 0
             st["people"].update(d["people"])
             st["areas"].update(d["areas"])
             st["case"][orig] += 1
             st["last"] = max(st["last"], d["last"])
     cands = [(len(st["docs"]) * (1.6 if len(g) == 2 else 1.0), g, st) for g, st in terms.items()
-             if len(st["docs"]) >= (3 if len(g) == 2 else 4) and (st["people"] or len(st["docs"]) >= 5)]
+             if len(st["docs"]) >= (3 if len(g) == 2 else 4) and st["mine"] >= 2]
     cands.sort(key=lambda c: (-c[0], " ".join(c[1])))
     picked = []
     for _, g, st in cands:

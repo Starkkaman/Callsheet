@@ -124,6 +124,9 @@ class DraftTest(ProfileEnv):
         self.assertIn("You usually answer Priya within an hour", habits)
         self.assertIn("You never reply to Acme Deals", habits)
         self.assertTrue(any("budget" in j["name"].lower() for j in d["projects"]), d["projects"])
+        pj = " ".join(j["name"].lower() for j in d["projects"])
+        self.assertNotIn("build", pj)                      # automated mail is never a project
+        self.assertNotIn("deals", pj)                      # nor a newsletter the owner never answered
         self.assertEqual([a["term"] for a in d["acronyms"]], ["MLW"])
         self.assertTrue(all(len(s) <= kp.SUBJECT_CLIP for x in d["people"] for s in x["subjects"]))
         self.assertNotIn("body", json.dumps(d))

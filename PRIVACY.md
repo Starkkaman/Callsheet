@@ -25,7 +25,9 @@ Callsheet never sends, deletes, moves or changes email, and never creates, chang
   the items Callsheet has picked for your brief are sent to the writer you chose. This is off until you turn it on.
 - Get to know me (0.6.0) keeps a full-text index of what it read (mail, events, Slack messages, Drive files,
   Obsidian notes) in its own file on your Home Assistant machine. It is left out of Home Assistant backups,
-  never leaves the machine, and in 0.6.0 is not sent to any AI writer. You can delete it from the page at any
+  and never leaves the machine as a whole. When you ask for suggestions or questions, the AI writer you
+  chose gets only a summary from it: names, email domains, counts and short subject lines; nothing is kept in
+  Memory unless you save or answer it. You can delete it from the page at any
   time; turning a source off or disconnecting an account removes what was read from it.
 
 ## Your control

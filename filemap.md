@@ -20,6 +20,7 @@
 - `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
 - `callsheet/app/index.py`: 0.6.0 Know me index: `/data/index.db` (0600) with items + FTS5, idempotent upserts, cursors, search/get/stats, delete per source/account, wipe.
+- `callsheet/app/know_profile.py`: 0.6.0 Know me 3b: the drafted profile from the index (people, recurring, habits, VIP candidates, projects), AI suggestions and questions (aggregates only), owner saves and answers into memory.md.
 - `callsheet/app/sources.py`: 0.6.0 index sources (read-only): Gmail, Calendar, Slack, Drive (scope check via token refresh), Obsidian (vault check + note parsing); retry/skip errors in plain words.
 - `callsheet/app/scan.py`: 0.6.0 scan job: windows, estimates and warnings, background thread with pause/resume/cancel, call-time pauses, backoff, 30-minute refresh, orphan prune.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons (Gmail categories, suppression), Slack rows and Heads up, rules-based Top of the day, 12h/24h display times, call times, brief composition.
@@ -58,6 +59,7 @@
 - `tests/fixtures/store_0_3_4.py`: frozen 0.3.4 `store.py`, used to build the 0.3.4 database.
 - `tests/fake_ha.py`: fake Home Assistant Core API (services list, notify with 400 for unknown phones, token check; records requests).
 - `tests/test_push.py`: 0.5.1 phone notifications: the notify-only allowlist, target listing, payloads (no body text, clipping, deep link), scheduler timing, dedupe, rate limit and batching, the urgent rules, settings validation, the test button, VIP Slack DMs, the token never in logs, no writer or model in the light check.
+- `tests/test_profile_060.py`: 0.6.0 profile: Signal source, draft aggregates, AI suggestions/questions against fakes (schema, junk, injection), the memory boundary, gating, routes.
 - `tests/test_index_060.py`: 0.6.0 index: FTS ranking/filters, idempotency, deletion, each source against fakes (pages, resume, backoff, quota), Drive grant, Obsidian, estimates, call-time pauses, API, static checks.
 - `tests/fake_slack.py`: fake Slack Web API (read methods, 429 with Retry-After, request log).
 - `tests/test_slack.py`: Slack against the fake: allowlist, manifest scopes, connect and channels API, DM/mention/thread rules, Heads up, ignore list, VIPs, rate limits and the request cap, reconnect, suppression.
@@ -71,6 +73,7 @@
 - `PRIVACY.md`: privacy policy (linked from the Google consent screen).
 - `docs/eval-contenders.md`: the 0.5.0 writer evaluation with contenders: data model, validation, migration, API, requests per contender, run files, results.
 - `docs/push-and-alerts.md`: 0.5.1 phone notifications and urgent alerts: Home Assistant access and allowlist, deep link, settings, summary and alert texts, the light check, urgent rules, timing, rate limit, state, API.
+- `docs/know-me-profile.md`: 0.6.0 Know me 3b: the draft, the AI pass and its prompt, the memory boundary, questions, API.
 - `docs/know-me-index.md`: 0.6.0 Know me index (3a): schema, sources and allowlist additions, scan and estimates, API, and the Python interface for 3b/3c.
 - `docs/memory-and-dates.md`: 0.5.0 notes to Callsheet (memory file format, relevance, the notes block, API) and possible events (date rules, calendar check, the Add to calendar link).
 - `docs/step4-0.4.0.md`: the 0.4.0 backend/API contract (Slack, writer output, writing profiles, time format, doesn't-need-a-reply, new since, upgrade).
