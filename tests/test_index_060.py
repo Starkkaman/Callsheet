@@ -639,7 +639,7 @@ class ScannerTest(Env):
         self.app.handle("PATCH", "index/settings", {"sources": {"obsidian": False}})
         self.assertEqual(self.app.index.count("obsidian"), 0)
         with self.assertRaises(InputError):
-            self.app.handle("PATCH", "index/settings", {"sources": {"signal": True}})
+            self.app.handle("PATCH", "index/settings", {"sources": {"fax": True}})
         with self.assertRaises(InputError):
             self.app.handle("POST", "index/scan", {"window": "30d", "sources": ["obsidian"]})
 
@@ -696,7 +696,7 @@ class ApiTest(Env):
         self.assertTrue(st["available"])
         self.assertIsNone(st["job"])
         self.assertEqual([w["key"] for w in st["windows"]], ["30d", "90d", "1y", "5y", "all"])
-        self.assertEqual([x["key"] for x in st["sources"]], ["gmail", "calendar", "slack", "drive", "obsidian"])
+        self.assertEqual([x["key"] for x in st["sources"]], ["gmail", "calendar", "slack", "drive", "obsidian", "signal"])
         s, est = self.call("POST", "/api/index/estimate", {"window": "30d", "sources": ["gmail"]})
         self.assertEqual((s, est["targets"][0]["count"]), (200, 12))
         self.assertEqual(self.call("POST", "/api/index/estimate", {"window": "3y"})[0], 400)

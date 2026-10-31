@@ -1040,7 +1040,7 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : 'brief';  /* 0.6.0 index: #knowme */
+    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
     var changed = v !== ui.view;
     ui.view = v;
     setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
@@ -1049,6 +1049,7 @@
     }
     if (v !== 'eval') stopEvalPoll();
     if (v !== 'knowme') stopKnowPoll();  /* 0.6.0 index */
+    if (v !== 'profile' && v !== 'profileq') stopProfilePoll();  /* 0.6.0 profile */
     refreshErr.textContent = '';
     if (!changed && main.querySelector('.sheet, .bv')) return;
     window.scrollTo(0, 0);
@@ -1058,6 +1059,7 @@
     }
     else if (v === 'eval') showEval();
     else if (v === 'knowme') showKnow('#kn-title');  /* 0.6.0 index */
+    else if (v === 'profile' || v === 'profileq') showProfile(v);  /* 0.6.0 profile */
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -2326,7 +2328,7 @@
       m.error ? h('p', { class: 'err', role: 'alert' }, 'The file has a problem, so no notes are read until it’s fixed: ' + m.error) : null,
       h('label', { class: 'label', for: 'mem-text' }, 'memory.md'),
       h('p', { class: 'help', id: 'mem-help' }, 'Each note starts with “### ” and a title, then “- key: value” lines (people, emails, domains, topics, area), a blank line and the note. ' +
-        'A note without people, emails, domains or topics applies to its whole area. Profile and Answers are for a later version.'),
+        'A note without people, emails, domains or topics applies to its whole area. Profile and Answers hold what you saved in Get to know me.'),
       ta,
       h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, undoB, saveB])]), err,
       h('div', { class: 'memfoot' }, [h('span', { class: 'muted' }, m.error ? 'Notes aren’t read right now.' : plural(n, 'note', 'notes') + ' in the memory.'), clear]),
@@ -2750,7 +2752,7 @@
      later (3b). Everything is inserted as text. */
   var KN = { st: null, est: {}, win: '90d', timer: null, seq: 0, grant: null, fresh: false, counting: null };
   var KNSTEPS = ['Sources', 'Scan', 'Check', 'Questions', 'Done'];
-  var KNICON = { gmail: 'mail', calendar: 'cal', slack: 'slack', drive: 'note', obsidian: 'note' };
+  var KNICON = { gmail: 'mail', calendar: 'cal', slack: 'slack', drive: 'note', obsidian: 'note', signal: 'signal' };
   function stopKnowPoll() { if (KN.timer) { clearTimeout(KN.timer); KN.timer = null; } }
   function knowEntry() { return btn('act', 'Get to know me', { 'data-fk': 'kn-open' }, function () { location.hash = 'knowme'; }); }
   function knBusy(st) { var j = st && st.job; return !!(j && (j.state === 'running' || j.state === 'paused')); }
@@ -2933,7 +2935,7 @@
       h('ul', { class: 'knsrcs' }, rows),
       ended ? h('div', { class: 'calm', role: 'status' }, [h('b', null, j.state === 'done' ? 'Done. ' : 'Stopped. '), 'Callsheet kept the ' + fmtNum(j.read) + ' items it read. New mail, events and messages are added every 30 minutes.'])
         : h('div', { class: 'calm' }, [h('b', null, 'You can close this page; Callsheet keeps going. '), 'It pauses 10 minutes before and after each call time so briefs aren’t slowed.']),
-      h('div', { class: 'go' }, ended ? [again] : [pause, stop, h('span', { class: 'hint' }, 'Stop keeps what was read so far.')]), err];
+      h('div', { class: 'go' }, ended ? [j.read ? pfEntry() : null, again] : [pause, stop, h('span', { class: 'hint' }, 'Stop keeps what was read so far.')]), err];
   }
   function knWipe(st) {
     if (!KN.wipe) return btn('tbtn', 'Delete the index', { 'data-fk': 'kn-wipe' }, function () { KN.wipe = true; renderKnow('[data-fk="kn-wipe-no"]'); });
@@ -2969,6 +2971,305 @@
     syncBg();
     var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
     if (f) f.focus({ preventScroll: !!keep });
+  }
+
+  /* ---------- 0.6.0 profile: Get to know me → Check (#profile), Questions (#profile-questions), Done ----------
+     knowme-v2 frames 3–5. The draft, the AI's suggestions and the questions come from api/profile (index.db); only
+     the owner's Save, Accept and answers write memory.md (server side, docs/know-me-profile.md). Data is text (h()). */
+  var PF = { v: null, seq: 0, timer: null, edit: null, kind: null, draft: null, qi: null, other: false, done: false, enough: false };
+  function stopProfilePoll() { if (PF.timer) { clearTimeout(PF.timer); PF.timer = null; } }
+  function pfEntry() { return btn('act', 'Check the draft →', { 'data-fk': 'pf-open' }, function () { location.hash = 'profile'; }); }
+  function pfBusy() { return !!(PF.v && PF.v.job && PF.v.job.state === 'running'); }
+  function pfArea(id) { var a = (PF.v.areas || []).filter(function (x) { return x.id === id; })[0]; return a ? a.name : ''; }
+  function showProfile(view, focusSel) {
+    var seq = ++PF.seq;
+    stopProfilePoll();
+    return api('GET', 'api/profile').then(function (r) {
+      if (seq !== PF.seq || (ui.view !== 'profile' && ui.view !== 'profileq')) return;
+      PF.v = r;
+      if (view === 'profileq' && !r.interview.at && !pfBusy() && r.draft) {
+        return api('POST', 'api/profile/questions', {}).then(function (x) { PF.v = x; pfRender(focusSel); }, function (e) { PF.err = e.message; pfRender(focusSel); });
+      }
+      pfRender(focusSel);
+    }, function (e) { if (ui.view === view) status('Could not load the profile (' + e.message + ')'); });
+  }
+  function pfPoll() {
+    stopProfilePoll();
+    if (!pfBusy()) return;
+    PF.timer = setTimeout(function () { showProfile(ui.view); }, 1500);
+  }
+  function pfRender(focusSel) {
+    var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
+    var q = ui.view === 'profileq';
+    var sheet = h('div', { class: 'sheet wiz kn pf' }, [
+      h('div', { class: 'mast two' }, [
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup › Memory › Get to know me'),
+          h('h1', { id: 'pf-title', tabindex: '-1' }, PF.done ? 'Done' : q ? pfQTitle() : 'Check what Callsheet found')]),
+        h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Draft from'), h('div', { class: 'disp' }, fmtNum(PF.v.items || 0)),
+          h('div', { class: 's' }, 'items in the index')])]),
+      h('div', { class: 'knhead' }, h('ol', { class: 'knsteps', 'aria-label': 'Steps' }, KNSTEPS.map(function (s, i) {
+        var n = PF.done ? 4 : q ? 3 : 2;
+        return h('li', { class: i < n ? 'ok' : null, 'aria-current': i === n ? 'step' : null }, s);
+      }))),
+      h('section', { class: 'step', 'aria-labelledby': 'pf-title' }, PF.done ? pfDone() : q ? pfQuestions() : pfCheck())]);
+    main.textContent = '';
+    add(main, sheet);
+    syncBg();
+    var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
+    if (f) f.focus({ preventScroll: !!keep });
+    pfPoll();
+  }
+  function pfDo(btns, err, method, path, body, focusSel) {
+    return run(btns, err, function () { return api(method, path, body); }, function (r) {
+      if (r && r.people) PF.v = r; else if (r && r.questions) PF.v.interview = r;
+      pfRender(focusSel);
+    });
+  }
+
+  /* --- Check: people, projects, recurring, reply habits --- */
+  function pfCheck() {
+    var v = PF.v, err = errBox();
+    if (!v.draft) return [h('p', { class: 'help' }, 'Callsheet has nothing to draft from yet. Read your history first.'),
+      h('div', { class: 'go' }, [btn('act', 'Get to know me', null, function () { location.hash = 'knowme'; })])];
+    var days = Math.round((v.window_days || 365) / 30);
+    return [
+      h('p', { class: 'help pfintro' }, 'A first draft from ' + (days >= 12 ? 'the last year' : days + ' months') + ' of mail, Slack, Signal, calendars and notes. Select any row to change it. Nothing is kept until you save or accept it; the questions come next.'),
+      v.memory_error ? h('p', { class: 'err', role: 'alert' }, v.memory_error) : null,
+      pfAi(),
+      pfPeople(), pfProjects(), pfItems('Recurring', 'pf-rec', v.recurring, function (r) { return [h('b', null, r.title), h('span', { class: 'sub' }, r.when)]; },
+        function (r) { return r.title + ', ' + r.when; }),
+      pfItems('Reply habits', 'pf-hab', v.habits, function (r) { return [h('b', null, r.text), h('span', { class: 'sub' }, r.sub)]; },
+        function (r) { return r.text; }),
+      h('div', { class: 'go pfnav' }, [
+        btn('act', 'Continue to questions' + (v.interview.questions.length ? ' (' + v.interview.questions.length + ')' : ''), { 'data-fk': 'pf-next' }, function () { PF.done = false; PF.enough = false; location.hash = 'profile-questions'; }),
+        btn('act ghost', 'Save and finish later', { 'data-fk': 'pf-later' }, function () { location.hash = 'knowme'; }),
+        h('span', { class: 'hint' }, 'What you saved is kept. Come back any time from Setup, Memory.')]), err];
+  }
+  function pfAi() {
+    var v = PF.v, err = errBox(), j = v.job && v.job.kind === 'suggest' ? v.job : null;
+    if (j && j.state === 'running') return h('div', { class: 'calm', role: 'status' }, [h('b', null, 'Asking the AI for suggestions… '), 'This can take a minute with a local model.']);
+    if (v.can_ask && v.can_ask.code === 'off') return h('p', { class: 'help' }, 'Suggested roles and project names need the AI writer. ' + v.can_ask.text);
+    var b = btn('act', v.ai.at ? 'Suggest again' : 'Suggest roles and project names', { 'data-fk': 'pf-suggest' }, function () {
+      pfDo([b], err, 'POST', 'api/profile/suggest', {}, '[data-fk="pf-title"]');
+    });
+    return h('div', { class: 'pfai' }, [b, h('span', { class: 'hint' }, 'Your writer model sees only names, counts and subject lines. What it suggests is marked “suggested” until you accept it.'),
+      j && j.state === 'error' ? h('p', { class: 'err', role: 'alert' }, j.error) : null,
+      v.can_ask && v.can_ask.code === 'busy' ? h('p', { class: 'help' }, v.can_ask.text) : null, err]);
+  }
+  function pfCard(title, sub, kids) {
+    return h('div', { class: 'pfcard' }, [h('div', { class: 'pfch' }, [h('h2', null, title), sub ? h('span', { class: 'hint' }, sub) : null])].concat(kids));
+  }
+  function pfVal(x) {   /* what a person's row shows: saved, else suggestion, else draft */
+    var s = x.saved, g = x.suggestion || {}, d = x.draft;
+    return { name: s ? s.name : d.name, role: s ? s.role : g.role || '', roleSug: !s && !!g.role,
+      projects: s ? s.projects : g.projects && g.projects.length ? g.projects : d.projects, projSug: !s && !!(g.projects && g.projects.length),
+      area: s ? s.area : d.area };
+  }
+  function pfPeople() {
+    var v = PF.v, rows = [h('div', { class: 'phead', 'aria-hidden': 'true' }, ['Name', 'Role', 'Projects', 'Area', 'VIP'].map(function (t) { return h('span', null, t); }))];
+    v.people.forEach(function (x) {
+      if (x.removed) { rows.push(pfRemoved(x.draft.name, 'people', x.key)); return; }
+      if (PF.edit === x.key) { rows.push(pfEditPerson(x)); return; }
+      var val = pfVal(x);
+      var row = btn('prow', null, { 'data-fk': 'pf-p-' + x.key, 'aria-label': 'Edit ' + val.name }, function () { PF.edit = x.key; PF.draft = null; pfRender('[data-fk="pf-e-name"]'); });
+      add(row, [h('span', { class: 'fld nm' }, [h('b', null, val.name), h('span', { class: 'sub' }, x.stat)]),
+        h('span', { class: 'fld' + (val.role ? '' : ' empty') }, [val.role || 'Add a role', val.roleSug ? h('span', { class: 'sug' }, 'suggested') : null]),
+        h('span', { class: 'fld' }, val.projects.length ? val.projects.map(function (n) { return h('span', { class: 'pchip' }, n); }).concat(val.projSug ? [h('span', { class: 'sug' }, 'suggested')] : []) : h('span', { class: 'empty' }, '—')),
+        h('span', { class: 'fld' }, pfArea(val.area) || '—'),
+        h('span', { class: 'fld vip' + (x.vip ? ' on' : '') }, x.vip ? '★ VIP' : x.vip_candidate ? 'VIP?' : '')]);
+      var acts = [];
+      if (x.saved) acts.push(h('span', { class: 'saved' }, '✓ Saved'));
+      else if (x.suggestion) {
+        var err = errBox();
+        var acc = btn('btn', 'Accept', { 'data-fk': 'pf-acc-' + x.key }, function () {
+          pfDo([acc], err, 'POST', 'api/profile/people/' + x.key, { name: val.name, role: val.role, projects: val.projects.slice(0, 4), area: val.area }, '[data-fk="pf-p-' + x.key + '"]');
+        });
+        var clr = btn('btn ghost', 'Clear', { 'data-fk': 'pf-clr-' + x.key }, function () { pfDo([clr], err, 'DELETE', 'api/profile/people/' + x.key + '/suggestion', null, '[data-fk="pf-p-' + x.key + '"]'); });
+        acts.push(acc, clr, err);
+      }
+      rows.push(h('div', { class: 'prw' }, [row, acts.length ? h('div', { class: 'racts' }, acts) : null]));
+    });
+    return pfCard('People', 'Top ' + v.people.length + ' of ' + fmtNum(v.people_total || v.people.length), rows);
+  }
+  function pfRemoved(name, kind, key) {
+    var err = errBox();
+    var u = btn('btn ghost', 'Undo remove', { 'data-fk': 'pf-undo-' + key }, function () { pfDo([u], err, 'POST', 'api/profile/' + kind + '/' + key + '/restore', {}, '[data-fk="pf-undo-' + key + '"]'); });
+    return h('div', { class: 'prw gone' }, [h('span', null, name + ' removed'), u, err]);
+  }
+  function pfKeys(el, save, cancel) {
+    on(el, 'keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      else if (e.key === 'Enter' && e.target.tagName === 'INPUT' && !e.target.classList.contains('chipin')) { e.preventDefault(); save(); }
+    });
+    return el;
+  }
+  function pfAreaSel(cur, fk) {
+    var sel = h('select', { 'data-fk': fk, 'aria-label': 'Area' }, [h('option', { value: '' }, 'No area')].concat(PF.v.areas.map(function (a) {
+      return h('option', { value: a.id, selected: a.id === cur ? true : null }, a.name);
+    })));
+    return sel;
+  }
+  function pfEditPerson(x) {
+    var val = pfVal(x), d = PF.draft || (PF.draft = { projects: val.projects.slice(0, 4) }), err = errBox();
+    var name = h('input', { type: 'text', value: val.name, maxlength: '80', 'data-fk': 'pf-e-name', 'aria-label': 'Name' });
+    var role = h('input', { type: 'text', value: val.role, maxlength: '60', 'data-fk': 'pf-e-role', 'aria-label': 'Role', placeholder: 'e.g. Accountant' });
+    var area = pfAreaSel(val.area, 'pf-e-area');
+    var chips = h('div', { class: 'chiped' });
+    function drawChips() {
+      chips.textContent = '';
+      d.projects.forEach(function (n, i) {
+        add(chips, h('span', { class: 'pchip' }, [n, btn('x', '×', { 'aria-label': 'Remove ' + n }, function () { d.projects.splice(i, 1); drawChips(); })]));
+      });
+      if (d.projects.length < 4) {
+        var inp = h('input', { type: 'text', class: 'chipin', maxlength: '60', placeholder: 'Add project', 'aria-label': 'Add project', 'data-fk': 'pf-e-proj' });
+        on(inp, 'keydown', function (e) {
+          if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) { e.preventDefault(); d.projects.push(inp.value.trim()); drawChips(); var n = chips.querySelector('.chipin'); if (n) n.focus(); }
+        });
+        add(chips, inp);
+      }
+    }
+    drawChips();
+    function cancel() { var k = PF.edit; PF.edit = null; PF.draft = null; pfRender('[data-fk="pf-p-' + k + '"]'); }
+    function save() {
+      var pending = chips.querySelector('.chipin');
+      if (pending && pending.value.trim()) d.projects.push(pending.value.trim());
+      run([sv], err, function () { return api('POST', 'api/profile/people/' + x.key, { name: name.value, role: role.value, projects: d.projects.slice(0, 4), area: area.value }); },
+        function (r) { PF.v = r; PF.edit = null; PF.draft = null; pfRender('[data-fk="pf-p-' + x.key + '"]'); });
+    }
+    var sv = btn('act', 'Save', { 'data-fk': 'pf-e-save' }, save);
+    var vip = x.emails.length ? btn('btn' + (x.vip ? ' on' : ''), x.vip ? '★ VIP' : 'VIP?', { 'aria-pressed': x.vip ? 'true' : 'false', 'data-fk': 'pf-e-vip' }, function () {
+      pfDo([vip], err, 'POST', 'api/profile/people/' + x.key + '/vip', { vip: !x.vip }, '[data-fk="pf-e-vip"]');
+    }) : null;
+    var rm = btn('btn ghost', 'Remove person', { 'data-fk': 'pf-e-rm' }, function () { PF.edit = null; pfDo([rm], err, 'DELETE', 'api/profile/people/' + x.key, null, '[data-fk="pf-undo-' + x.key + '"]'); });
+    return pfKeys(h('div', { class: 'prw editing' }, [
+      h('div', { class: 'efs' }, [h('label', { class: 'ef' }, [h('span', null, 'Name'), name]), h('label', { class: 'ef' }, [h('span', null, 'Role'), role]),
+        h('div', { class: 'ef wide' }, [h('span', null, 'Projects'), chips]), h('label', { class: 'ef' }, [h('span', null, 'Area'), area]),
+        vip ? h('div', { class: 'ef' }, [h('span', null, 'VIP'), vip]) : null]),
+      x.suggestion && !x.saved ? h('p', { class: 'hint' }, 'Role and projects were suggested by the AI from subject lines. Check them before you save.') : null,
+      h('div', { class: 'eacts' }, [sv, btn('btn', 'Cancel', null, cancel), rm, h('span', { class: 'hint' }, 'Enter saves · Esc cancels')]), err]), save, cancel);
+  }
+  function pfProjects() {
+    var v = PF.v, conf = { hi: 'Sure', md: 'Fairly sure', lo: 'Not sure' };
+    var rows = [h('div', { class: 'phead pj', 'aria-hidden': 'true' }, ['Project', 'Area', 'Status', 'Confidence'].map(function (t) { return h('span', null, t); }))];
+    if (!v.projects.length) rows.push(h('p', { class: 'help' }, 'No recurring subjects stood out yet.'));
+    v.projects.forEach(function (j) {
+      if (j.removed) { rows.push(pfRemoved(j.draft.name, 'projects', j.key)); return; }
+      var s = j.saved, g = j.suggestion, nm = s ? s.name : g ? g.name : j.draft.name, ar = s ? s.area : j.draft.area, stt = s ? s.status : j.draft.status;
+      if (PF.edit === j.key) {
+        var err = errBox();
+        var name = h('input', { type: 'text', value: nm, maxlength: '60', 'data-fk': 'pf-j-name', 'aria-label': 'Project name' });
+        var area = pfAreaSel(ar, 'pf-j-area');
+        var st = h('select', { 'aria-label': 'Status' }, PF.v.statuses.map(function (x) { return h('option', { value: x, selected: x === stt ? true : null }, x); }));
+        var cancel = function () { PF.edit = null; pfRender('[data-fk="pf-p-' + j.key + '"]'); };
+        var save = function () { run([sv], err, function () { return api('POST', 'api/profile/projects/' + j.key, { name: name.value, area: area.value, status: st.value }); }, function (r) { PF.v = r; PF.edit = null; pfRender('[data-fk="pf-p-' + j.key + '"]'); }); };
+        var sv = btn('act', 'Save', null, save);
+        var rm = btn('btn ghost', 'Remove', null, function () { PF.edit = null; pfDo([rm], err, 'DELETE', 'api/profile/projects/' + j.key, null, '[data-fk="pf-undo-' + j.key + '"]'); });
+        rows.push(pfKeys(h('div', { class: 'prw editing' }, [h('div', { class: 'efs' }, [h('label', { class: 'ef wide' }, [h('span', null, 'Project'), name]),
+          h('label', { class: 'ef' }, [h('span', null, 'Area'), area]), h('label', { class: 'ef' }, [h('span', null, 'Status'), st])]),
+          h('div', { class: 'eacts' }, [sv, btn('btn', 'Cancel', null, cancel), rm]), err]), save, cancel));
+        return;
+      }
+      var row = btn('prow pj', null, { 'data-fk': 'pf-p-' + j.key, 'aria-label': 'Edit ' + nm }, function () { PF.edit = j.key; pfRender('[data-fk="pf-j-name"]'); });
+      add(row, [h('span', { class: 'fld nm' }, [h('b', null, nm), !s && g ? h('span', { class: 'sug' }, 'suggested') : null, h('span', { class: 'sub' }, plural(j.docs, 'thread', 'threads'))]),
+        h('span', { class: 'fld' }, pfArea(ar) || '—'), h('span', { class: 'fld' }, stt),
+        h('span', { class: 'fld conf ' + j.confidence }, conf[j.confidence])]);
+      rows.push(h('div', { class: 'prw' }, [row, s ? h('div', { class: 'racts' }, h('span', { class: 'saved' }, '✓ Saved')) : null]));
+    });
+    return pfCard('Areas & projects', 'Grouped from subject lines', rows);
+  }
+  function pfItems(title, fk, list, show, wording) {
+    var rows = [];
+    if (!list.length) rows.push(h('p', { class: 'help' }, 'Nothing stood out yet.'));
+    list.forEach(function (r) {
+      if (r.removed) { rows.push(pfRemoved(wording(r), 'items', r.key)); return; }
+      var err = errBox();
+      if (PF.edit === r.key) {
+        var t = h('input', { type: 'text', value: r.saved ? r.saved.text : wording(r), maxlength: '200', 'data-fk': fk + '-in', 'aria-label': 'In your words' });
+        var cancel = function () { PF.edit = null; pfRender('[data-fk="' + fk + '-' + r.key + '"]'); };
+        var save = function () { run([sv], err, function () { return api('POST', 'api/profile/items/' + r.key, { text: t.value }); }, function (x) { PF.v = x; PF.edit = null; pfRender('[data-fk="' + fk + '-' + r.key + '"]'); }); };
+        var sv = btn('act', 'Save', null, save);
+        rows.push(pfKeys(h('div', { class: 'pitem editing' }, [h('label', { class: 'ef wide' }, [h('span', null, 'In your words'), t]),
+          h('div', { class: 'eacts' }, [sv, btn('btn', 'Cancel', null, cancel)]), err]), save, cancel));
+        return;
+      }
+      var ed = btn('btn', 'Edit', { 'data-fk': fk + '-' + r.key }, function () { PF.edit = r.key; pfRender('[data-fk="' + fk + '-in"]'); });
+      var rm = btn('btn ghost', 'Remove', null, function () { pfDo([rm], err, 'DELETE', 'api/profile/items/' + r.key, null, '[data-fk="pf-undo-' + r.key + '"]'); });
+      rows.push(h('div', { class: 'pitem' }, [h('div', { class: 'tx' }, r.saved ? [h('b', null, r.saved.text), h('span', { class: 'saved' }, '✓ Saved')] : show(r)),
+        h('div', { class: 'racts' }, [ed, rm]), err]));
+    });
+    return pfCard(title, null, rows);
+  }
+
+  /* --- Questions: one at a time, quick picks plus your own words --- */
+  function pfQs() { return PF.v.interview.questions; }
+  function pfQTitle() { var n = pfQs().length; return n ? 'Callsheet has ' + plural(n, 'question', 'questions') : 'Questions'; }
+  function pfOpen() {   /* the question to show: the chosen one, else the first not answered or skipped */
+    var qs = pfQs();
+    if (PF.qi != null && qs[PF.qi]) return PF.qi;
+    for (var i = 0; i < qs.length; i++) if (!qs[i].answer && !qs[i].skipped) return i;
+    return -1;
+  }
+  function pfQuestions() {
+    var v = PF.v, iv = v.interview, qs = pfQs(), err = errBox();
+    var j = v.job && v.job.kind === 'ask' ? v.job : null;
+    if (j && j.state === 'running') return [h('div', { class: 'calm', role: 'status' }, [h('b', null, 'Working out what to ask… '), 'Callsheet looks at what it couldn’t tell from your data.'])];
+    var head = [h('p', { class: 'help pfintro' }, 'It only asks what it couldn’t work out from your data. Your answers go to Memory as your own words.'),
+      iv.note ? h('p', { class: 'help' }, iv.note) : null, PF.err ? h('p', { class: 'err', role: 'alert' }, PF.err) : null];
+    PF.err = null;
+    var i = PF.enough ? -1 : pfOpen();
+    if (!qs.length || i < 0) {
+      var again = btn('btn', 'Ask me again', { 'data-fk': 'pf-again' }, function () { PF.qi = null; PF.enough = false; pfDo([again], err, 'POST', 'api/profile/questions', {}, '[data-fk="pf-title"]'); });
+      return head.concat([h('div', { class: 'pfend' }, [h('h2', null, !qs.length ? 'Nothing to ask right now.' : PF.enough ? 'Saved. That’s enough for now.' : 'That’s all ' + qs.length + '.'),
+        h('p', { class: 'help' }, plural(iv.answered, 'answer', 'answers') + ' saved to Memory.')]),
+        h('div', { class: 'go' }, [btn('act', 'Finish', { 'data-fk': 'pf-finish' }, function () { PF.done = true; pfRender('#pf-title'); }), again,
+          btn('btn ghost', 'Back to the draft', null, function () { location.hash = 'profile'; })]), err, pfRail()]);
+    }
+    var q = qs[i];
+    var box = h('div', { class: 'pfq' }, [
+      h('div', { class: 'qmeta' }, [h('span', null, 'Question ' + (i + 1) + ' of ' + qs.length), h('span', { class: 'qk' }, q.label)]),
+      h('div', { class: 'prog', 'aria-hidden': 'true' }, qs.map(function (x, k) { return h('span', { class: k === i ? 'cur' : x.answer ? 'ok' : x.skipped ? 'sk' : null }); })),
+      h('h2', { class: 'qtext', id: 'pf-q', tabindex: '-1' }, q.question),
+      h('div', { class: 'why' }, [h('b', null, 'Why I’m asking'), h('span', null, q.why)])]);
+    var picks = q.picks.map(function (p, k) {
+      var b = btn('pick' + (q.answer === p ? ' on' : ''), p, { 'data-fk': 'pf-pick-' + k }, function () { pfAnswer(b, err, q, { pick: k }); });
+      return b;
+    });
+    var ta = h('textarea', { rows: '3', maxlength: '280', 'data-fk': 'pf-text', 'aria-label': 'Your answer, in your own words', placeholder: q.placeholder || 'Your answer, in your own words' });
+    if (q.answer && q.picks.indexOf(q.answer) < 0) ta.value = q.answer;
+    var showText = !q.picks.length || PF.other || (q.answer && q.picks.indexOf(q.answer) < 0);
+    var sv = btn('act', 'Save answer', { 'data-fk': 'pf-save' }, function () { pfAnswer(sv, err, q, { text: ta.value }); });
+    if (q.picks.length && q.other && !showText) picks.push(btn('pick ghost', 'Other…', { 'data-fk': 'pf-other' }, function () { PF.other = true; pfRender('[data-fk="pf-text"]'); }));
+    add(box, [picks.length ? h('div', { class: 'picks' }, picks) : null,
+      showText ? h('div', { class: 'obox' }, [ta, sv]) : null, err,
+      h('div', { class: 'qnav' }, [
+        btn('btn', 'Back', { disabled: i === 0 ? true : null }, function () { PF.qi = i - 1; PF.other = false; pfRender('#pf-q'); }),
+        btn('btn', 'Skip', { 'data-fk': 'pf-skip' }, function () { PF.qi = null; PF.other = false; pfDo([], err, 'POST', 'api/profile/questions/' + q.id, { skip: true }, '#pf-q'); }),
+        btn('btn ghost', 'That’s enough for now: ask me later', { 'data-fk': 'pf-enough' }, function () { PF.enough = true; pfRender('[data-fk="pf-finish"]'); })])]);
+    return head.concat([h('div', { class: 'pfqwrap' }, [box, pfRail()])]);
+  }
+  function pfAnswer(b, err, q, body) {
+    run([b], err, function () { return api('POST', 'api/profile/questions/' + q.id, body); }, function (iv) {
+      PF.v.interview = iv; PF.qi = null; PF.other = false; pfRender('#pf-q');
+    });
+  }
+  function pfRail() {
+    var qs = pfQs(), done = qs.filter(function (x) { return x.answer; }), left = qs.filter(function (x) { return !x.answer && !x.skipped; }).length;
+    return h('aside', { class: 'wbox pfrail', 'aria-label': 'Your answers' }, [h('h3', null, 'Your answers'),
+      done.length ? h('ul', { class: 'ans' }, done.map(function (x) {
+        return h('li', null, [h('span', { class: 'q' }, x.question), h('b', null, x.answer),
+          btn('btn ghost', 'Change', { 'aria-label': 'Change your answer to: ' + x.question }, function () { PF.qi = qs.indexOf(x); PF.enough = false; PF.other = false; pfRender('#pf-q'); })]);
+      })) : h('p', { class: 'help' }, 'Nothing answered yet.'),
+      h('p', { class: 'hint' }, (left ? left + ' to go. ' : '') + 'Change any answer here, or later in Memory.')]);
+  }
+
+  /* --- Done --- */
+  function pfDone() {
+    var v = PF.v, ppl = v.people.filter(function (x) { return x.saved; }).length, pj = v.projects.filter(function (x) { return x.saved; }).length;
+    return [h('h2', { class: 'pfend' }, 'Callsheet now knows: ' + plural(ppl, 'person', 'people') + ', ' + plural(pj, 'project', 'projects') + ', ' + plural(v.interview.answered, 'answer', 'answers')),
+      h('div', { class: 'stats' }, [knStat('People', fmtNum(ppl)), knStat('Projects', fmtNum(pj)), knStat('Answers', fmtNum(v.interview.answered))]),
+      h('p', { class: 'help' }, 'It is all in Memory, in your words. Briefs and drafts use it from now on.'),
+      h('div', { class: 'go' }, [btn('act', 'See it in Memory (Setup)', { 'data-fk': 'pf-mem' }, function () { PF.done = false; ui.step = 5; location.hash = 'setup'; }),
+        btn('btn ghost', 'Back to the draft', null, function () { PF.done = false; location.hash = 'profile'; })])];
   }
 
   route();

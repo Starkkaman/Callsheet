@@ -2,6 +2,11 @@
 
 ## 0.6.0
 
+- **Get to know me (part 2: the drafted profile).** From the index, Callsheet drafts who you write to,
+  your recurring commitments, reply habits, VIP candidates and projects, and shows them to check: edit, accept
+  or remove each one. Your writer model can suggest roles and project names from names, counts and subject lines
+  (shown as "suggested"), then asks up to 8 questions about what it couldn't work out. Only what you save or
+  answer goes into Memory. Signal messages are now part of the index too.
 - **Get to know me (part 1: the index, no AI).** Setup → Delivery → Memory → "Get to know me" reads your
   history into a private full-text index on this box: Gmail, the calendars you picked, Slack, Google Drive
   (Docs, Sheets, Slides and text files, read-only; PDFs skipped) and an Obsidian vault synced into Home

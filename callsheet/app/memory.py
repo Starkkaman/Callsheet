@@ -7,8 +7,11 @@ The file has a section per kind of entry, so later builds can add to the same me
     (a short explanation)
 
     ## Notes            notes from the notepad menu ("Note for Callsheet")
-    ## Profile          reserved for 0.6's profile (free text, kept as it is, not read yet)
-    ## Answers          reserved for 0.6's interview answers (same entry format as notes, read like notes)
+    ## Profile          0.6.0: people, projects and habits the owner saved on the drafted profile (entries)
+    ## Answers          0.6.0: the owner's answers to Callsheet's own questions (entries)
+
+Profile and Answers entries have the same format as notes and are read like notes (relevant()). Callsheet writes
+them only when the owner saves a field or answers a question (profile.py); suggestions are never written here.
 
 An entry is a level-3 heading, its metadata as "- key: value" lines, a blank line, then the note's text:
 
@@ -44,12 +47,12 @@ MAX_LIST = 12             # items in a list value (people, emails, domains, topi
 NOTES_CAP = 1500          # characters of note text sent to the writer per brief
 SENT_TEXT = 400           # one note's text as sent (longer ones are clipped)
 SECTIONS = ("Notes", "Profile", "Answers")
-ENTRY_SECTIONS = ("Notes", "Answers")
+ENTRY_SECTIONS = ("Notes", "Profile", "Answers")   # 0.6.0: Profile entries are read like notes
 LIST_KEYS = ("people", "emails", "domains", "topics")
 KEYS = LIST_KEYS + ("area", "created", "from", "ref", "id")
 ALIASES = {"person": "people", "email": "emails", "domain": "domains", "topic": "topics", "date": "created",
            "source": "from"}
-FROM_KINDS = ("reply", "event", "briefing", "heads-up", "possible event", "setup", "interview")
+FROM_KINDS = ("reply", "event", "briefing", "heads-up", "possible event", "setup", "interview", "profile")
 
 HEADER = """# Callsheet memory
 
@@ -316,8 +319,23 @@ class Memory:
         os.replace(tmp, self.path)
         os.chmod(self.path, 0o600)
 
+    def replace(self, nid, title, meta, text):
+        """Replaces the entry with id nid (title, metadata and text; the id stays). Returns its public view."""
+        text = _check_text(text)
+        with self.lock:
+            cur = self.read()
+            span = _entry_span(cur, nid)
+            if span is None:
+                raise LookupError("That note isn't in the memory any more. Reload the page.")
+            lines = cur.split("\n")
+            block = render_entry(title, dict(meta, id=nid), text).rstrip("\n").split("\n") + [""]
+            out = "\n".join(lines[:span[0]] + block + lines[span[1]:])
+            parsed = parse(out)
+            self._write(out)
+        return entry_out(next(x for x in parsed["entries"] if x["meta"].get("id") == nid))
+
     def entries(self):
-        """Every entry of Notes and Answers, or [] when the file can't be read or parsed (a brief never fails
+        """Every entry of Notes, Profile and Answers, or [] when the file can't be read or parsed (a brief never fails
         on its memory)."""
         try:
             return parse(self.read())["entries"]

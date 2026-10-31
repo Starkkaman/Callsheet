@@ -24,6 +24,7 @@ from oauth import OAuthFlows
 import scan as index_scan            # 0.6.0 index
 import sources as index_sources      # 0.6.0 index
 from index import Index, IndexError_  # 0.6.0 index
+import know_profile                  # 0.6.0 profile
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -74,6 +75,7 @@ class App:
         # Signal (0.5.1): signal-cli as a read-only linked device, its routes in signal_api.py
         self.signal = signal_api.SignalApi(self.store, data_dir, clock=clock)
         self._index_init(data_dir)  # 0.6.0 index: Know me (index.db, scanner)
+        self._profile_init()  # 0.6.0 profile: the drafted profile and questions
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -115,7 +117,8 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
-        ] + self._memory_routes() + self._push_routes() + self.signal.routes() + self._index_routes()
+        ] + self._memory_routes() + self._push_routes() + self.signal.routes() + self._index_routes() \
+            + self._profile_routes()
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -696,6 +699,10 @@ class App:
              "detail": "Read-only" if any(d["granted"] for d in drive) else "Needs a read-only permission"},
             {"key": "obsidian", "label": "Obsidian vault", "on": st["sources"]["obsidian"], "available": vault["ok"],
              "vault": vault, "detail": st["vault"] or "Add the vault folder (under /share or /media)"},
+            {"key": "signal", "label": "Signal", "on": st["sources"]["signal"],
+             "available": index_sources.signal_ready(self.store),
+             "detail": "Messages Callsheet received or imported" if index_sources.signal_ready(self.store)
+             else "No Signal messages stored"},
         ]
 
     def index_status(self, _body=None):
@@ -808,3 +815,76 @@ class App:
         self.scanner._estimates = {}
         return {"account": acc, "granted": granted}
 
+    # --- 0.6.0 profile: the drafted profile and Callsheet's questions (profile.py) --------------------------------
+    # The draft, the AI's suggestions and the questions live in index.db meta; only the owner's saves and answers
+    # (these routes, the owner's clicks) write memory.md. docs/know-me-profile.md.
+    def _profile_init(self):
+        self.profile = None
+        if self.index is not None:
+            self.profile = know_profile.Profile(self.store, self.index, self.memory, self.evaluator.near_call,
+                                                self.syncer.lock.locked, clock=self.clock)
+
+    def _profile_routes(self):
+        kinds = r"(people|projects|items)/([prjh][0-9a-f]{10})"
+        return [("GET", r"profile", self.get_profile),
+                ("POST", r"profile/build", self.profile_build),
+                ("POST", r"profile/suggest", self.profile_suggest),
+                ("POST", r"profile/questions", self.profile_questions),
+                ("POST", r"profile/questions/(g[0-9a-f]{10})", self.profile_answer),
+                ("POST", r"profile/" + kinds, self.profile_save),
+                ("DELETE", r"profile/" + kinds, self.profile_remove),
+                ("POST", r"profile/" + kinds + r"/restore", self.profile_restore),
+                ("DELETE", r"profile/(people|projects)/([pj][0-9a-f]{10})/suggestion", self.profile_unsuggest),
+                ("POST", r"profile/people/(p[0-9a-f]{10})/vip", self.profile_vip)]
+
+    def _pf(self, name, *args):
+        """Calls Profile.<name> and maps its errors (Refused: 409, unknown key: 404, bad input: 400)."""
+        if not self.profile:
+            raise Conflict(self.index_error or "The index isn't available.")
+        try:
+            return getattr(self.profile, name)(*args)
+        except know_profile.Refused as e:
+            raise Conflict(str(e)) from None
+        except memory.MemoryError_ as e:
+            raise InputError(str(e)) from None
+        except LookupError as e:
+            raise NotFound(str(e)) from None
+        except ValueError as e:
+            raise InputError(str(e)) from None
+
+    def get_profile(self, _body=None):
+        return self._pf("view")
+
+    def profile_build(self, _body=None):
+        if self.syncer.lock.locked():
+            raise Conflict("A sync is running. Try again in a minute.")
+        self._pf("build")
+        return self._pf("view")
+
+    def profile_suggest(self, _body=None):
+        return self._pf("start", "suggest")
+
+    def profile_questions(self, _body=None):
+        return self._pf("start", "ask")
+
+    def profile_answer(self, body, gap):
+        return self._pf("answer", gap, _obj(body))
+
+    def profile_save(self, body, kind, key):
+        return self._pf({"people": "save_person", "projects": "save_project", "items": "save_item"}[kind], key,
+                        _obj(body))
+
+    def profile_remove(self, _body, kind, key):
+        return self._pf("remove", kind, key)
+
+    def profile_restore(self, _body, kind, key):
+        return self._pf("restore", kind, key)
+
+    def profile_unsuggest(self, _body, kind, key):
+        return self._pf("clear_suggestion", kind, key)
+
+    def profile_vip(self, body, key):
+        body = _obj(body)
+        if not isinstance(body.get("vip"), bool):
+            raise InputError("vip takes true or false.")
+        return self._pf("set_vip", key, body["vip"])

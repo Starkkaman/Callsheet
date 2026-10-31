@@ -1031,3 +1031,80 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .kn .go .btn.primary{flex:1 1 100%;text-align:center;padding:14px 10px}
 .kn .knsrc .ct{margin-left:0;flex:1 1 100%}
 }
+
+/* 0.6.0 profile: Check (people, projects, recurring, habits), Questions, Done (knowme-v2 frames 3–5) */
+.pf .pfintro{font-size:var(--fs-md);color:var(--text);margin:0 0 14px}
+.pf .pfai{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:0 0 18px}
+.pf .pfai .hint{margin:0;flex:1 1 280px}
+.pf .pfcard{background:var(--surface);border-radius:var(--radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);padding:14px 16px;margin:0 0 16px;max-width:1100px}
+.pf .pfch{display:flex;align-items:baseline;gap:12px;margin:0 0 8px}
+.pf .pfch h2{font-size:var(--fs-lg);margin:0}
+.pf .pfch .hint{margin:0}
+.pf .phead,.pf .prow{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.5fr) minmax(0,.8fr) 64px;gap:10px;align-items:center}
+.pf .phead.pj,.pf .prow.pj{grid-template-columns:minmax(0,1.6fr) minmax(0,.8fr) minmax(0,.7fr) minmax(0,.8fr)}
+.pf .phead{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:0 10px 6px;border-bottom:var(--rule-w) solid var(--rule)}
+.pf .prw{border-bottom:var(--rule-w) solid var(--rule);display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.pf .prw:last-child{border-bottom:0}
+.pf .prow{flex:1 1 640px;min-width:0;text-align:left;padding:10px;background:none;border-radius:var(--radius);color:inherit;font:inherit}
+.pf .prow:hover,.pf .prow:focus-visible{background:var(--surface-2)}
+.pf .fld{min-width:0;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
+.pf .fld.nm{flex-direction:column;align-items:flex-start;gap:2px}
+.pf .sub{display:block;font-size:var(--fs-sm);color:var(--muted)}
+.pf .empty{color:var(--muted)}
+.pf .sug{font-size:var(--fs-xs);font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+.pf .pchip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:var(--chip-radius);background:var(--surface-2);font-size:var(--fs-sm);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.pf .pchip .x{background:none;border:0;padding:0 2px;color:var(--muted);font:inherit;cursor:pointer}
+.pf .vip{font-size:var(--fs-sm);color:var(--muted)}
+.pf .vip.on{color:var(--accent);font-weight:700}
+.pf .conf.hi{color:var(--ok)}
+.pf .conf.lo{color:var(--muted)}
+.pf .racts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 10px}
+.pf .racts .err:empty,.pf .prw .err:empty,.pf .pitem .err:empty{display:none}
+.pf .saved{font-size:var(--fs-sm);font-weight:700;color:var(--ok)}
+.pf .prw.gone{padding:10px;color:var(--muted)}
+.pf .editing{display:block;padding:12px 10px;background:var(--surface-2);border-radius:var(--radius)}
+.pf .efs{display:flex;flex-wrap:wrap;gap:10px 14px}
+.pf .ef{display:flex;flex-direction:column;gap:4px;flex:1 1 160px;min-width:0}
+.pf .ef.wide{flex:2 1 260px}
+.pf .ef>span{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.pf .ef input,.pf .ef select,.pf .obox textarea{width:100%;min-width:0}
+.pf .chiped{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px;background:var(--surface);border-radius:var(--radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.pf .chiped .chipin{flex:1 1 120px;border:0;background:none;min-width:0}
+.pf .eacts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.pf .eacts .hint{margin:0}
+.pf .pitem{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px;border-bottom:var(--rule-w) solid var(--rule)}
+.pf .pitem:last-child{border-bottom:0}
+.pf .pitem .tx{flex:1 1 300px;min-width:0;overflow-wrap:anywhere}
+.pf .pitem.editing{display:block}
+.pf .pfnav{margin-top:6px}
+.pf .pfqwrap{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:18px;align-items:start;max-width:1100px}
+.pf .pfq{background:var(--surface);border-radius:var(--radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);padding:18px}
+.pf .qmeta{display:flex;justify-content:space-between;gap:10px;font-size:var(--fs-sm);color:var(--muted)}
+.pf .qmeta .qk{font-weight:700;color:var(--accent)}
+.pf .prog{display:flex;gap:6px;margin:10px 0 14px}
+.pf .prog span{flex:1;height:5px;border-radius:3px;background:var(--surface-2);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.pf .prog .ok{background:var(--ok);box-shadow:none}
+.pf .prog .cur{background:var(--sel);box-shadow:none}
+.pf .qtext{font-size:var(--fs-xl);margin:0 0 12px;overflow-wrap:anywhere}
+.pf .why{display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:var(--surface-2);border-radius:var(--radius);font-size:var(--fs-sm);margin:0 0 14px}
+.pf .picks{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+.pf .pick{padding:9px 14px;border-radius:var(--chip-radius);background:var(--surface-2);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);color:inherit;font:inherit;text-align:left;max-width:100%;overflow-wrap:anywhere}
+.pf .pick.on{background:var(--sel);color:var(--on-sel);box-shadow:none}
+.pf .pick.ghost{background:none}
+.pf .obox{display:flex;flex-direction:column;gap:8px;align-items:flex-start;margin:0 0 12px}
+.pf .qnav{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding-top:12px;border-top:var(--rule-w) solid var(--rule)}
+.pf .pfrail{padding:14px 16px;background:var(--surface);border-radius:var(--radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.pf .pfrail h3{margin:0 0 8px;font-size:var(--fs-md)}
+.pf .ans{list-style:none;margin:0;padding:0}
+.pf .ans li{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:var(--rule-w) solid var(--rule)}
+.pf .ans .q{font-size:var(--fs-sm);color:var(--muted)}
+.pf .ans .btn{align-self:flex-start;margin-top:4px}
+.pf .pfend{margin:8px 0 12px;font-size:var(--fs-lg)}
+@media (max-width:700px){
+  .pf .phead{display:none}
+  .pf .prow,.pf .prow.pj{grid-template-columns:1fr 1fr;flex-basis:100%}
+  .pf .fld.nm{grid-column:1 / -1}
+  .pf .pfqwrap{grid-template-columns:1fr}
+  .pf .pfcard{padding:12px}
+}
+
