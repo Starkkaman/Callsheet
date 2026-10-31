@@ -20,6 +20,9 @@ import push
 import rules
 import slack
 from oauth import OAuthFlows
+import scan as index_scan            # 0.6.0 index
+import sources as index_sources      # 0.6.0 index
+from index import Index, IndexError_  # 0.6.0 index
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -67,6 +70,7 @@ class App:
         self.scheduler = Scheduler(self.store, self.syncer, clock=clock, notifier=self.notifier)
         self.evaluator = evaluate.Evaluator(self.store, self.syncer, clock=clock)
         self.memory = self.syncer.memory  # memory.md (0.5.0): one object, one lock
+        self._index_init(data_dir)  # 0.6.0 index: Know me (index.db, scanner)
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -108,7 +112,7 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
-        ] + self._memory_routes() + self._push_routes()
+        ] + self._memory_routes() + self._push_routes() + self._index_routes()
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -127,6 +131,9 @@ class App:
 
     def close(self):
         self.scheduler.stop()
+        if self.scanner:  # 0.6.0 index
+            self.scanner.stop()
+            self.index.close()
         self.store.close()
 
     def handle(self, method, path, body):
@@ -611,3 +618,180 @@ class App:
         text = self._found(self._eval_on().export(run_id))
         return Download(text.encode("utf-8"), "application/x-ndjson; charset=utf-8",
                         f"callsheet-writer-eval-{run_id}.jsonl")
+
+    # --- 0.6.0 index: Know me, the local index (index.py, sources.py, scan.py) -----------------------------------
+    # Separate section (Signal is added on another branch). The page reads api/index/status and drives the scan;
+    # 3b/3c read through Index.search/get/stats (docs/know-me-index.md).
+    def _index_init(self, data_dir):
+        self.index = self.scanner = self.index_error = None
+        try:
+            self.index = Index(data_dir, clock=self.clock)
+        except IndexError_ as e:
+            self.index_error = str(e)
+            print(f"Callsheet index: {e}", file=sys.stderr, flush=True)
+            return
+        self.scanner = index_scan.Scanner(self.store, self.index, self.syncer, clock=self.clock)
+
+    def _index_routes(self):
+        return [("GET", r"index/status", self.index_status),
+                ("GET", r"index/settings", self.get_index_settings),
+                ("PATCH", r"index/settings", self.patch_index_settings),
+                ("POST", r"index/estimate", self.index_estimate),
+                ("POST", r"index/scan", self.index_scan),
+                ("POST", r"index/pause", self.index_pause),
+                ("POST", r"index/resume", self.index_resume),
+                ("POST", r"index/cancel", self.index_cancel),
+                ("GET", r"index/search", self.index_search),
+                ("GET", r"index/item/(\d{1,12})", self.index_item),
+                ("DELETE", r"index", self.index_wipe),
+                ("POST", r"index/drive/check", self.index_drive_check),
+                ("POST", r"index/drive/start", self.index_drive_start),
+                ("POST", r"index/drive/finish", self.index_drive_finish)]
+
+    def _scanner(self):
+        if not self.scanner:
+            raise Conflict(self.index_error or "The index isn't available.")
+        return self.scanner
+
+    def _index_sources(self, sc):
+        """What the page shows per source: on/off, a short detail, Drive's grant state per account, the vault."""
+        accounts = self.store.accounts()
+        st = sc.settings()
+        g = index_sources.GoogleAccess(self.store, self.index, self.clock)
+        wss = self.store.slack_workspaces()
+        mail = [a for a in accounts if a["services"].get("mail", True)]
+        cals = sum(1 for a in accounts for c in a["calendars"] if c.get("selected"))
+        drive = [{"account_id": a["id"], "email": a["email"], "granted": g.cached_drive(a["id"])} for a in accounts]
+        vault = {"path": st["vault"], "ok": False, "error": None}
+        if st["vault"]:
+            try:
+                index_sources.check_vault(st["vault"])
+                vault["ok"] = True
+            except InputError as e:
+                vault["error"] = str(e)
+        def n(k, one, many):
+            return f"{k} {one if k == 1 else many}"
+        return [
+            {"key": "gmail", "label": "Mail", "on": st["sources"]["gmail"], "available": bool(mail),
+             "detail": ", ".join(a["email"] for a in mail) or "No Google account connected"},
+            {"key": "calendar", "label": "Calendars", "on": st["sources"]["calendar"], "available": cals > 0,
+             "detail": n(cals, "calendar", "calendars") if cals else "No calendar chosen"},
+            {"key": "slack", "label": "Slack", "on": st["sources"]["slack"], "available": bool(wss),
+             "detail": ", ".join(w.get("team") or w.get("domain") or "Slack" for w in wss) or "No workspace connected"},
+            {"key": "drive", "label": "Google Drive", "on": st["sources"]["drive"],
+             "available": any(d["granted"] for d in drive), "accounts": drive,
+             "detail": "Read-only" if any(d["granted"] for d in drive) else "Needs a read-only permission"},
+            {"key": "obsidian", "label": "Obsidian vault", "on": st["sources"]["obsidian"], "available": vault["ok"],
+             "vault": vault, "detail": st["vault"] or "Add the vault folder (under /share or /media)"},
+        ]
+
+    def index_status(self, _body=None):
+        if not self.scanner:
+            return {"available": False, "error": self.index_error}
+        sc = self.scanner
+        out = sc.status()
+        out.update(available=True, error=None, stats=self.index.stats(), sources=self._index_sources(sc),
+                   free_bytes=sc.free_bytes())
+        return out
+
+    def get_index_settings(self, _body=None):
+        return self._scanner().settings()
+
+    def patch_index_settings(self, body):
+        return self._scanner().update_settings(_obj(body))
+
+    @staticmethod
+    def _index_args(body):
+        body = _obj(body)
+        sources = body.get("sources")
+        if sources is not None and (not isinstance(sources, list) or not all(isinstance(x, str) for x in sources)):
+            raise InputError("sources must be a list of source names.")
+        if not isinstance(body.get("window"), str):
+            raise InputError("Pick how far back to read.")
+        return body["window"], sources
+
+    def index_estimate(self, body):
+        win, sources = self._index_args(body)
+        return self._scanner().estimate(win, sources)
+
+    def index_scan(self, body):
+        win, sources = self._index_args(body)
+        return self._scanner().start(win, sources)
+
+    def index_pause(self, _body):
+        return self._scanner().pause()
+
+    def index_resume(self, _body):
+        return self._scanner().resume()
+
+    def index_cancel(self, _body):
+        return self._scanner().cancel()
+
+    def _index_day(self, val, what):
+        if val in (None, ""):
+            return None
+        try:
+            d = dt.date.fromisoformat(str(val)[:10])
+        except ValueError:
+            raise InputError(f"{what} must be a date like 2026-10-30.") from None
+        return rules.day_bounds(d, rules.tzinfo(self.store.settings()))[0].timestamp()
+
+    def index_search(self, body=None):
+        """GET api/index/search?q=&source=&account=&area=&people=&from=YYYY-MM-DD&to=YYYY-MM-DD&limit=&offset="""
+        sc = self._scanner()
+        q = body or {}
+        try:
+            limit = int(q.get("limit") or 20)
+            offset = int(q.get("offset") or 0)
+        except ValueError:
+            raise InputError("limit and offset must be numbers.") from None
+        since = self._index_day(q.get("from"), "from")
+        until = self._index_day(q.get("to"), "to")
+        if until is not None:
+            until += 86400  # "to" includes that whole day
+        source = q.get("source") or None
+        if source and any(x not in sc.sources for x in source.split(",")):
+            raise InputError("Unknown source.")
+        rows = self.index.search(q.get("q") or "", source=source, account=q.get("account") or None,
+                                 area=q.get("area") or None, people=q.get("people") or None, since=since,
+                                 until=until, limit=limit, offset=offset)
+        return {"q": q.get("q") or "", "results": rows}
+
+    def index_item(self, _body, item_id):
+        self._scanner()
+        item = self.index.get(item_id)
+        if item is None:
+            raise NotFound("That item isn't in the index.")
+        return item
+
+    def index_wipe(self, body):
+        body = body if isinstance(body, dict) else {}
+        return self._scanner().wipe(body.get("confirm"))
+
+    def index_drive_check(self, _body):
+        """Asks Google (through a token refresh) which scopes each account granted; returns the Drive state."""
+        sc = self._scanner()
+        g = index_sources.GoogleAccess(self.store, self.index, self.clock)
+        out = []
+        for a in self.store.accounts():
+            out.append({"account_id": a["id"], "email": a["email"], "granted": g.has_drive(a["id"], force=True)})
+        sc._estimates = {}
+        return {"accounts": out}
+
+    def index_drive_start(self, body):
+        """The incremental grant: Google's page asks only for Drive (read-only) on top of what the account gave."""
+        self._scanner()
+        acc_id = _obj(body).get("account_id")
+        if not isinstance(acc_id, str):
+            raise InputError("Pick the account to give Drive access.")
+        acc = self.store.account(acc_id)
+        return self.flows.start(acc["area_id"], extra_scopes=(google.DRIVE_SCOPE,), login_hint=acc["email"])
+
+    def index_drive_finish(self, body):
+        self._scanner()
+        body = _obj(body)
+        acc = self.flows.finish(body.get("flow_id"), body.get("pasted"))
+        granted = index_sources.GoogleAccess(self.store, self.index, self.clock).has_drive(acc["id"], force=True)
+        self.scanner._estimates = {}
+        return {"account": acc, "granted": granted}
+
