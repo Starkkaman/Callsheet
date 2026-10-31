@@ -727,6 +727,18 @@ def done_list(rows, tz, fmt, writer_on=True):
     return [x[1] for x in out]
 
 
+def _top_checks(top, words, top_check, replies):
+    """0.5.2: Top of the day items with `check: true` where sync.guard_claims marked the text: the writer's line
+    for a ref in top_check, or the rules' line for a reply row whose gist (the line's text) has `check`."""
+    top_check = top_check if isinstance(top_check, list) else []
+    gist_check = {r.get("id") for r in replies if isinstance(r.get("gist"), dict) and r["gist"].get("check") is True}
+    out = []
+    for t in top:
+        mark = t["ref"] in top_check if t["ref"] in words else t.get("kind") == "reply" and t["ref"] in gist_check
+        out.append(dict(t, check=True) if mark else t)
+    return out
+
+
 def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
     """sample: the bundled sample brief. cache: the brief saved by the last sync (or None).
     live: at least one account is connected. now: aware datetime. writer_on: show the AI writer's
@@ -759,7 +771,8 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
         prev = cache.get("previous_at")
         brief["previous_at"] = clock(dt.datetime.fromisoformat(prev).astimezone(tz), fmt) if prev else None
         if not writer_on:
-            brief["replies"] = [{k: v for k, v in r.items() if k not in ("suggestion", "suggestion_warning")}
+            brief["replies"] = [{k: v for k, v in r.items()
+                                 if k not in ("suggestion", "suggestion_warning", "suggestion_hidden")}
                                 for r in brief["replies"]]
         brief["replies"] = [with_gist(r, writer_on) for r in brief["replies"]]
         # the rules choose and order the rows; the writer's wording replaces the text of the refs it wrote
@@ -772,11 +785,18 @@ def compose_brief(sample, settings, areas, cache, live, now, writer_on=False):
                                 "at": clock(at, fmt) if at else None,
                                 "areas": {k: v for k, v in (summary.get("areas") or {}).items()
                                           if isinstance(v, str) and any(a["id"] == k for a in areas)}}
+            # 0.5.2 markers from sync.guard_claims (only present when a row claims something was done)
+            if summary.get("check") is True:
+                brief["summary"]["check"] = True
+            checked = [k for k in summary.get("areas_check") or [] if k in brief["summary"]["areas"]]
+            if checked:
+                brief["summary"]["areas_check"] = checked
             words = top_texts(summary.get("top"))
             if any(t["ref"] in words for t in brief["top"]):
                 brief["top"] = [dict(t, text=_clip(" ".join(words[t["ref"]].split()), 200)) if t["ref"] in words
                                 else t for t in brief["top"]]
                 brief["top_by"] = "writer"
+            brief["top"] = _top_checks(brief["top"], words, summary.get("top_check"), brief["replies"])
             brief["summary"]["top"] = brief["top"] if brief["top_by"] == "writer" else []
             brief["sections"]["summary"] = "live"
         brief["done"] = done_list(cache.get("done"), tz, fmt, writer_on)

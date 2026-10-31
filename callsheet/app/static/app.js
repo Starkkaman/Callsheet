@@ -325,7 +325,17 @@
   }
   /* the sender's-claim check (0.4.1): the rules flag a row whose latest incoming message says something was done */
   var CLAIM_NOTE = 'This message says something was approved, paid, signed or released. Check before replying.';
+  /* the 0.5.2 security fix (sync.guard_claims): markers only, the page owns these fixed lines */
+  var HIDDEN_LINES = {
+    claim: 'No suggested reply: this message says something was done. Check before replying.',
+    brief_claim: "Suggested reply hidden: it stated something as done while a message in today's brief claims something was done. Check before replying."
+  };
+  var CHECK_LABEL = 'Check this: it may repeat a claim from a message.';
+  function hiddenLine(r) { return Object.prototype.hasOwnProperty.call(HIDDEN_LINES, r.suggestion_hidden) ? HIDDEN_LINES[r.suggestion_hidden] : null; }
+  function gistCheck(r) { return !!(r.gist && r.gist.check === true); }
+  function checkLabel(tag, on) { return on ? h(tag, { class: 'chk' }, CHECK_LABEL) : null; }
   function claimMark(r) {
+    if (r.claim !== true && gistCheck(r)) return h('span', { class: 'cmk', 'aria-hidden': 'true', title: CHECK_LABEL }, '!');
     return r.claim === true ? h('span', { class: 'cmk', 'aria-hidden': 'true', title: CLAIM_NOTE }, '!') : null;
   }
   /* the wait (0.4.1): the rules' wording ("waiting 11 days, last nudge 8 days ago") with a middle dot; it
@@ -344,7 +354,7 @@
     return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-row': r.id }, [
       h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
       h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id,
-        'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : '') }, [
+        'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
         claimMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
@@ -383,20 +393,21 @@
     var doneIds = ((B.done) || []).map(function (d) { return d.id; });
     var nRep = openReplies().length, evs = events();
     var head = h('div', { class: 'label muted kicker' }, [B.kind || 'Brief', B.written_at ? ' · ' + B.written_at : '', B.previous_at ? ' · since ' + B.previous_at : '']);
-    var text = sum ? [h('p', { class: 'daytext' + (U.more ? ' all' : ''), id: 'bv-daytext' }, sum.text),
+    var text = sum ? [h('p', { class: 'daytext' + (U.more ? ' all' : ''), id: 'bv-daytext' }, sum.text), checkLabel('p', sum.check === true),
       sum.text.length > 260 ? h('button', { type: 'button', class: 'tbtn', 'data-more': '1', 'aria-expanded': String(U.more), 'aria-controls': 'bv-daytext' }, U.more ? 'Less' : 'More') : null]
       : h('h2', { class: 'headline' }, plural(evs.length, 'event', 'events') + ' today, ' + plural(nRep, 'reply', 'replies') + ' waiting.');
     var topEl = top.length ? [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
       var isEv = t.kind === 'event', gone = !isEv && !replyById(t.ref), dn = gone && doneIds.indexOf(t.ref) >= 0;
-      var kids = [h('span', { class: 'ri' }, ico(isEv ? 'cal' : 'mail')), h('span', { class: 'tt' }, t.text)];
+      var kids = [h('span', { class: 'ri' }, ico(isEv ? 'cal' : 'mail')), h('span', { class: 'tt' }, [t.text, checkLabel('span', t.check === true)])];
       return h('li', null, gone ? h('span', { class: 'tline' + (dn ? ' isdone' : '') }, kids)
         : h('button', { type: 'button', class: 'tline', 'data-open': (isEv ? 'event:' : 'reply:') + t.ref }, kids));
     }))] : null;
     var areas = sum && sum.areas ? (B.areas || []).filter(function (a) { return sum.areas[a.id] && !isDismissed('ar:' + a.id + ':' + hashOf(sum.areas[a.id])); }) : [];
     var byArea = areas.length ? [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
+      var chk = areaCheck(sum, a.id);
       return h('div', { class: 'para cn' }, [
-        h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + ' (open in Areas)' }, [
-          h('span', { class: 'ptag' }, tagOf(a.id)), h('span', { class: 'ptext' }, sum.areas[a.id])]),
+        h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + (chk ? ' ' + CHECK_LABEL : '') + ' (open in Areas)' }, [
+          h('span', { class: 'ptag' }, tagOf(a.id)), h('span', { class: 'ptext' }, sum.areas[a.id]), checkLabel('span', chk)]),
         npBtn('para', a.id, 'pa-' + a.id)]);
     }))] : null;
     /* at a glance: next event, due today, waiting */
@@ -505,6 +516,7 @@
       evs.length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.'),
       possibleSection()];
   }
+  function areaCheck(sum, id) { return !!(sum && Array.isArray(sum.areas_check) && sum.areas_check.indexOf(id) >= 0); }
   function T_areas() {
     var list = (B.areas || []).filter(function (a) { return !U.area || a.id === U.area; });
     var sumA = (B.summary && B.summary.areas) || {};
@@ -514,7 +526,7 @@
       var reps = openReplies().filter(function (r) { return r.area === a.id; }), evs = events().filter(function (e) { return e.area === a.id; });
       return h('section', { class: 'acol a' + clampColour(a.colour), 'aria-label': a.name }, [
         h('h2', { class: 'areahead' }, a.name),
-        sumA[a.id] ? h('p', { class: 'asum' }, sumA[a.id]) : null,
+        sumA[a.id] ? h('p', { class: 'asum' }, sumA[a.id]) : null, sumA[a.id] ? checkLabel('p', areaCheck(B.summary, a.id)) : null,
         h('h3', { class: 'sub-h' }, ['Replies ', h('span', { class: 'n' }, String(reps.length))]),
         reps.length ? h('div', { class: 'list' }, reps.map(function (r) { return rowEl(r, 'ar'); })) : h('p', { class: 'empty' }, 'Nothing waiting.'),
         h('h3', { class: 'sub-h' }, ['Today ', h('span', { class: 'n' }, String(evs.length))]),
@@ -541,14 +553,14 @@
       h('span', { class: 's' }, [ico(srcKind(r)), r.source || srcName(r)]), ageOf(r) ? h('span', null, ageOf(r)) : null,
       rk ? h('span', { class: 's' }, [rdot(r), rk[1]]) : null, r.new && B.previous_at ? h('span', { class: 's' }, [newDot(r), 'New']) : null])]),
     r.claim === true ? h('p', { class: 'pflag claim' }, CLAIM_NOTE) : null,
-    h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)),
+    h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r)),
     ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
       return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);
     })), h('div', { class: 'fhint' }, 'Quoted exactly from the message.')] : null,
     sug ? [h('h3', { class: 'plab' }, h('label', { for: 'bv-draft' }, 'Suggested reply')),
       typeof r.suggestion_warning === 'string' && r.suggestion_warning ? h('p', { class: 'err sugwarn' }, r.suggestion_warning) : null,
       ta, h('div', { class: 'dbtns' }, [h('button', { type: 'button', class: 'act', 'data-copy': r.id }, 'Copy'),
-        h('span', { class: 'hint' }, 'Edit it here. Nothing is sent for you.')])] : null,
+        h('span', { class: 'hint' }, 'Edit it here. Nothing is sent for you.')])] : hiddenLine(r) ? h('p', { class: 'pflag sughide' }, hiddenLine(r)) : null,
     h('div', { class: 'pacts' }, [
       link ? h('a', { class: 'act', href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + srcName(r)) : null,
       h('button', { type: 'button', class: 'act ghost', 'data-markdone': r.id }, 'Mark done'),

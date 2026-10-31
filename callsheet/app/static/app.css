@@ -701,6 +701,9 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .bv .plab{font-family:var(--font-body);font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted);margin:18px 0 6px}
 .bv .what{margin:0;font-size:var(--fs-lg);max-width:640px;overflow-wrap:anywhere}
 .bv .pflag{margin:12px 0 0;color:var(--alert);font-weight:700;font-size:var(--fs-md)}
+/* 0.5.2: "Check this" label on writer text that may repeat a sender's claim (sync.guard_claims) */
+.bv .chk{display:block;margin:4px 0 0;color:var(--alert);font-weight:700;font-size:var(--fs-sm);overflow-wrap:anywhere}
+.bv .pmain .chk{grid-column:2;margin:0}
 .bv .facts{display:flex;flex-wrap:wrap;gap:6px}
 .bv .fact{font-size:var(--fs-md);padding:4px 10px;background:var(--surface-2);border-radius:var(--chip-radius);box-shadow:inset 3px 0 0 var(--accent);overflow-wrap:anywhere;min-width:0}
 .bv .fact b{font-weight:700;margin-right:4px}
@@ -741,6 +744,7 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .bv .bf{grid-template-columns:1fr}
   .bv .bf>aside{margin-top:14px}
   .bv .pmain{grid-template-columns:1fr}
+  .bv .pmain .chk{grid-column:auto}
 }
 /* agenda: heads up + timeline */
 .bv .hstrip{margin:0 0 18px}

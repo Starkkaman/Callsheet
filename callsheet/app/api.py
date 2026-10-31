@@ -29,7 +29,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 
 
 class MethodNotAllowed(Exception):

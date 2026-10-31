@@ -382,3 +382,6 @@ built from explicit fields). The page shows `CLAIM_NOTE` ("This message says som
 or released. Check before replying.") as `p.pflag.claim` under the detail panel's header (where an event's clash
 flag goes) and a `span.cmk` "!" (`--alert`, `aria-hidden`, the note as its title) before the row's age in the
 list; the row's aria-label ends with ", says something was done: check". Both are rendered with `h()` (text nodes).
+
+0.5.2 security fix: with a claim in the brief, `sync.guard_claims` hides the claim rows' drafts and every
+flagged draft, and marks writer texts that state something as done; see `docs/hotfix-0.5.2.md`.
