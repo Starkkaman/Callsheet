@@ -113,10 +113,7 @@ class SignalApi:
         chat = b.get("chat")
         if chat is not None and not isinstance(chat, str):
             raise InputError("The chat name must be text.")
-        with self._lock:
-            up = self._up
-            if up is not None and self.clock() - up["touched"] < UPLOAD_IDLE_S:
-                raise Conflict("Another upload is running. Wait for it to finish.")
+        with self._lock:  # a new upload replaces one that is still running (one owner, one page)
             tz = rules.tzinfo(self.store.settings())
             parser = signal_import.Parser(self.store.signal_hash, tz, chat or name.rsplit(".", 1)[0])
             self._up = {"id": "up_" + secrets.token_hex(4), "name": name, "size": size, "received": 0,
