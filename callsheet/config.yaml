@@ -1,5 +1,5 @@
 name: "Callsheet"
-version: "0.4.1"
+version: "0.5.0"
 slug: "callsheet"
 description: "Your Daily Brief: schedule, replies due and project progress in one page. Read-only, drafts only, never sends."
 url: "https://github.com/Starkkaman/callsheet"
