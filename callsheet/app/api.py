@@ -9,7 +9,9 @@ import re
 import sys
 import time
 
+import dates
 import evaluate
+import memory
 import writer
 
 import google
@@ -61,6 +63,7 @@ class App:
         self.syncer = Syncer(self.store, clock=clock)
         self.scheduler = Scheduler(self.store, self.syncer, clock=clock)
         self.evaluator = evaluate.Evaluator(self.store, self.syncer, clock=clock)
+        self.memory = self.syncer.memory  # memory.md (0.5.0): one object, one lock
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -98,7 +101,7 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
-        ]
+        ] + self._memory_routes()
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -138,9 +141,114 @@ class App:
     def brief(self, _body=None):
         s = self.store.settings()
         now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(s))
-        return rules.compose_brief(load_sample(), s, self.store.areas(), self.store.cached_brief(),
-                                   self.store.has_sources(), now,
-                                   writer_on=self.store.writer_config()["provider"] != "off")
+        cache = self.store.cached_brief()
+        brief = rules.compose_brief(load_sample(), s, self.store.areas(), cache,
+                                    self.store.has_sources(), now,
+                                    writer_on=self.store.writer_config()["provider"] != "off")
+        self._brief_050(brief, cache, s)
+        return brief
+
+    # --- 0.5.0: possible events and notes on the brief, memory (memory.py) -------------------------------------
+    def _brief_050(self, brief, cache, settings):
+        """Adds the possible events (dates.for_page: display time in the owner's format, the Add to calendar
+        URL) and the note marks ({ref: {id, text}} for the notes made from a brief item) to a live brief."""
+        if brief.get("sample"):  # the bundled sample stays as it is (no notes, no possible events)
+            return
+        day = dt.date.fromisoformat(brief["date"]) if brief.get("date") else None
+        brief["possible"] = dates.for_page((cache or {}).get("possible"), str(rules.tzinfo(settings)),
+                                           rules.time_format(settings), day) if cache and day else []
+        marks = {}
+        for e in self.memory.entries():
+            ref, nid = e["meta"].get("ref"), e["meta"].get("id")
+            if ref and nid and e["section"] == "Notes" and ref not in marks:
+                marks[ref] = {"id": nid, "text": e["text"]}
+        brief["notes"] = marks
+
+    def _memory_routes(self):
+        return [("GET", r"memory", self.get_memory),
+                ("PATCH", r"memory", self.save_memory),
+                ("POST", r"memory/reset", self.reset_memory),
+                ("POST", r"memory/notes", self.add_note),
+                ("PATCH", r"memory/notes/(n[0-9a-f]{6,12})", self.patch_note),
+                ("DELETE", r"memory/notes/(n[0-9a-f]{6,12})", self.delete_note)]
+
+    def _mem(self, fn, *args):
+        try:
+            return fn(*args)
+        except memory.MemoryError_ as e:
+            raise InputError(str(e)) from None
+        except LookupError as e:
+            raise NotFound(str(e)) from None
+
+    def get_memory(self, _body=None):
+        return dict(self._mem(self.memory.view), rule=writer.NOTES_RULE, cap=memory.NOTES_CAP)
+
+    def save_memory(self, body):
+        b = _obj(body)
+        if set(b) != {"text"}:
+            raise InputError("Send the memory as {\"text\": ...}.")
+        return dict(self._mem(self.memory.save, b["text"]), rule=writer.NOTES_RULE, cap=memory.NOTES_CAP)
+
+    def reset_memory(self, body):
+        if _obj(body).get("confirm") is not True:
+            raise InputError("Confirm clearing the memory.")
+        return dict(self._mem(self.memory.reset), rule=writer.NOTES_RULE, cap=memory.NOTES_CAP)
+
+    def add_note(self, body):
+        """A note on a brief item: kind reply | event | para | heads | pe, id (the row, event, possible event or
+        area id; for heads the text's hash on the page, with text in "item"), ref (the page's key for the item, so
+        the item shows its note), text. Metadata comes from the cached brief and row refs, never from the page."""
+        b = _obj(body)
+        kind, item_id, ref = b.get("kind"), b.get("id"), b.get("ref")
+        if kind not in ("reply", "event", "para", "heads", "pe"):
+            raise InputError("Notes go on a reply, an event, a briefing paragraph, a heads-up or a possible event.")
+        if not isinstance(ref, str) or not re.fullmatch(r"[\w:.-]{1,80}", ref):
+            raise InputError("That item can't take a note. Reload the page.")
+        s = self.store.settings()
+        now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(s))
+        cache = self.store.cached_brief() or {}
+        if not self.store.has_sources() or not cache:
+            raise InputError("Notes work once Callsheet has read your accounts.")
+        area_name = {a["id"]: a["name"] for a in self.store.areas()}
+        sender = domain = None
+        if kind in ("reply", "pe"):
+            pe = None
+            if kind == "pe":
+                pe = next((p for p in cache.get("possible") or [] if p.get("id") == item_id), None)
+                if pe is None:
+                    raise NotFound("That possible event isn't in the brief any more. Reload the page.")
+            rid = pe["row"] if pe else item_id
+            row = next((r for r in (cache.get("replies") or []) + (cache.get("done") or []) if r.get("id") == rid),
+                       None)
+            ref_row = self.store.brief_refs().get(rid) if isinstance(rid, str) else None
+            if pe is None and (row is None or ref_row is None):
+                raise NotFound("That row isn't in the brief any more. Reload the page.")
+            item = dict(row or {}, **({"who": pe["who"], "text": (row or {}).get("text") or pe["title"]} if pe else {}))
+            if ref_row and ref_row.get("source") == "mail":
+                sender, domain = ref_row.get("sender"), ref_row.get("domain")
+            area = (row or pe).get("area")
+        elif kind == "event":
+            item = next((e for e in cache.get("schedule") or [] if e.get("id") == item_id), None)
+            if item is None:
+                raise NotFound("That event isn't in the brief any more. Reload the page.")
+            area = item.get("area")
+        elif kind == "para":
+            if item_id not in area_name:
+                raise NotFound("That area doesn't exist any more. Reload the page.")
+            item, area = None, item_id
+        else:
+            item = next((h for h in cache.get("heads_up") or [] if h == b.get("item")), None)
+            if item is None:
+                raise NotFound("That heads-up isn't in the brief any more. Reload the page.")
+            area = None
+        title, meta = memory.meta_for(kind, item, ref, now, area_name.get(area, ""), sender, domain)
+        return self._mem(self.memory.add, title, meta, b.get("text"))
+
+    def patch_note(self, body, nid):
+        return self._mem(self.memory.update, nid, _obj(body).get("text"))
+
+    def delete_note(self, _body, nid):
+        return self._mem(self.memory.delete, nid)
 
     def state(self, _body=None):
         client = self.store.google_client_public()

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+- **Notes to Callsheet.** The notepad menu on a reply, event, briefing paragraph, heads-up or possible event
+  now has "Note for Callsheet…": write a note (for example "Jordan's volunteer requests can wait until
+  Sunday"), and the item shows that it has one. Notes are kept in one Markdown file on the box
+  (`/data/memory.md`, readable only by the app). Setup → Delivery → Memory shows the whole file, and you can
+  edit it there or clear it after a confirmation. Before each brief the writer gets only the notes that fit
+  the day: the same sender, email domain, person, topic words or area. It gets about 1,500 characters at most,
+  in their own block after the facts, with a fixed sentence saying they are your notes and that they never
+  change the safety rules. Mail that pretends to be your notes stays plain mail. Both writers and the writer
+  evaluation get them. Prompts without notes are unchanged.
+- **Possible events.** When the latest message in a reply proposes a date ("Can we meet Tuesday at 2pm?",
+  "lunch on 3 Nov", "between 3 and 4pm on Wednesday", "due Friday at 5pm"), the Agenda lists it under
+  "Possible events". Each entry shows what, when (in your 12h/24h format) and who it's from, unless your
+  calendar already has it. "Add to calendar" opens a filled-in Google Calendar page in the right account and
+  time zone in a new tab, and nothing is saved until you save it there. Callsheet still only reads your
+  calendar. Questions that ask you for a time, past events and unclear dates such as "next Friday" are left out.
+
 ## 0.4.1
 
 - **Facts for the writer.** Callsheet now works out the numbers the writer used to guess: per reply row the
