@@ -282,6 +282,17 @@ through that service. Turn off **Show the subject in notifications** to send the
 message from Priya"). Use **Send a test notification** to check; if Home Assistant no longer knows a phone,
 open the Home Assistant app on it or pick another phone.
 
+## Get to know me (0.6.0, optional)
+
+Setup → Delivery → Memory → **Get to know me** reads your history into a private index on this box.
+- **Drive**: in your Google Cloud project turn on the *Google Drive API* and add the
+  `https://www.googleapis.com/auth/drive.readonly` scope to the consent screen. Then press "Grant Drive
+  access" for each account and paste the address as when you connected it.
+- **Obsidian**: sync the vault into Home Assistant's `share` or `media` folder (Syncthing, Samba, …) and type
+  its path, for example `/share/Obsidian/My vault`. The app sees these folders read-only.
+- Pick how far back; read the estimate; Start scan. You can close the page; it pauses around call times.
+- The index (`index.db`) is not in backups (it can be read again) and isn't sent to the writer in 0.6.0.
+
 ## Your data
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable

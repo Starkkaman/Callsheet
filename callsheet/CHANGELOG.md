@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+- **Get to know me (part 1: the index, no AI).** Setup → Delivery → Memory → "Get to know me" reads your
+  history into a private full-text index on this box: Gmail, the calendars you picked, Slack, Google Drive
+  (Docs, Sheets, Slides and text files, read-only; PDFs skipped) and an Obsidian vault synced into Home
+  Assistant's share or media folder. Pick how far back (30 days to your entire history); Callsheet first
+  estimates in plain words ("About 48,000 emails. May take about 6 hours and use about 900 MB on this box.").
+  The scan runs in the background at low priority, shows progress per source, can be paused, stopped and
+  resumed, survives restarts, waits when Google or Slack ask it to slow down, and pauses 10 minutes before and
+  after each call time so briefs stay on time. Afterwards new items are added every 30 minutes.
+- Drive needs one more read-only permission: "Grant Drive access" asks Google only for `drive.readonly`;
+  existing sign-ins keep working.
+- The index (`index.db`) stays on this box, is left out of Home Assistant backups (it can be read again) and
+  can be deleted from the page. In this version it isn't sent to the writer.
+- New read-only Google calls: Drive `files.list`, `files.get` and `files.export`. The app maps Home
+  Assistant's share and media folders read-only (for the vault).
+
 ## 0.5.1
 
 - **Phone notifications through Home Assistant.** Setup → Delivery → Phone notifications lists the phones

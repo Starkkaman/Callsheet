@@ -5,13 +5,13 @@
 - `filemap.md`: this file.
 - `.gitignore`: Python caches, venvs, logs, local screenshots.
 - `repository.yaml`: Home Assistant app repository (name, url, maintainer).
-- `callsheet/config.yaml`: app manifest (slug callsheet, 0.4.1, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`; 0.5.1: `homeassistant_api: true` for phone notifications).
+- `callsheet/config.yaml`: app manifest (slug callsheet, 0.4.1, ingress on 8099, sidebar icon/title, options `writer_local_url`/`writer_local_model`; 0.5.1: `homeassistant_api: true` for phone notifications); 0.6.0: `map` share/media read-only (Obsidian vault) and `backup_exclude: index.db*`.
 - `callsheet/Dockerfile`: image from the HA base-python image; adds tzdata and the pinned `anthropic` SDK; copies app/ and run.sh.
 - `callsheet/run.sh`: container start script (bashio log line, starts server.py on 8099).
 - `callsheet/DOCS.md`: user documentation shown in Home Assistant: features, Google Cloud client setup, connecting an account, Slack setup (manifest, admin approval), doesn't-need-a-reply, time format, AI writer (writing profiles, Claude, local model, app options), data, troubleshooting.
 - `callsheet/CHANGELOG.md`: release notes per version.
 - `callsheet/app/server.py`: stdlib web server (thin): static files (index.html filled in with the app version, `?v=` asset URLs, ETag and 304 for the page, app.css and app.js), `api/*` routing, client allowlist, X-Callsheet header, 64 KB JSON bodies, JSON errors (409 for conflicts), attachment downloads; refuses to start if the database can't be opened.
-- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer and writing profiles, Slack, suppression rules, writer evaluation; 0.5.0: `api/memory` (view, save, reset, notes from brief items) and the brief's possible events and note marks; 0.5.1: `api/push`, `api/push/targets`, `api/push/test`); seeds the local writer from `options.json`.
+- `callsheet/app/api.py`: `App`: route table and handlers for the JSON API (brief, state with the app version `APP_VERSION`, Google client, areas, accounts, VIPs, settings, sync, writer and writing profiles, Slack, suppression rules, writer evaluation; 0.5.0: `api/memory` (view, save, reset, notes from brief items) and the brief's possible events and note marks; 0.5.1: `api/push`, `api/push/targets`, `api/push/test`; 0.6.0: `api/index/*` in its own section); seeds the local writer from `options.json`.
 - `callsheet/app/store.py`: SQLite storage (`$CALLSHEET_DATA/callsheet.db`, 0600): schema version (additive upgrades, `StoreError` instead of a fresh DB), settings defaults and validation, phone notification settings and state (0.5.1), areas, accounts and tokens, VIPs, writer settings and keys, evaluation settings, last sync, last writer run, cached brief; Slack workspaces (token, ignore list, read state), writing profiles, suppression rules, new-since keys, brief row refs.
 - `callsheet/app/google.py`: Google network code: OAuth and read-only Gmail/Calendar calls behind a (method, URL) allowlist; env overrides for tests.
 - `callsheet/app/slack.py`: Slack network code (0.4.0): read-method allowlist, manifest and create URL, token check, per-sync client with Retry-After, backoff and a request cap, the read of one workspace (DMs, channels, threads, mentions) and its saved state (0.5.1: DM channel ids per person, for the urgent check).
@@ -19,6 +19,9 @@
 - `callsheet/app/evaluate.py`: owner-run writer evaluation with contenders (0.5.0): 2 to 4 contenders (local or Claude model, thinking, effort, budget, sampling, writing profile) validated here, migration of the old Gemma/Qwen settings, each-vs-each or baseline pairings, refusal checks (call-time window, sync or run busy, setup problems), builds the writer input like a sync without storing anything live, per-contender requests (local with the loading retry, Claude via the SDK) and the reload of the everyday model, per-contender metrics, `writer-eval/<UTC time>/` files (0700/0600, last 5 kept, old runs still readable), blind A/B pairs seeded per run, choices with wins/losses/ties and the NDJSON export; the server's model list for the form.
 - `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
+- `callsheet/app/index.py`: 0.6.0 Know me index: `/data/index.db` (0600) with items + FTS5, idempotent upserts, cursors, search/get/stats, delete per source/account, wipe.
+- `callsheet/app/sources.py`: 0.6.0 index sources (read-only): Gmail, Calendar, Slack, Drive (scope check via token refresh), Obsidian (vault check + note parsing); retry/skip errors in plain words.
+- `callsheet/app/scan.py`: 0.6.0 scan job: windows, estimates and warnings, background thread with pause/resume/cancel, call-time pauses, backoff, 30-minute refresh, orphan prune.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons (Gmail categories, suppression), Slack rows and Heads up, rules-based Top of the day, 12h/24h display times, call times, brief composition.
 - `callsheet/app/facts.py`: pure facts for the writer (0.4.1): waiting days, unanswered messages and follow-ups, deadlines found in the last message, clash pairs in time order, oldest wait, due today, counts; the content of the `<facts>` block; the rows' wait wording for the page (`row_wait`).
 - `callsheet/app/memory.py`: the owner's notes to Callsheet (0.5.0): `$CALLSHEET_DATA/memory.md` (0600; sections Notes, Profile, Answers; one `###` entry per note with `- key: value` metadata), parse/validate, add/edit/delete/save/reset, the notes relevant to a brief (`relevant`, about 1,500 characters), metadata for a note on a brief item.
@@ -35,6 +38,7 @@
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, versioned assets and ETag/304, app version equals config.yaml, 403 for other clients, relative and offline URLs, no HTML sinks in app.js, the icon template.
 - `tests/fake_google.py`: fake Google HTTP server for tests (token/revoke with PKCE checks, Gmail and Calendar reads; records requests).
+- `tests/fake_google_index.py`: the fake Google plus Gmail list/get(full), profile, Calendar pages, Drive list/export/media (scope-gated) and one-shot injected failures.
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
@@ -54,6 +58,7 @@
 - `tests/fixtures/store_0_3_4.py`: frozen 0.3.4 `store.py`, used to build the 0.3.4 database.
 - `tests/fake_ha.py`: fake Home Assistant Core API (services list, notify with 400 for unknown phones, token check; records requests).
 - `tests/test_push.py`: 0.5.1 phone notifications: the notify-only allowlist, target listing, payloads (no body text, clipping, deep link), scheduler timing, dedupe, rate limit and batching, the urgent rules, settings validation, the test button, VIP Slack DMs, the token never in logs, no writer or model in the light check.
+- `tests/test_index_060.py`: 0.6.0 index: FTS ranking/filters, idempotency, deletion, each source against fakes (pages, resume, backoff, quota), Drive grant, Obsidian, estimates, call-time pauses, API, static checks.
 - `tests/fake_slack.py`: fake Slack Web API (read methods, 429 with Retry-After, request log).
 - `tests/test_slack.py`: Slack against the fake: allowlist, manifest scopes, connect and channels API, DM/mention/thread rules, Heads up, ignore list, VIPs, rate limits and the request cap, reconnect, suppression.
 - `tests/test_release_040.py`: writing profiles and the safety block, writer schema with areas/top, rules' Top of the day, 12h/24h times, Gmail categories, mail suppression, new-since, upgrade from 0.3.4.
@@ -66,6 +71,7 @@
 - `PRIVACY.md`: privacy policy (linked from the Google consent screen).
 - `docs/eval-contenders.md`: the 0.5.0 writer evaluation with contenders: data model, validation, migration, API, requests per contender, run files, results.
 - `docs/push-and-alerts.md`: 0.5.1 phone notifications and urgent alerts: Home Assistant access and allowlist, deep link, settings, summary and alert texts, the light check, urgent rules, timing, rate limit, state, API.
+- `docs/know-me-index.md`: 0.6.0 Know me index (3a): schema, sources and allowlist additions, scan and estimates, API, and the Python interface for 3b/3c.
 - `docs/memory-and-dates.md`: 0.5.0 notes to Callsheet (memory file format, relevance, the notes block, API) and possible events (date rules, calendar check, the Add to calendar link).
 - `docs/step4-0.4.0.md`: the 0.4.0 backend/API contract (Slack, writer output, writing profiles, time format, doesn't-need-a-reply, new since, upgrade).
 - `tests/test_local_prompt_shape.py`: the local writer prompt matches the evaluated shape (rule last).
