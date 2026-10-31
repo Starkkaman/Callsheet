@@ -124,10 +124,11 @@ class FileTest(unittest.TestCase):
         self.assertIn("not a note", es[0]["text"])
         self.assertTrue(e["id"])
 
-    def test_profile_section_text_is_kept_and_not_read_as_notes(self):
+    def test_profile_section_text_is_kept_and_read_as_entries(self):
+        # 0.6.0: the Profile section holds entries too (the owner's saved profile fields, docs/know-me-profile.md)
         text = memory.TEMPLATE.replace("## Profile\n", "## Profile\n\n### Not an entry\nfree text\n")
         self.m.save(text)
-        self.assertEqual(self.m.entries(), [])
+        self.assertEqual([(e["section"], e["title"]) for e in self.m.entries()], [("Profile", "Not an entry")])
         self.m.add("A", {}, "x")
         self.assertIn("### Not an entry\nfree text", self.path.read_text())
 

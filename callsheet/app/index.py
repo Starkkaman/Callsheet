@@ -3,7 +3,7 @@
 A separate SQLite database, $CALLSHEET_DATA/index.db (0600, excluded from Home Assistant backups because it can be
 rebuilt), with an FTS5 table over title, people and body. Nothing here talks to the network: sources.py reads, the
 scanner (scan.py) writes through `upsert`/`commit_step`, and later stages (3b profile/interview, 3c chat) read through
-`search`, `get` and `stats` only.
+`search`, `get`, `stats` and (3b) `rows`.
 
 Items are keyed by (source, account, source_id): upserts are deterministic and idempotent (a content hash; an
 unchanged item is not rewritten). Removing a source or an account removes its items. Bodies are plain text, already
@@ -440,6 +440,23 @@ class Index:
             s["accounts"][r["account"]] = s["accounts"].get(r["account"], 0) + r["n"]
         return {"total": span["n"], "bytes": self.size_bytes(), "oldest": span["lo"], "newest": span["hi"],
                 "sources": sources}
+
+    def rows(self, source=None, since=None, until=None, batch=2000):
+        """Every row's metadata (id, source, account, kind, thread, title, people, area, ts; no body or snippet),
+        oldest first, read in batches of `batch` with keyset paging (3b's profile aggregates). Read-only."""
+        where, args = self._filters(source, None, None, None, since, until)
+        last_ts, last_id = float("-inf"), -1
+        while True:
+            with self.lock:
+                rows = self.db.execute(
+                    "SELECT i.id, i.source, i.account, i.kind, i.thread, i.title, i.people, i.area, i.ts FROM items i "
+                    "WHERE (i.ts>? OR (i.ts=? AND i.id>?))" + "".join(" AND " + w for w in where) +
+                    " ORDER BY i.ts, i.id LIMIT ?", [last_ts, last_ts, last_id] + args + [int(batch)]).fetchall()
+            for r in rows:
+                yield {k: r[k] for k in ("id", "source", "account", "kind", "thread", "title", "people", "area", "ts")}
+            if len(rows) < batch:
+                return
+            last_ts, last_id = rows[-1]["ts"], rows[-1]["id"]
 
     def count(self, source=None, account=None):
         where, args = self._filters(source, account, None, None, None, None)

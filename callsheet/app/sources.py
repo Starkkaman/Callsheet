@@ -4,7 +4,8 @@ A source is one small class (see `Source`): `targets(ctx)` lists what can be rea
 workspace or vault), `estimate(ctx, target, since)` counts cheaply (or returns None), and `step(ctx, target, since,
 until, cursor)` reads one bounded batch and returns `(items, cursor)`; cursor None means this target is finished.
 The scanner (scan.py) stores each step's items and cursor in one transaction, so a restart resumes where it was.
-Signal (another branch: a local message store) plugs in as one more class with the same three methods.
+Signal (0.6.0 3b) reads the 0.5.1 Signal store (live messages since linking and imported history) with the same
+three methods; without that store (an older build) it has no targets.
 
 Network access goes only through google.py and slack.py and their allowlists. Bodies are stripped of quoted
 history and signatures with writer.py's helpers and capped by index.cap_body. Errors are plain sentences:
@@ -769,6 +770,98 @@ class ObsidianSource(Source):
         return items, cur
 
 
+# --- Signal (0.6.0 3b) ---------------------------------------------------------------------------------------------
+SIGNAL_CHUNK = 500
+
+
+def signal_ready(store):
+    """True when this build has the 0.5.1 Signal store (tables signal_chats/signal_messages) with messages in it."""
+    if not hasattr(store, "signal_meta"):
+        return False
+    try:
+        with store.lock:
+            row = store.db.execute("SELECT count(*) AS n FROM signal_messages").fetchone()
+    except Exception:  # noqa: BLE001 (no such table: Signal isn't in this build)
+        return False
+    return bool(row and row["n"])
+
+
+def _signal_ignored(store):
+    try:
+        return [str(x) for x in (store.signal_meta().get("ignored") or [])]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def signal_item(r, area):
+    """An index item for one stored Signal message (text, sender name, chat title, time; live or imported). Ids
+    in the store are salted hashes, never numbers, so the item has no phone number either."""
+    title = (r["title"] or "").strip()
+    who = (r["sender_name"] or "").strip()
+    out = bool(r["outgoing"])
+    if r["kind"] == "group":
+        heading = "Signal group " + (title or "chat")
+        people = [] if out else [who]
+    else:
+        heading = "Signal with " + (title or who or "someone")
+        people = [title or who] if out else [who or title]
+    return {"source": "signal", "account": "signal", "source_id": f"{r['chat']}:{r['sender']}:{r['ts']:.3f}",
+            "kind": "sent" if out else "message", "thread": str(r["chat"]), "title": heading,
+            "people": [p for p in people if p], "area": area, "ts": float(r["ts"]), "url": "",
+            "body": r["text"] or ""}
+
+
+class SignalSource(Source):
+    key, label, unit = "signal", "Signal", "messages"
+
+    def targets(self, ctx):
+        if not signal_ready(ctx.store):
+            return []
+        return [target("signal", "signal", "Signal · messages and imported history",
+                       ctx.store.signal_meta().get("area_id") or "personal", self.unit)]
+
+    @staticmethod
+    def _where(ctx, since, until):
+        ign = _signal_ignored(ctx.store)
+        where, args = ["1=1"], []
+        if ign:
+            where.append("m.chat NOT IN (" + ",".join("?" * len(ign)) + ")")
+            args += ign
+        if since:
+            where.append("m.ts>=?")
+            args.append(float(since))
+        if until:
+            where.append("m.ts<?")
+            args.append(float(until))
+        return " AND ".join(where), args
+
+    def estimate(self, ctx, tgt, since):
+        w, args = self._where(ctx, since, None)
+        with ctx.store.lock:
+            return ctx.store.db.execute("SELECT count(*) AS n FROM signal_messages m WHERE " + w, args).fetchone()["n"]
+
+    def step(self, ctx, tgt, since, until, cursor):
+        last = int((cursor or {}).get("after") or 0)
+        w, args = self._where(ctx, since, until)
+        with ctx.store.lock:
+            rows = ctx.store.db.execute(
+                "SELECT m.id, m.chat, m.sender, m.sender_name, m.ts, m.text, m.outgoing, c.kind, c.title "
+                "FROM signal_messages m LEFT JOIN signal_chats c ON c.id=m.chat WHERE m.id>? AND " + w +
+                " ORDER BY m.id LIMIT ?", [last] + args + [SIGNAL_CHUNK]).fetchall()
+        items = [signal_item(r, tgt["area"]) for r in rows]
+        if len(rows) == SIGNAL_CHUNK:
+            return items, {"after": rows[-1]["id"]}
+        # messages deleted in Setup (imported history, unlinking, the 30-day limit) leave the index too
+        ign = _signal_ignored(ctx.store)
+        sql = "SELECT chat, sender, ts FROM signal_messages"
+        if ign:
+            sql += " WHERE chat NOT IN (" + ",".join("?" * len(ign)) + ")"
+        with ctx.store.lock:
+            keep = {f"{r['chat']}:{r['sender']}:{r['ts']:.3f}" for r in ctx.store.db.execute(sql, ign).fetchall()}
+        ctx.index.delete_missing("signal", "signal", keep | {i["source_id"] for i in items})
+        return items, None
+
+
 def all_sources():
-    """The sources in scan order. Signal plugs in here as SignalSource()."""
-    return [GmailSource(), CalendarSource(), SlackSource(), DriveSource(), ObsidianSource()]
+    """The sources in scan order."""
+    return [GmailSource(), CalendarSource(), SlackSource(), DriveSource(), ObsidianSource(), SignalSource()]
