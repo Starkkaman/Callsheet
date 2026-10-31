@@ -409,7 +409,9 @@ class SlackSource(Source):
         names = ctx.index.meta("slack_users:" + ws_id)
         if names is not None:
             return names
-        names, cursor = dict((ctx.store.slack_secret(ws_id).get("state") or {}).get("users") or {}), None
+        known = (ctx.store.slack_secret(ws_id).get("state") or {}).get("users") or {}
+        names = {k: str(v.get("name") if isinstance(v, dict) else v)[:80] for k, v in known.items() if v}
+        cursor = None
         for _ in range(slack.MAX_PAGES):
             try:
                 res = _slack_call(cl, "users.list", limit=200, cursor=cursor) or {}
@@ -483,7 +485,7 @@ class SlackSource(Source):
                 "thread": f"{cid}:{m.get('thread_ts')}" if m.get("thread_ts") else "", "title": title,
                 "people": people, "area": tgt["area"], "ts": slack._ts(m.get("ts")),
                 "url": rules.slack_link(ws.get("domain"), cid, m["ts"], root),
-                "body": rules.slack_text(m.get("text") or "", names)}
+                "body": rules.slack_text(m.get("text") or "", {k: {"name": v} for k, v in names.items()})}
 
 
 class _Guard:

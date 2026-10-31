@@ -268,7 +268,7 @@ class Scanner:
             for t in self.targets(wanted):
                 job["targets"][t["key"]] = {
                     "source": t["source"], "account": t["account"], "label": t["label"], "unit": t["unit"],
-                    "done": 0, "total": counts.get(t["key"]), "status": "skipped" if t["blocked"] else "queued",
+                    "area": t["area"], "done": 0, "total": counts.get(t["key"]), "status": "skipped" if t["blocked"] else "queued",
                     "error": t["blocked"], "retry_at": 0, "fails": 0, "added": 0}
                 job["order"].append(t["key"])
             self.index.clear_cursors("scan")
@@ -368,7 +368,7 @@ class Scanner:
             if not t or t["blocked"]:
                 continue
             ref["targets"][key] = {"source": t["source"], "account": t["account"], "label": t["label"],
-                                   "unit": t["unit"], "done": 0, "total": None, "status": "queued", "error": None,
+                                   "unit": t["unit"], "area": t["area"], "done": 0, "total": None, "status": "queued", "error": None,
                                    "retry_at": 0, "fails": 0, "added": 0, "since": float(upto) - REFRESH_OVERLAP_S}
             ref["order"].append(key)
         self.index.clear_cursors("refresh")

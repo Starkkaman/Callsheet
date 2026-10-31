@@ -36,6 +36,9 @@ class AllowlistTest(unittest.TestCase):
                 ("GET", "https://www.googleapis.com/gmail/v1/users/me/profile"),
                 ("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList"),
                 ("GET", "https://www.googleapis.com/calendar/v3/calendars/a%40b.c/events?x=1"),
+                ("GET", "https://www.googleapis.com/drive/v3/files?q=x"),           # 0.6.0
+                ("GET", "https://www.googleapis.com/drive/v3/files/1AbC_d-9"),       # 0.6.0
+                ("GET", "https://www.googleapis.com/drive/v3/files/1AbC_d-9/export?mimeType=text%2Fplain"),
                 ("POST", "https://oauth2.googleapis.com/token"),
                 ("POST", "https://oauth2.googleapis.com/revoke")):
             google.check_allowed(method, url)
@@ -50,7 +53,18 @@ class AllowlistTest(unittest.TestCase):
                 ("POST", "https://www.googleapis.com/calendar/v3/calendars/x/events"),
                 ("GET", "https://oauth2.googleapis.com/token"),
                 ("POST", "https://oauth2.googleapis.com/token/extra"),
-                ("GET", "https://www.googleapis.com/drive/v3/files"),
+                # 0.6.0: Drive is GET-only files.list/get/export; nothing else under Drive
+                ("POST", "https://www.googleapis.com/drive/v3/files"),
+                ("PATCH", "https://www.googleapis.com/drive/v3/files/abc"),
+                ("DELETE", "https://www.googleapis.com/drive/v3/files/abc"),
+                ("POST", "https://www.googleapis.com/drive/v3/files/abc/copy"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/abc/permissions"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/abc/comments"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/generateIds"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/a%2Fb/export"),
+                ("GET", "https://www.googleapis.com/drive/v3/about"),
+                ("GET", "https://www.googleapis.com/drive/v2/files"),
+                ("GET", "https://www.googleapis.com/upload/drive/v3/files"),
                 ("GET", "https://www.googleapis.com/gmail/v1/users/me/../../../drive/v3/files"),
                 ("GET", "https://evil.example/gmail/v1/users/me/threads"),
                 ("GET", "http://www.googleapis.com/gmail/v1/users/me/threads"),
