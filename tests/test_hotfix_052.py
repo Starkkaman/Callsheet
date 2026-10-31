@@ -51,7 +51,7 @@ def brief(rows, summary=None, done=None):
 
 class GuardRulesTest(unittest.TestCase):
     def test_rule1_claim_row_draft_is_dropped_not_stored(self):
-        self.assertFalse(writer.states_decision(OWN))  # the post-check alone would let it through
+        # 0.5.3's wider post-check flags OWN too; rule 1 hides a claim row's draft whatever the post-check says
         b = sync.guard_claims(brief([row("r1", claim=True, suggestion=OWN), row("r2", suggestion="See you Friday.")]))
         r1, r2 = b["replies"]
         self.assertNotIn("suggestion", r1)
