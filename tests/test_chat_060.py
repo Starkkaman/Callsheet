@@ -729,32 +729,49 @@ class PageTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.js = (ROOT / "callsheet" / "app" / "static" / "app.js").read_text()
-        cls.css = (ROOT / "callsheet" / "app" / "static" / "app.css").read_text()
+        static = ROOT / "callsheet" / "app" / "static"
+        cls.js = (static / "app.js").read_text()
+        cls.css = (static / "app.css").read_text()
+        cls.html = (static / "index.html").read_text()
+        cls.chat = cls.js[cls.js.index("/* ---------- 0.6.0 chat:"):cls.js.index("/* ---------- end 0.6.0 chat")]
 
     def test_tabs(self):
-        m = re.search(r"const TABS = \[(.*?)\];", self.js, re.S)
-        keys = re.findall(r"\['(\w+)'", m.group(1))
-        self.assertEqual(keys, ["briefing", "replies", "agenda", "chat", "tasks"])
+        m = re.search(r"var TABS = \[(.*?)\];", self.js, re.S)
+        self.assertEqual(re.findall(r"\['(\w+)'", m.group(1)), ["briefing", "replies", "agenda", "chat", "tasks"])
         self.assertNotIn("T_areas", self.js)
-        self.assertRegex(self.js, r"LIVE_TABS = \[[^\]]*'chat'")
+        self.assertNotIn("allareas", self.js)
+        self.assertIn("var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat'];", self.js)
+        self.assertIn("chat: T_chat", self.js)
+        for icon in ("chat", "send", "drive"):
+            self.assertIn(f'data-i="{icon}"', self.html)
 
     def test_old_areas_links_open_replies(self):
-        self.assertRegex(self.js, r"OLD_TABS = \{\s*areas: 'replies'")
-        self.assertIn("tabFromHash", self.js)
-        self.assertRegex(self.js, r"function tabFromHash")
+        self.assertIn("var OLD_TABS = { areas: 'replies' };", self.js)
+        self.assertIn("tab: tabFromHash(location.hash) || savedTab(),", self.js)  # a deep link, else the saved tab
+        self.assertIn("var ht = v === 'brief' ? tabFromHash(location.hash) : null;", self.js)  # in route()
+        # the Briefing "By area" paragraphs open Replies filtered to that area
+        self.assertIn("else if (d.goarea) { U.area = d.goarea; setTab('replies');", self.js)
+        self.assertIn("(show its replies)", self.js)
 
     def test_area_chips_filter_replies(self):
-        self.assertIn("function areaChips", self.js)
-        self.assertRegex(self.js, r"U\.area \? rs\.filter\(r => r\.area === U\.area\)")
-        self.assertIn(".afil", self.css)
+        self.assertIn("var rs = U.area ? all.filter(function (r) { return r.area === U.area; }) : all;", self.js)
+        self.assertIn("areaChips(all),", self.js)
+        self.assertIn("'data-afil': a.id, 'aria-pressed': String(U.area === a.id)", self.chat)
+        self.assertIn("else if (d.afil) { U.area = d.afil === 'all' ? null : d.afil;", self.js)
+        self.assertIn("Area summaries are at the top of Briefing.", self.chat)
+        self.assertIn(".bv .afil .chip{", self.css)
 
     def test_chat_ui_is_text_only_and_relative(self):
-        sec = self.js[self.js.index("// --- 0.6.0 chat"):]
-        self.assertNotIn("innerHTML", sec)
-        self.assertNotRegex(sec, r"api\('/")
-        for name in ("T_chat", "chatBlock", "itemPanel", "chatPoll"):
-            self.assertIn(name, sec)
+        self.assertNotIn("innerHTML", self.chat)
+        self.assertNotRegex(self.chat, r"api\('[A-Z]+', '/")
+        self.assertNotRegex(self.chat, r"https?://")
+        for name in ("function T_chat", "function chatBlock", "function itemPanel", "function chatPoll", "data-ccopy",
+                     "data-cnew", "data-cclear", "'Back to chat'", "rel: 'noopener noreferrer'"):
+            self.assertIn(name, self.chat)
+        self.assertIn("if (U.open.kind === 'item') return itemPanel();", self.js)
+        self.assertIn("chatBlock(), writingBlock()", self.js)
+        css = self.css[self.css.index("/* 0.6.0 chat"):]
+        self.assertNotRegex(css, r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(")  # design tokens only
 
 
 if __name__ == "__main__":

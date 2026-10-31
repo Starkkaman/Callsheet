@@ -1134,9 +1134,14 @@ class Chat:
         t = Tools(self.index, tz, self.store.areas(), fmt, clock=self.clock)
         chip = t._chip(r)
         body = " ".join(str(r.get("body") or r.get("snippet") or "").split())
+        try:
+            d = dt.datetime.fromtimestamp(float(r.get("ts") or 0), tz)
+            when = f"{d:%a} {d.day} {d:%b %Y}, {rules.clock(d, fmt)}"
+        except (TypeError, ValueError, OverflowError, OSError):
+            when = ""
         return dict(chip, people=_clip(r.get("people"), 400), area=t._area_name(r.get("area")),
-                    area_id=r.get("area") or "", when=t._when(r.get("ts")), source_name=SOURCE_NAMES.get(chip["source"],
-                                                                                                   chip["source"]),
+                    area_id=r.get("area") or "", when=when,
+                    source_name=SOURCE_NAMES.get(chip["source"], chip["source"]),
                     snippet=body if len(body) <= 900 else body[:899].rstrip() + "…")
 
 
