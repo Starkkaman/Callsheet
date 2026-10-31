@@ -3678,10 +3678,11 @@
       h('div', { class: 'swrow' }, [sameSw, h('span', { 'aria-hidden': 'true' }, 'Same server and model as the brief writer')]),
       same ? h('p', { class: 'note' }, L.writer.base_url && L.writer.model ? 'Uses ' + L.writer.model + ' at ' + L.writer.base_url + '.' : 'Set up the writer’s local model above first, or turn this off.') : own,
       h('div', { class: 'lm' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-tools' }, 'Tool use'), tools]),
-        num('ch-time', 'timeout', 'Timeout per step (seconds)'), num('ch-max', 'max_tokens', 'Max tokens per answer')]),
+        num('ch-time', 'timeout', 'Timeout per step (seconds)'), num('ch-max', 'max_tokens', 'Max tokens per answer'),
+        num('ch-slot', 'id_slot', 'Server slot for chat')]),
       h('div', { class: 'swrow' }, [thL, h('span', { 'aria-hidden': 'true' }, 'Thinking')]),
       lErr,
-      h('p', { class: 'note' }, 'Automatic uses the server’s tool calling (llama.cpp needs --jinja) and falls back to simple JSON when the server refuses it. Thinking is slower.')]);
+      h('p', { class: 'note' }, 'Automatic uses the server’s tool calling (llama.cpp needs --jinja) and falls back to simple JSON when the server refuses it, trying tool calling again after 10 minutes. Thinking is slower. The server slot (llama.cpp) keeps chat questions off the brief writer’s slot: use a different number from “Server slot for briefs”.')]);
 
     /* Claude: model, effort, thinking; the key is the writer's */
     var C = c.claude, cErr = errBox();

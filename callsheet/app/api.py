@@ -929,7 +929,12 @@ class App:
         return chat.public_settings(self.store)
 
     def patch_chat_settings(self, body):
-        return chat.update_settings(self.store, _obj(body))
+        before = chat.effective_local(self.store)
+        out = chat.update_settings(self.store, _obj(body))
+        after = chat.effective_local(self.store)
+        if (before["base_url"], before["model"]) != (after["base_url"], after["model"]):
+            self.chat.forget_fallback()  # a model change: native tool calling is tried again
+        return out
 
     def chat_models(self, body):
         body = body if isinstance(body, dict) else {}
