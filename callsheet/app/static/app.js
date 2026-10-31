@@ -1,6 +1,6 @@
 /* Callsheet: Daily Brief page + Setup.
-   Hash routes: #brief (default), #setup (the step lives in memory) and #eval (the owner-run writer evaluation,
-   only when its tools are turned on in Setup, Delivery, Advanced).
+   Hash routes: #brief (default), #setup (the step lives in memory), #eval (the owner-run writer evaluation,
+   only when its tools are turned on in Setup, Delivery, Advanced) and #knowme (0.6.0: Get to know me, from Memory).
    Fetches api/brief and api/state (relative URLs: works under the HA ingress prefix). Brief: v3 frame A on desktop,
    v3 frame B's structure and order under 700px. Setup: v3 setup view, six steps wired to the step-2 API.
    Data is only ever inserted as text (textContent), never as HTML. */
@@ -1028,7 +1028,7 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : 'brief';
+    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : 'brief';  /* 0.6.0 index: #knowme */
     var changed = v !== ui.view;
     ui.view = v;
     setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
@@ -1036,6 +1036,7 @@
       clearLayer(); document.documentElement.classList.remove('bv-lock'); document.querySelector('header.top').removeAttribute('inert');
     }
     if (v !== 'eval') stopEvalPoll();
+    if (v !== 'knowme') stopKnowPoll();  /* 0.6.0 index */
     refreshErr.textContent = '';
     if (!changed && main.querySelector('.sheet, .bv')) return;
     window.scrollTo(0, 0);
@@ -1044,6 +1045,7 @@
       loadState().then(function () { return showSetup(fs); }, function () { return showSetup(fs); });
     }
     else if (v === 'eval') showEval();
+    else if (v === 'knowme') showKnow('#kn-title');  /* 0.6.0 index */
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -2020,7 +2022,7 @@
   function memoryBlock() {
     if (!MEM.data && !MEM.err && !MEM.loading) loadMemory();
     var m = MEM.data, cap = m && Number(m.cap) || 1500;
-    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory')]);
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory'), knowEntry()]);  /* 0.6.0 index: entry */
     var intro = h('p', { class: 'note' }, 'Your notes to Callsheet, kept as one Markdown file on this box. Before each brief the writer gets ' +
       'the notes that fit the day (the same people, email domains, area or topic words), up to about ' + fmtNum(cap) + ' characters. ' +
       'Add notes from the notepad icon on any reply, event or briefing paragraph, or write them here.');
@@ -2472,6 +2474,230 @@
         }))])),
       h('p', { class: 'note' }, 'Flagged drafts state an approval, payment or agreement. Every other number is in the download.'));
     return out;
+  }
+
+
+  /* ---------- 0.6.0 index: Setup → Memory → Get to know me (#knowme): the Sources and Scan steps of knowme-v2 ----------
+     GET api/index/status (sources, windows, settings, the scan's progress, index size); POST api/index/estimate when a
+     window is picked; POST api/index/scan, pause, resume, cancel; PATCH api/index/settings (sources on/off, the vault
+     folder); the Drive grant (POST api/index/drive/start → Google's page → paste the address → POST
+     api/index/drive/finish); DELETE api/index with the status's wipe_token. The Check, Questions and Done steps come
+     later (3b). Everything is inserted as text. */
+  var KN = { st: null, est: {}, win: '90d', timer: null, seq: 0, grant: null, fresh: false, counting: null };
+  var KNSTEPS = ['Sources', 'Scan', 'Check', 'Questions', 'Done'];
+  var KNICON = { gmail: 'mail', calendar: 'cal', slack: 'slack', drive: 'note', obsidian: 'note' };
+  function stopKnowPoll() { if (KN.timer) { clearTimeout(KN.timer); KN.timer = null; } }
+  function knowEntry() { return btn('act', 'Get to know me', { 'data-fk': 'kn-open' }, function () { location.hash = 'knowme'; }); }
+  function knBusy(st) { var j = st && st.job; return !!(j && (j.state === 'running' || j.state === 'paused')); }
+  function showKnow(focusSel) {
+    var seq = ++KN.seq;
+    stopKnowPoll();
+    var st = S ? Promise.resolve(S) : loadState();
+    return st.then(function () { return api('GET', 'api/index/status'); }).then(function (r) {
+      if (seq !== KN.seq || ui.view !== 'knowme') return;
+      KN.st = r;
+      if (r.job && r.job.window && !KN.picked) KN.win = r.job.window;
+      renderKnow(focusSel);
+      if (r.job && r.job.state === 'running') KN.timer = setTimeout(function () { showKnow(); }, 3000);
+    }, function (e) { if (ui.view === 'knowme') status('Could not load Get to know me (' + e.message + ')'); });
+  }
+  function knSecs(n) {
+    if (n == null) return '—';
+    n = Math.max(0, Math.round(n));
+    if (n < 60) return 'under a minute';
+    if (n < 3600) return Math.round(n / 60) + ' min';
+    var hrs = Math.floor(n / 3600), m = Math.round((n % 3600) / 60);
+    return hrs + ' h' + (m ? ' ' + m + ' min' : '');
+  }
+  function knBytes(b) {
+    b = Number(b) || 0;
+    if (b < 1e6) return 'under 1 MB';
+    if (b < 1e9) return Math.round(b / 1e6) + ' MB';
+    return (b / 1e9).toFixed(1) + ' GB';
+  }
+  function knSelected() {
+    return ((KN.st && KN.st.sources) || []).filter(function (s) { return s.on && s.available; }).map(function (s) { return s.key; });
+  }
+  function knEstimate(win) {
+    KN.counting = win;
+    var key = win + ':' + knSelected().join(',');
+    return api('POST', 'api/index/estimate', { window: win, sources: knSelected() }).then(function (r) {
+      KN.est[key] = r; KN.counting = null; if (ui.view === 'knowme') renderKnow('[data-win="' + cssq(win) + '"]');
+    }, function (e) {
+      KN.est[key] = { error: e.message }; KN.counting = null; if (ui.view === 'knowme') renderKnow('[data-win="' + cssq(win) + '"]');
+    });
+  }
+  function knEst(win) { return KN.est[win + ':' + knSelected().join(',')]; }
+  function knSteps(n) {
+    return h('ol', { class: 'knsteps', 'aria-label': 'Steps' }, KNSTEPS.map(function (s, i) {
+      return h('li', { class: i < n ? 'ok' : i > 1 ? 'later' : null, 'aria-current': i === n ? 'step' : null }, s);
+    }));
+  }
+  function knChip(s) {
+    var locked = !s.available;
+    var picked = s.on && !locked;
+    var b = h('button', { class: 'cchip' + (s.key === 'drive' && locked ? ' warn' : ''), type: 'button', role: 'checkbox',
+      'aria-checked': picked ? 'true' : 'false', 'aria-disabled': locked ? 'true' : null, 'data-fk': 'kn-src-' + s.key },
+      [h('span', { class: 'bx', 'aria-hidden': 'true' }), ico(KNICON[s.key]), h('span', { class: 't' }, [h('b', null, s.label), h('small', null, s.detail || '')])]);
+    var err = errBox();
+    on(b, 'click', function () {
+      if (locked) return;
+      var patch = { sources: {} }; patch.sources[s.key] = !s.on;
+      run([b], err, function () { return api('PATCH', 'api/index/settings', patch); }, function () { KN.est = {}; showKnow('[data-fk="kn-src-' + s.key + '"]'); });
+    });
+    return h('span', { class: 'cw' }, [b, err]);
+  }
+  function knDrive(s) {
+    var missing = (s.accounts || []).filter(function (a) { return a.granted !== true; });
+    if (!missing.length) return null;
+    var g = KN.grant, err = errBox();
+    var rows = missing.map(function (a) {
+      var b = btn('tbtn', 'Grant Drive access → ' + a.email, { 'data-fk': 'kn-grant-' + a.account_id }, function () {
+        run([b], err, function () { return api('POST', 'api/index/drive/start', { account_id: a.account_id }); }, function (r) {
+          KN.grant = { account: a, flow: r.flow_id, url: r.auth_url }; renderKnow('#kn-paste');
+        });
+      });
+      return h('li', null, b);
+    });
+    var check = btn('tbtn', 'Check again', { 'data-fk': 'kn-drive-check' }, function () {
+      run([check], err, function () { return api('POST', 'api/index/drive/check', {}); }, function () { KN.est = {}; showKnow('[data-fk="kn-drive-check"]'); });
+    });
+    var box = [h('p', { class: 'note' }, 'Drive needs one more read-only permission for each account. Google’s page asks only for that; the access you gave before stays as it is.'),
+      h('ul', { class: 'kngrant' }, rows), h('div', null, check), err];
+    if (g) {
+      var inp = h('input', { class: 'inp', id: 'kn-paste', type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: 'http://127.0.0.1:8765/?state=…&code=…' });
+      var ferr = errBox();
+      var fin = btn('act', 'Finish', { 'data-fk': 'kn-finish' }, function () {
+        run([fin], ferr, function () { return api('POST', 'api/index/drive/finish', { flow_id: g.flow, pasted: inp.value }); }, function (r) {
+          KN.grant = null; KN.est = {};
+          showKnow('[data-fk="kn-src-drive"]');
+          if (!r.granted) setTimeout(function () { var e = main.querySelector('[data-said="kn-drive"]'); if (e) e.textContent = 'Google didn’t give Drive access. Tick Drive on Google’s page and try again.'; }, 0);
+        });
+      });
+      var link = safeHttps(g.url);
+      box.push(h('ol', { class: 'kngsteps' }, [
+        h('li', null, ['Open ', link ? h('a', { href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Google’s page') : 'Google’s page', ' and allow Drive (read-only) for ' + g.account.email + '.']),
+        h('li', null, 'Google then opens an address starting with http://127.0.0.1:8765 that doesn’t load. Copy that whole address.'),
+        h('li', null, [h('label', { class: 'label', for: 'kn-paste' }, 'Paste it here'), h('div', { class: 'knrow' }, [inp, fin])])]), ferr);
+    }
+    box.push(h('p', { class: 'err', role: 'status', 'data-said': 'kn-drive' }));
+    return h('div', { class: 'knsub' }, box);
+  }
+  function knVault(s) {
+    var v = s.vault || {}, err = errBox();
+    var inp = h('input', { class: 'inp', id: 'kn-vault', type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: '/share/Obsidian/My vault', 'data-fk': 'kn-vault' });
+    inp.value = v.path || '';
+    var save = btn('act', 'Save', { 'data-fk': 'kn-vault-save' }, function () {
+      run([save], err, function () { return api('PATCH', 'api/index/settings', { vault: inp.value.trim() }); }, function () { KN.est = {}; showKnow('[data-fk="kn-vault"]'); });
+    });
+    return h('div', { class: 'knsub' }, [h('label', { class: 'label', for: 'kn-vault' }, 'Obsidian vault folder'),
+      h('div', { class: 'knrow' }, [inp, save]),
+      h('p', { class: 'help' }, 'Read-only. Sync the vault into Home Assistant’s share or media folder (for example with Syncthing or a network share), then type its path. Settings and attachments are skipped.'),
+      v.error ? h('p', { class: 'err', role: 'alert' }, v.error) : null, err]);
+  }
+  function knSources(st) {
+    var srcs = st.sources || [], sel = knSelected(), err = h('p', { class: 'err', id: 'kn-err', role: 'alert' });
+    var wins = st.windows || [];
+    var est = knEst(KN.win);
+    if (!est && KN.counting !== KN.win && sel.length) setTimeout(function () { if (ui.view === 'knowme' && !knEst(KN.win) && KN.counting !== KN.win) knEstimate(KN.win); }, 0);
+    var winBtns = wins.map(function (w) {
+      var e = knEst(w.key), sub = e && !e.error ? e.summary.replace(/^About /, '≈ ').replace(/ May take /, ' · ').replace(/ and use .*$/, '') : KN.counting === w.key ? 'Counting…' : e && e.error ? 'Couldn’t count' : 'Pick to estimate';
+      return on(h('button', { class: 'wopt', type: 'button', role: 'radio', 'aria-checked': KN.win === w.key ? 'true' : 'false', 'data-win': w.key },
+        [h('b', null, w.label), h('small', null, sub)]), 'click', function () {
+        KN.win = w.key; KN.picked = true;
+        if (!knEst(w.key)) knEstimate(w.key);
+        renderKnow('[data-win="' + cssq(w.key) + '"]');
+      });
+    });
+    var winLabel = (wins.filter(function (w) { return w.key === KN.win; })[0] || {}).label || '';
+    var start = btn('btn primary', 'Start scan', { 'data-fk': 'kn-start', disabled: sel.length ? null : true }, function () {
+      run([start], err, function () { return api('POST', 'api/index/scan', { window: KN.win, sources: knSelected() }); }, function () { KN.fresh = false; showKnow('[data-fk="kn-pause"]'); });
+    });
+    var drive = srcs.filter(function (s) { return s.key === 'drive'; })[0], obs = srcs.filter(function (s) { return s.key === 'obsidian'; })[0];
+    var last = st.job && !knBusy(st) ? st.job : null;
+    return [
+      h('p', { class: 'intro' }, 'Callsheet reads your mail, calendars, Slack, Drive and notes here on this box and keeps a private index, so it can get to know your people and projects.'),
+      last ? h('p', { class: 'note' }, 'Last scan: ' + (last.state === 'done' ? 'finished' : 'stopped') + ' · ' + fmtNum(last.read) + ' items · ' + (last.label || '')) : null,
+      h('h3', { class: 'fl' }, 'What to read'),
+      h('div', { class: 'cks', role: 'group', 'aria-label': 'What to read' }, srcs.map(knChip)),
+      h('p', { class: 'help' }, 'Turning a source off removes what Callsheet read from it.'),
+      drive && drive.on ? knDrive(drive) : null,
+      obs && obs.on ? knVault(obs) : null,
+      h('h3', { class: 'fl', id: 'kn-win-l' }, 'How far back'),
+      h('div', { class: 'wopts', role: 'radiogroup', 'aria-labelledby': 'kn-win-l' }, winBtns),
+      h('p', { class: 'hint' }, est && !est.error ? 'Storage: ' + est.size + ' on this box (' + knBytes(st.free_bytes) + ' free). Counts are estimates.' : 'Counts are estimates from your mail, calendars, Drive and notes.'),
+      est && !est.error && est.warnings.length ? h('div', { class: 'warnbox', role: 'note' }, est.warnings.map(function (w, i) { return i === 0 ? h('b', null, w + ' ') : h('span', null, w + ' '); })) : null,
+      est && est.error ? h('p', { class: 'err', role: 'alert' }, est.error) : null,
+      h('div', { class: 'locked', role: 'note' }, [h('div', { class: 'lh' }, [ico('lock'), 'What stays where']),
+        h('p', { class: 'wsw' }, 'Everything is stored on this Home Assistant box, in its own index file. It’s left out of Home Assistant backups because it can be read again. In this version the index isn’t sent to the writer.'),
+        h('p', { class: 'muted' }, 'Callsheet never sends, posts or changes anything. Gmail, Calendar and Drive are read-only.')]),
+      h('div', { class: 'go' }, [start, h('span', { class: 'hint' }, plural(sel.length, 'source', 'sources') + ' · ' + winLabel + (est && !est.error ? ' · ' + est.time : ''))]),
+      err];
+  }
+  function knStat(l, v) { return h('div', { class: 'stat' }, [h('span', { class: 'label' }, l), h('span', { class: 'disp' }, v)]); }
+  function knScan(st) {
+    var j = st.job, err = h('p', { class: 'err', id: 'kn-err', role: 'alert' });
+    var paused = j.state === 'paused', ended = j.state === 'done' || j.state === 'cancelled';
+    var rows = j.targets.map(function (t) {
+      var skip = t.status === 'skipped', done = t.status === 'done', pct = t.total ? Math.min(100, Math.round(t.done / t.total * 100)) : done ? 100 : 0;
+      var ct = skip ? 'Skipped · ' + (t.error || '') : done ? fmtNum(t.done) + ' ' + t.unit + ' · done' :
+        t.total != null ? fmtNum(t.done) + ' of ~' + fmtNum(t.total) + ' ' + t.unit : fmtNum(t.done) + ' ' + t.unit + ' so far';
+      return h('li', { class: 'src' + (skip ? ' skip' : '') }, [
+        h('div', { class: 'l1' }, [h('span', { class: 'ri' }, ico(KNICON[t.source])), h('span', { class: 'nm' }, t.label), h('span', { class: 'ct' }, ct)]),
+        skip ? null : h('div', { class: 'bar' + (done ? ' done' : paused || ended ? ' paused' : ''), role: 'progressbar', 'aria-label': t.label,
+          'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, h('i', { style: 'width:' + pct + '%' })),
+        t.status === 'waiting' || t.status === 'error' ? h('p', { class: t.status === 'error' ? 'err' : 'help' }, (t.error || '') + (t.status === 'waiting' && t.retry_at ? ' Next try at ' + fmtWhen(new Date(t.retry_at * 1000).toISOString()) + '.' : '')) : null]);
+    });
+    var pause = btn('act', paused ? 'Resume' : 'Pause', { 'data-fk': 'kn-pause' }, function () {
+      run([pause], err, function () { return api('POST', paused ? 'api/index/resume' : 'api/index/pause', {}); }, function () { showKnow('[data-fk="kn-pause"]'); });
+    });
+    var stop = btn('act ghost', 'Stop', { 'data-fk': 'kn-stop' }, function () {
+      run([stop], err, function () { return api('POST', 'api/index/cancel', {}); }, function () { showKnow('[data-fk="kn-new"]'); });
+    });
+    var again = btn('act', 'New scan', { 'data-fk': 'kn-new' }, function () { KN.fresh = true; renderKnow('[data-fk="kn-start"]'); });
+    return [
+      h('div', { class: 'stats' }, [knStat('Elapsed', knSecs(j.elapsed_s)), knStat(ended ? (j.state === 'done' ? 'Finished' : 'Stopped') : paused ? 'Paused' : st.waiting ? 'Waiting' : 'Time left', ended || paused || st.waiting ? '—' : j.eta_s != null ? '~' + knSecs(j.eta_s) : 'Working it out'),
+        knStat('Found so far', fmtNum(j.read) + ' items')]),
+      st.waiting ? h('div', { class: 'calm', role: 'status' }, st.waiting.text) : null,
+      h('ul', { class: 'srcs' }, rows),
+      ended ? h('div', { class: 'calm', role: 'status' }, [h('b', null, j.state === 'done' ? 'Done. ' : 'Stopped. '), 'Callsheet kept the ' + fmtNum(j.read) + ' items it read. New mail, events and messages are added every 30 minutes.'])
+        : h('div', { class: 'calm' }, [h('b', null, 'You can close this page; Callsheet keeps going. '), 'It pauses 10 minutes before and after each call time so briefs aren’t slowed.']),
+      h('div', { class: 'go' }, ended ? [again] : [pause, stop, h('span', { class: 'hint' }, 'Stop keeps what was read so far.')]), err];
+  }
+  function knWipe(st) {
+    if (!KN.wipe) return btn('tbtn', 'Delete the index', { 'data-fk': 'kn-wipe' }, function () { KN.wipe = true; renderKnow('[data-fk="kn-wipe-no"]'); });
+    var err = errBox(), yes, no, text = 'Delete the index? Everything Callsheet read is removed from this box. Your mail, calendars, Slack, Drive and notes are not touched.';
+    yes = btn('btn danger', 'Delete the index', { 'data-fk': 'kn-wipe-yes' }, function () {
+      run([yes, no], err, function () { return api('DELETE', 'api/index', { confirm: st.wipe_token }); }, function () { KN.wipe = false; KN.fresh = true; KN.est = {}; showKnow('[data-fk="kn-start"]'); });
+    });
+    no = btn('btn', 'Cancel', { 'data-fk': 'kn-wipe-no' }, function () { KN.wipe = false; renderKnow('[data-fk="kn-wipe"]'); });
+    return h('div', { class: 'confirm', role: 'group', 'aria-label': text }, [h('p', null, text), h('div', { class: 'btns' }, [yes, no]), err]);
+  }
+  function renderKnow(focusSel) {
+    var st = KN.st || {};
+    var body;
+    if (!st.available) body = [h('p', { class: 'err', role: 'alert' }, st.error || 'The index isn’t available.')];
+    else if (st.job && (knBusy(st) || !KN.fresh) && st.job.kind === 'scan') body = knScan(st);
+    else body = knSources(st);
+    var scanning = st.available && st.job && (knBusy(st) || !KN.fresh);
+    var stats = st.stats || {};
+    var wipe = st.available && stats.total && !knBusy(st) ? knWipe(st) : null;
+    var sheet = h('div', { class: 'sheet wiz kn' }, [
+      h('div', { class: 'mast two' }, [
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup › Memory'), h('h1', { id: 'kn-title', tabindex: '-1' }, scanning ? 'Reading your history' : 'Get to know me')]),
+        h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Index on this box'), h('div', { class: 'disp' }, knBytes(stats.bytes)),
+          h('div', { class: 's' }, plural(stats.total || 0, 'item', 'items'))])]),
+      h('div', { class: 'knhead' }, knSteps(scanning ? 1 : 0)),
+      h('section', { class: 'step', 'aria-labelledby': 'kn-title' }, body),
+      wipe ? h('div', { class: 'step knwipe' }, wipe) : null,
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { ui.step = 5; location.hash = 'setup'; })])]);
+    var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
+    main.textContent = '';
+    add(main, sheet);
+    press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
+    syncBg();
+    var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
+    if (f) f.focus({ preventScroll: !!keep });
   }
 
   route();
