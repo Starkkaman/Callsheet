@@ -7,6 +7,7 @@ import json
 import pathlib
 import re
 import sys
+import threading
 import time
 
 import dates
@@ -651,6 +652,18 @@ class App:
             print(f"Callsheet index: {e}", file=sys.stderr, flush=True)
             return
         self.scanner = index_scan.Scanner(self.store, self.index, self.syncer, clock=self.clock)
+        # 0.6.0 chat: one-off planted-instruction flags for rows indexed before the detector (reads compute them
+        # on the spot until then)
+        threading.Thread(target=self._index_backfill, name="callsheet-index-flags", daemon=True).start()
+
+    def _index_backfill(self):
+        try:
+            n = self.index.backfill_instructions(batch=500, pause=0.05)
+        except Exception as e:  # noqa: BLE001 (closed at shutdown, or a locked database: reads still compute flags)
+            print(f"Callsheet index: instruction flags not stored yet ({type(e).__name__})", file=sys.stderr, flush=True)
+            return
+        if n:
+            print(f"Callsheet index: checked {n} items for planted instructions", file=sys.stderr, flush=True)
 
     def _index_routes(self):
         return [("GET", r"index/status", self.index_status),

@@ -11,6 +11,8 @@ index to the writer (3b/3c will, through the interface at the end).
 - `items(id, source, account, source_id, kind, thread, title, people, area, ts, url, snippet, body, hash,
   indexed_at)`, `UNIQUE(source, account, source_id)`. `body` is plain text (writer helpers strip HTML and
   quoted replies), capped at 8,000 characters; `people` is "; "-joined names/addresses/hints.
+- 0.6.0 chat: `items.instr` / `items.instr_v`: planted-instruction flags (hashes only, see `chat.md`), added in place
+  to existing databases; `Index._row` returns `instructions: true|false`.
 - `items_fts`: FTS5 external-content table over `title, people, body` (`unicode61 remove_diacritics 2`),
   kept in step by triggers. Ranking: bm25 with weights title 8, people 4, body 1.
 - `cursors(source, account, key, value)`: resumable page tokens/progress per target (written in the same

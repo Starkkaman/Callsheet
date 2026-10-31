@@ -3448,9 +3448,11 @@
   function chatChip(s) {
     var sel = U.open && U.open.kind === 'item' && String(U.open.id) === String(s.id);
     var name = SRC_NAME[s.source] || s.source || 'Item';
-    return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
-      'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') }, [
-      ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : ''))]);
+    var instr = s.instructions === true;  /* 0.6.0: the item holds an instruction someone planted (inject.py) */
+    return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : '') + (instr ? ' instr' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
+      'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') + (instr ? ', contains instructions' : '') }, [
+      ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : '')),
+      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null]);
   }
   function chatAnswer(m, i) {
     var kids = [h('span', { class: 'label' }, ['Callsheet', m.by ? h('span', { class: 'by' }, ' · ' + m.by) : null])];
@@ -3458,6 +3460,7 @@
     else if (m.stopped) kids.push(h('p', { class: 'muted' }, 'Stopped.'));
     else {
       if (m.warning) kids.push(h('p', { class: 'err sugwarn' }, m.warning));
+      if (m.instr_warning) kids.push(h('p', { class: 'err sugwarn instrwarn' }, m.instr_warning));  /* 0.6.0: repeats a planted instruction */
       String(m.text || '').split(/\n{2,}/).forEach(function (p) { if (p.trim()) kids.push(h('p', null, p.trim())); });
       if (m.sources && m.sources.length) kids.push(h('div', { class: 'from' }, [h('span', { class: 'label' }, 'From'), m.sources.map(chatChip)]));
     }

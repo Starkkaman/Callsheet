@@ -19,6 +19,8 @@ import sqlite3
 import threading
 import time
 
+import inject
+
 DB_NAME = "index.db"
 SCHEMA_VERSION = 1
 MAX_BODY = 8000        # characters of body text per item
@@ -61,7 +63,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN
   INSERT INTO items_fts (items_fts, rowid, title, people, body) VALUES ('delete', old.id, old.title, old.people, old.body);
 END;
-CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE ON items BEGIN
+CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE OF title, people, body ON items BEGIN
   INSERT INTO items_fts (items_fts, rowid, title, people, body) VALUES ('delete', old.id, old.title, old.people, old.body);
   INSERT INTO items_fts (rowid, title, people, body) VALUES (new.id, new.title, new.people, new.body);
 END;
@@ -69,6 +71,13 @@ CREATE TABLE IF NOT EXISTS cursors (
   source TEXT NOT NULL, account TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
   PRIMARY KEY (source, account, key));
 """
+# 0.6.0 chat: planted-instruction flags (inject.py), added in place to existing databases (schema version stays 1):
+# instr = JSON list of short hashes of the flagged sentences ("" = none), instr_v = the inject.VERSION that checked it
+_INSTR_COLUMNS = (("instr", "TEXT NOT NULL DEFAULT ''"), ("instr_v", "INTEGER NOT NULL DEFAULT 0"))
+_AU_TRIGGER = """CREATE TRIGGER items_au AFTER UPDATE OF title, people, body ON items BEGIN
+  INSERT INTO items_fts (items_fts, rowid, title, people, body) VALUES ('delete', old.id, old.title, old.people, old.body);
+  INSERT INTO items_fts (rowid, title, people, body) VALUES (new.id, new.title, new.people, new.body);
+END"""
 _FIELDS = ("source", "account", "source_id", "kind", "thread", "title", "people", "area", "ts", "url", "snippet",
            "body")
 
@@ -158,6 +167,23 @@ def _segments(marked):
     return out
 
 
+def _instr(title, body):
+    """The stored flag: a JSON list of the flagged sentences' short hashes, "" when there are none."""
+    ks = inject.keys(title, body)
+    return json.dumps(ks) if ks else ""
+
+
+def _flagged(r):
+    """0.6.0 chat: does this row hold a planted instruction? The stored flag, or (a row the current rules haven't
+    checked yet, before the backfill reaches it) the rules run on the spot."""
+    keys = r.keys()
+    if "instr_v" in keys and r["instr_v"] == inject.VERSION:
+        return bool(r["instr"])
+    if "body" in keys:
+        return bool(inject.keys(r["title"], r["body"]))
+    return False
+
+
 class Index:
     def __init__(self, data_dir, clock=time.time):
         self.dir = pathlib.Path(data_dir)
@@ -183,6 +209,7 @@ class Index:
                     self.db.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
                 elif row["version"] > SCHEMA_VERSION:
                     raise IndexError_("The index was written by a newer Callsheet. Delete it in Setup to rebuild it.")
+                self._migrate_instr()
         except sqlite3.Error as e:
             self.db.close()
             raise IndexError_(f"Couldn't open the index ({type(e).__name__}: {e}).") from None
@@ -190,6 +217,18 @@ class Index:
             self.db.close()
             raise
         self._chmod()
+
+    def _migrate_instr(self):
+        """0.6.0 chat: the instr/instr_v columns on an index made before them, and an FTS update trigger that only
+        fires when the searchable text changes (so writing a flag doesn't re-index the row)."""
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(items)").fetchall()}
+        for name, decl in _INSTR_COLUMNS:
+            if name not in have:
+                self.db.execute(f"ALTER TABLE items ADD COLUMN {name} {decl}")
+        trig = self.db.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='items_au'").fetchone()
+        if trig is None or "UPDATE OF" not in (trig["sql"] or ""):
+            self.db.execute("DROP TRIGGER IF EXISTS items_au")
+            self.db.execute(_AU_TRIGGER)
 
     def _chmod(self):
         for extra in ("", "-wal", "-shm"):
@@ -250,17 +289,24 @@ class Index:
                 n["bad"] += 1
                 continue
             h = _hash(row)
-            old = self.db.execute("SELECT id, hash FROM items WHERE source=? AND account=? AND source_id=?",
+            old = self.db.execute("SELECT id, hash, instr_v FROM items WHERE source=? AND account=? AND source_id=?",
                                   (row["source"], row["account"], row["source_id"])).fetchone()
+            if old is None or old["hash"] != h or old["instr_v"] != inject.VERSION:
+                instr = _instr(row["title"], row["body"])
             if old is None:
-                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at) VALUES "
-                                f"({', '.join('?' * len(_FIELDS))}, ?, ?)", [row[f] for f in _FIELDS] + [h, now])
+                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v) VALUES "
+                                f"({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?)",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION])
                 n["added"] += 1
             elif old["hash"] != h:
-                self.db.execute(f"UPDATE items SET {', '.join(f + '=?' for f in _FIELDS)}, hash=?, indexed_at=? "
-                                "WHERE id=?", [row[f] for f in _FIELDS] + [h, now, old["id"]])
+                self.db.execute(f"UPDATE items SET {', '.join(f + '=?' for f in _FIELDS)}, hash=?, indexed_at=?, "
+                                "instr=?, instr_v=? WHERE id=?",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, old["id"]])
                 n["updated"] += 1
             else:
+                if old["instr_v"] != inject.VERSION:   # checked by older rules: refresh the flag only
+                    self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
+                                    (instr, inject.VERSION, old["id"]))
                 n["same"] += 1
         return n
 
@@ -283,6 +329,29 @@ class Index:
                 self.db.execute("ROLLBACK")
                 raise
         return n
+
+    def backfill_instructions(self, batch=500, pause=0.0, sleep=time.sleep):
+        """0.6.0 chat: flags (inject.py) for rows written before the detector or by older rules, in batches of
+        `batch` (one short transaction each, `pause` seconds between). Returns the number of rows checked."""
+        done = 0
+        while True:
+            with self.lock:
+                rows = self.db.execute("SELECT id, title, body FROM items WHERE instr_v<>? LIMIT ?",
+                                       (inject.VERSION, int(batch))).fetchall()
+                if not rows:
+                    return done
+                self.db.execute("BEGIN IMMEDIATE")
+                try:
+                    for r in rows:
+                        self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
+                                        (_instr(r["title"], r["body"]), inject.VERSION, r["id"]))
+                    self.db.execute("COMMIT")
+                except BaseException:
+                    self.db.execute("ROLLBACK")
+                    raise
+            done += len(rows)
+            if pause:
+                sleep(pause)
 
     def delete(self, source=None, account=None):
         """Removes the items (and resume points) of a source, or of one account of a source. Returns the count."""
@@ -369,7 +438,7 @@ class Index:
         out = {"id": r["id"], "source": r["source"], "account": r["account"], "kind": r["kind"],
                "thread": r["thread"], "title": r["title"], "people": r["people"], "area": r["area"], "ts": r["ts"],
                "date": dt.datetime.fromtimestamp(r["ts"], dt.timezone.utc).isoformat(timespec="seconds"),
-               "url": r["url"]}
+               "url": r["url"], "instructions": _flagged(r)}
         if with_body:
             out["snippet"] = r["snippet"]
             out["body"] = r["body"]
