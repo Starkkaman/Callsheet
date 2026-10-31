@@ -2929,13 +2929,16 @@
     if (isPhone()) {
       var tb = main.querySelector('.tabbar'), top = col.getBoundingClientRect().top + window.scrollY;
       col.style.height = Math.max(300, window.innerHeight - top - (tb ? tb.offsetHeight : 0)) + 'px';
-    } else col.style.height = '';
+    } else {
+      var t = col.getBoundingClientRect().top + window.scrollY;   // banners above the tabs push the column down
+      col.style.height = Math.max(420, Math.min(760, window.innerHeight - t - 16)) + 'px';
+    }
     if (!box) return;
     if (CH.scroll) { box.scrollTop = box.scrollHeight; CH.scroll = false; }
     else if (CH.keepTop != null) box.scrollTop = CH.keepTop;
   }
   window.addEventListener('resize', function () {
-    if (ui.view !== 'brief' || U.tab !== 'chat' || !isPhone()) return;
+    if (ui.view !== 'brief' || U.tab !== 'chat') return;
     var box = main.querySelector('.chatcol .msgs'), atEnd = box && box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     CH.keepTop = box ? box.scrollTop : null; CH.scroll = !!atEnd;
     chatAfterRender();

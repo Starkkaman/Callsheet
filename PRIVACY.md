@@ -25,8 +25,12 @@ Callsheet never sends, deletes, moves or changes email, and never creates, chang
   the items Callsheet has picked for your brief are sent to the writer you chose. This is off until you turn it on.
 - Get to know me (0.6.0) keeps a full-text index of what it read (mail, events, Slack messages, Drive files,
   Obsidian notes) in its own file on your Home Assistant machine. It is left out of Home Assistant backups,
-  never leaves the machine, and in 0.6.0 is not sent to any AI writer. You can delete it from the page at any
+  never leaves the machine except for the search results Chat sends when you pick Claude for it, and is not sent to the brief writer. You can delete it from the page at any
   time; turning a source off or disconnecting an account removes what was read from it.
+- Chat (0.6.0) keeps your questions and its answers on your Home Assistant machine for 30 days, and you
+  can delete them at any time. With a local model, questions and search results stay on your network. If you
+  pick Claude for chat, each question, the recent conversation and the index search results it needs are
+  sent to Anthropic to answer it. Chats are never added to Callsheet's memory or your brief.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

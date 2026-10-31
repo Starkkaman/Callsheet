@@ -2,6 +2,14 @@
 
 ## 0.6.0
 
+- **Chat (Get to know me, part 3).** A new Chat tab answers questions about your own mail, Slack, calendar,
+  Drive and notes from the local index, with the sources it used as chips you can open. It only reads: four
+  search tools, no sending or changing anything, and answers that state a decision get the usual warning.
+  Pick the model in Setup → Delivery → Chat: your local server (tool calling, or a simple JSON fallback for
+  servers without it) or Claude with your saved key. Questions wait while the brief is being written, and
+  one local request runs at a time. Chats stay on this box for 30 days; "Clear all chats" deletes them.
+- Tabs are now Briefing · Replies · Agenda · Chat · Tasks. The Areas tab is gone: Replies has area filter
+  chips, and old links to Areas open Replies.
 - **Get to know me (part 1: the index, no AI).** Setup → Delivery → Memory → "Get to know me" reads your
   history into a private full-text index on this box: Gmail, the calendars you picked, Slack, Google Drive
   (Docs, Sheets, Slides and text files, read-only; PDFs skipped) and an Obsidian vault synced into Home
