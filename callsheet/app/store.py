@@ -6,6 +6,8 @@ because it holds the Google client secret, the account tokens and the writer API
 here logs values.
 """
 import datetime as dt
+import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -48,6 +50,21 @@ CREATE TABLE IF NOT EXISTS slack (
     domain TEXT NOT NULL, user_id TEXT NOT NULL, user_name TEXT NOT NULL, token TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'connected', error TEXT, ignored TEXT NOT NULL DEFAULT '[]',
     state TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL DEFAULT 0);
+-- 0.5.1 Signal: chats and messages (live from signal-cli, or imported history); ids are HMACs, never numbers
+CREATE TABLE IF NOT EXISTS signal_chats (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', last_at REAL NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS signal_messages (
+    id INTEGER PRIMARY KEY, chat TEXT NOT NULL, sender TEXT NOT NULL, sender_name TEXT NOT NULL DEFAULT '',
+    ts REAL NOT NULL, text TEXT NOT NULL DEFAULT '', outgoing INTEGER NOT NULL DEFAULT 0,
+    mentions_me INTEGER NOT NULL DEFAULT 0, quotes_me INTEGER NOT NULL DEFAULT 0,
+    imported INTEGER NOT NULL DEFAULT 0, expires_at REAL, received_at REAL NOT NULL DEFAULT 0,
+    UNIQUE (chat, sender, ts));
+CREATE INDEX IF NOT EXISTS signal_messages_chat_ts ON signal_messages (chat, ts);
+CREATE TABLE IF NOT EXISTS signal_staging (
+    chat TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', sender TEXT NOT NULL,
+    sender_name TEXT NOT NULL DEFAULT '', ts REAL NOT NULL, text TEXT NOT NULL DEFAULT '',
+    outgoing INTEGER NOT NULL DEFAULT 0, mentions_me INTEGER NOT NULL DEFAULT 0,
+    quotes_me INTEGER NOT NULL DEFAULT 0);
 """
 SUPPRESS_KINDS = ("thread", "sender", "domain")
 MAX_SUPPRESS = 500
@@ -55,6 +72,9 @@ MAX_IGNORED = 500
 MAX_PROFILES = 10
 DONE_KEEP_S = 30 * 86400
 MAX_DONE = 2000
+SIGNAL_KEEP_S = 30 * 86400   # messages received live are kept 30 days; imported history until it is deleted
+SIGNAL_MAX_TEXT = 8000
+SIGNAL_MAX_TITLE = 120
 
 
 class InputError(ValueError):
@@ -852,10 +872,205 @@ class Store:
             if self.db.execute("DELETE FROM slack WHERE id=?", (ws_id,)).rowcount == 0:
                 raise NotFound("That Slack workspace isn't connected.")
 
-    def has_sources(self):
-        """A Google account or a Slack workspace is connected (the brief is live)."""
+    # --- Signal (0.5.1) --------------------------------------------------------
+    # meta "signal": {linked, number (masked), linked_at, last_message_at, area_id, ignored: [chat ids]}.
+    # Chat and sender ids are signal_hash() of Signal's own ids, so phone numbers and uuids are never stored.
+    def signal_meta(self):
+        m = self._get_meta("signal", {})
+        m = m if isinstance(m, dict) else {}
+        m.setdefault("area_id", "personal")
+        m.setdefault("ignored", [])
+        return m
+
+    def signal_update_meta(self, **patch):
         with self.lock:
-            return self.has_accounts() or self.db.execute("SELECT 1 FROM slack LIMIT 1").fetchone() is not None
+            m = self.signal_meta()
+            m.update(patch)
+            self._set_meta("signal", m)
+            return m
+
+    def signal_hash(self, value):
+        """A stable, salted id for a Signal number, uuid or group id (HMAC-SHA256, 16 hex characters)."""
+        with self.lock:
+            salt = self._get_meta("signal_salt")
+            if not salt:
+                salt = secrets.token_hex(16)
+                self._set_meta("signal_salt", salt)
+        return hmac.new(salt.encode(), str(value).encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+    def signal_settings(self, patch):
+        """Area and ignored chats from Setup."""
+        with self.lock:
+            m = self.signal_meta()
+            if "area_id" in patch:
+                self.area(patch["area_id"] if isinstance(patch["area_id"], str) else "")
+                m["area_id"] = patch["area_id"]
+            if "ignored" in patch:
+                ign = patch["ignored"]
+                known = {r["id"] for r in self.db.execute("SELECT id FROM signal_chats")}
+                if not isinstance(ign, list) or len(ign) > MAX_IGNORED or any(
+                        not isinstance(c, str) or c not in known for c in ign):
+                    raise InputError("ignored must be a list of Signal chat ids.")
+                m["ignored"] = list(dict.fromkeys(ign))
+            self._set_meta("signal", m)
+            return m
+
+    def _signal_chat(self, chat, kind, title, last_at):
+        title = (title or "").strip()[:SIGNAL_MAX_TITLE]
+        self.db.execute(
+            "INSERT INTO signal_chats (id, kind, title, last_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "title=CASE WHEN excluded.title<>'' THEN excluded.title ELSE signal_chats.title END, "
+            "last_at=MAX(signal_chats.last_at, excluded.last_at)", (chat, kind, title, last_at))
+
+    def signal_add(self, rec, now, imported=False):
+        """Stores one message (signalcli.from_envelope's record). False when it was already stored."""
+        with self.lock:
+            cur = self.db.execute(
+                "INSERT OR IGNORE INTO signal_messages (chat, sender, sender_name, ts, text, outgoing, mentions_me, "
+                "quotes_me, imported, expires_at, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (rec["chat"], rec["sender"], (rec.get("sender_name") or "")[:SIGNAL_MAX_TITLE], float(rec["ts"]),
+                 (rec.get("text") or "")[:SIGNAL_MAX_TEXT], int(bool(rec.get("outgoing"))),
+                 int(bool(rec.get("mentions_me"))), int(bool(rec.get("quotes_me"))), int(bool(imported)),
+                 rec.get("expires_at"), now))
+            self._signal_chat(rec["chat"], rec.get("kind") or "dm", rec.get("title"), float(rec["ts"]))
+            if cur.rowcount and not imported:
+                self.signal_update_meta(last_message_at=dt.datetime.fromtimestamp(
+                    now, dt.timezone.utc).isoformat(timespec="seconds"))
+            return bool(cur.rowcount)
+
+    def signal_edit(self, rec):
+        with self.lock:
+            self.db.execute("UPDATE signal_messages SET text=?, mentions_me=?, quotes_me=? WHERE chat=? AND sender=? "
+                            "AND ts=?", ((rec.get("text") or "")[:SIGNAL_MAX_TEXT], int(bool(rec.get("mentions_me"))),
+                                         int(bool(rec.get("quotes_me"))), rec["chat"], rec["sender"], float(rec["ts"])))
+
+    def signal_delete(self, chat, sender, ts):
+        with self.lock:
+            self.db.execute("DELETE FROM signal_messages WHERE chat=? AND sender=? AND ts=?", (chat, sender, float(ts)))
+
+    def _signal_drop_empty_chats(self):
+        self.db.execute("DELETE FROM signal_chats WHERE id NOT IN (SELECT DISTINCT chat FROM signal_messages)")
+
+    def signal_prune(self, now):
+        """Deletes live messages older than 30 days and disappearing messages whose time is up."""
+        with self.lock:
+            n = self.db.execute("DELETE FROM signal_messages WHERE (imported=0 AND ts<?) OR "
+                                "(expires_at IS NOT NULL AND expires_at<?)", (now - SIGNAL_KEEP_S, now)).rowcount
+            self._signal_drop_empty_chats()
+            return n
+
+    def signal_recent(self, since):
+        """Chats with their live messages since `since` (oldest first): [{id, kind, title, messages}]."""
+        with self.lock:
+            chats = {r["id"]: {"id": r["id"], "kind": r["kind"], "title": r["title"], "messages": []}
+                     for r in self.db.execute("SELECT * FROM signal_chats")}
+            for r in self.db.execute("SELECT * FROM signal_messages WHERE imported=0 AND ts>=? ORDER BY chat, ts, id",
+                                     (since,)):
+                c = chats.get(r["chat"])
+                if c is not None:
+                    c["messages"].append({k: r[k] for k in ("sender", "sender_name", "ts", "text")}
+                                         | {k: bool(r[k]) for k in ("outgoing", "mentions_me", "quotes_me")})
+        return [c for c in chats.values() if c["messages"]]
+
+    def signal_chat_list(self, limit=300):
+        """Chats for Setup (ignore list): newest first, with live and imported message counts."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT c.id, c.kind, c.title, c.last_at, SUM(m.imported=0) AS live, SUM(m.imported=1) AS imported "
+                "FROM signal_chats c JOIN signal_messages m ON m.chat=c.id GROUP BY c.id ORDER BY c.last_at DESC "
+                "LIMIT ?", (limit,)).fetchall()
+        return [{"id": r["id"], "kind": r["kind"], "title": r["title"], "last_at": r["last_at"],
+                 "live": r["live"] or 0, "imported": r["imported"] or 0} for r in rows]
+
+    def signal_counts(self):
+        with self.lock:
+            r = self.db.execute("SELECT SUM(imported=0) AS live, SUM(imported=1) AS imported FROM signal_messages"
+                                ).fetchone()
+        return {"live": r["live"] or 0, "imported": r["imported"] or 0}
+
+    def signal_unlink(self):
+        """After unlinking: forget the link and the live messages; imported history and the settings stay."""
+        with self.lock:
+            self.db.execute("DELETE FROM signal_messages WHERE imported=0")
+            self._signal_drop_empty_chats()
+            m = self.signal_meta()
+            for k in ("linked", "number", "linked_at", "last_message_at"):
+                m.pop(k, None)
+            self._set_meta("signal", m)
+
+    def signal_clear_imported(self):
+        with self.lock:
+            n = self.db.execute("DELETE FROM signal_messages WHERE imported=1").rowcount
+            self._signal_drop_empty_chats()
+            return n
+
+    # history import: parsed messages wait in signal_staging until the owner picks the chats to keep
+    def signal_stage_clear(self, chat=None):
+        with self.lock:
+            if chat is None:
+                self.db.execute("DELETE FROM signal_staging")
+            else:
+                self.db.execute("DELETE FROM signal_staging WHERE chat=?", (chat,))
+
+    def signal_stage_kind(self, chat, kind):
+        with self.lock:
+            self.db.execute("UPDATE signal_staging SET kind=? WHERE chat=?", (kind, chat))
+
+    def signal_stage_add(self, recs):
+        with self.lock:
+            self.db.executemany(
+                "INSERT INTO signal_staging (chat, kind, title, sender, sender_name, ts, text, outgoing, mentions_me, "
+                "quotes_me) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [(r["chat"], r.get("kind") or "dm", (r.get("title") or "")[:SIGNAL_MAX_TITLE], r["sender"],
+                  (r.get("sender_name") or "")[:SIGNAL_MAX_TITLE], float(r["ts"]),
+                  (r.get("text") or "")[:SIGNAL_MAX_TEXT], int(bool(r.get("outgoing"))),
+                  int(bool(r.get("mentions_me"))), int(bool(r.get("quotes_me")))) for r in recs])
+
+    def signal_stage_summary(self):
+        """[{chat, kind, title, count, first, last}] of the waiting import, biggest chats first."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT chat, kind, MAX(title) AS title, COUNT(*) AS n, MIN(ts) AS first, MAX(ts) AS last "
+                "FROM signal_staging GROUP BY chat ORDER BY n DESC, last DESC").fetchall()
+        return [{"chat": r["chat"], "kind": r["kind"], "title": r["title"] or "", "count": r["n"],
+                 "first": r["first"], "last": r["last"]} for r in rows]
+
+    def signal_stage_commit(self, chats, now):
+        """Moves the picked chats' messages from staging into the store (marked imported), then empties
+        staging. Returns the number of messages added (duplicates of stored ones are skipped)."""
+        if not isinstance(chats, list) or not chats or len(chats) > 5000 or any(not isinstance(c, str) for c in chats):
+            raise InputError("Pick at least one chat to import.")
+        added = 0
+        with self.lock:
+            known = {r["chat"] for r in self.db.execute("SELECT DISTINCT chat FROM signal_staging")}
+            picked = [c for c in dict.fromkeys(chats) if c in known]
+            if not picked:
+                raise InputError("Those chats aren't in the uploaded file.")
+            self.db.execute("BEGIN")
+            try:
+                for c in picked:
+                    rows = self.db.execute("SELECT * FROM signal_staging WHERE chat=?", (c,)).fetchall()
+                    for r in rows:
+                        added += self.db.execute(
+                            "INSERT OR IGNORE INTO signal_messages (chat, sender, sender_name, ts, text, outgoing, "
+                            "mentions_me, quotes_me, imported, received_at) VALUES (?,?,?,?,?,?,?,?,1,?)",
+                            (r["chat"], r["sender"], r["sender_name"], r["ts"], r["text"], r["outgoing"],
+                             r["mentions_me"], r["quotes_me"], now)).rowcount
+                    if rows:
+                        self._signal_chat(c, rows[0]["kind"], max((r["title"] for r in rows), default=""),
+                                          max(r["ts"] for r in rows))
+                self.db.execute("DELETE FROM signal_staging")
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        return added
+
+    def has_sources(self):
+        """A Google account, a Slack workspace or Signal is connected (the brief is live)."""
+        with self.lock:
+            return self.has_accounts() or self.db.execute("SELECT 1 FROM slack LIMIT 1").fetchone() is not None \
+                or bool(self.signal_meta().get("linked"))
 
     # --- doesn't need a reply ------------------------------------------------
     def suppress_rules(self):

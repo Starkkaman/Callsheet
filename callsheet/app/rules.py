@@ -569,6 +569,80 @@ def mentions_me(m, me):
     return isinstance(m.get("text"), str) and f"<@{me}" in m["text"]
 
 
+# --- Signal (0.5.1) ------------------------------------------------------------
+SIGNAL_MAX_S = 14 * 86400    # a Signal message older than this never makes a row
+SIGNAL_BUSY = 25             # a group with this many messages in the last day gets a Heads up line
+SIGNAL_MAX_HEADS = 3
+
+
+def signal_rows(chats, area, now_ts, vips, tz=None, fmt="24h", ignored=()):
+    """Needs-a-reply rows and Heads up lines from the stored Signal messages (store.signal_recent). Pure.
+    A DM needs a reply when the other person wrote last; a group when a message after the owner's last one
+    mentions the owner or replies to (quotes) them. vips: {lowercase email: name}; Signal has no email, so a
+    VIP is matched by name. ignored: chat ids from Setup. Returns (rows, heads_up)."""
+    tz = tz or dt.timezone.utc
+    vip_names = {n.strip().lower() for n in vips.values() if n and n.strip()}
+    skip = set(ignored or ())
+    rows, heads = [], []
+    for c in chats:
+        msgs = c.get("messages") or []
+        if c["id"] in skip or not msgs:
+            continue
+        title = c.get("title") or ("Signal chat" if c.get("kind") == "dm" else "Signal group")
+        if c.get("kind") == "group":
+            day = [m for m in msgs if now_ts - m["ts"] <= 86400]
+            if len(day) >= SIGNAL_BUSY and len(heads) < SIGNAL_MAX_HEADS:
+                heads.append(_clip(f"Busy Signal group: {title} ({len(day)} messages in the last day)", 100))
+            my_last = max((m["ts"] for m in msgs if m["outgoing"]), default=0.0)
+            hits = [m for m in msgs if not m["outgoing"] and m["ts"] > my_last and (m["mentions_me"] or m["quotes_me"])]
+            if not hits:
+                continue
+            last, mentioned, quoted = hits[-1], any(m["mentions_me"] for m in hits), any(m["quotes_me"] for m in hits)
+            source = "Signal · " + title
+        else:
+            last, mentioned, quoted = msgs[-1], False, False
+            if last["outgoing"]:
+                continue
+            source = "Signal · DM"
+        if now_ts - last["ts"] > SIGNAL_MAX_S:
+            continue
+        name = last.get("sender_name") or (title if c.get("kind") == "dm" else "") or "Someone"
+        text = " ".join((last.get("text") or "").split())
+        age_s = max(0.0, now_ts - last["ts"])
+        vip = name.strip().lower() in vip_names
+        reasons = (["VIP"] if vip else []) + (["Mentioned you"] if mentioned else []) \
+            + (["Replied to you"] if quoted else [])
+        if "?" in text:
+            reasons.append("Direct question")
+        if DEADLINE.search(text):
+            reasons.append("Mentions a deadline")
+        wait = _waiting(age_s)
+        if wait:
+            reasons.append(wait)
+        if not reasons:
+            continue
+        upto = [m for m in msgs if m["ts"] <= last["ts"]]
+        quote = '"' + _clip(text or "(no text)", 118) + '"'
+        ctx = [{"from": "You" if m["outgoing"] else (m.get("sender_name") or name),
+                "date": f"{dt.datetime.fromtimestamp(m['ts'], tz):%a %d %b} "
+                        + clock(dt.datetime.fromtimestamp(m["ts"], tz), fmt),
+                "text": m.get("text") or ""} for m in upto[-3:]]
+        rows.append({
+            "who": _clip(name, 60), "area": area, "source": source, "via": "signal", "text": quote,
+            "short": _clip(quote, 40),
+            "age": f"{int(age_s // 86400)}d" if age_s >= 86400 else f"{max(1, int(age_s // 3600))}h",
+            "reasons": reasons, "vip": vip, "action": "Open", "link": None,
+            "_age_s": age_s, "_last": last["ts"], "_done": f"signal:{c['id']}",
+            "_sup": {"source": "signal", "thread": c["id"].lower(), "sender": str(last["sender"]).lower(),
+                     "domain": None, "labels": {"thread": source + (" chat" if c.get("kind") == "dm" else ""),
+                                                "sender": f"{name} (Signal)"}},
+            "_key": f"signal:{c['id']}:{last['ts']}",
+            "_messages": ctx,
+            "_facts": dict(unanswered([(m["ts"], m["outgoing"]) for m in msgs]), last=last["ts"], text=text),
+            "_inbound": text})
+    return rows, heads
+
+
 # --- top of the day ------------------------------------------------------------
 def _row_line(r):
     """A reply row in a top line: its gist summary when it has one (the writer's, or the fallback: the

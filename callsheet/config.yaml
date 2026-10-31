@@ -12,6 +12,11 @@ ingress: true
 ingress_port: 8099
 panel_icon: "mdi:clipboard-text-clock-outline"
 panel_title: "Callsheet"
+# Signal (0.5.1): signal-cli's keys for the linked device stay out of Home Assistant backups. A restored
+# backup has no Signal link; link again in Setup.
+backup_exclude:
+  - "signal-cli"
+  - "signal-cli/**"
 # Optional: seed the local AI writer (an OpenAI-compatible server and model). Used only until the
 # writer is changed in Callsheet's setup; empty values change nothing.
 options:

@@ -18,6 +18,7 @@ import ipaddress
 import json
 import os
 import pathlib
+import re
 import sys
 import traceback
 import urllib.parse
@@ -30,6 +31,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 STATIC = HERE / "static"
 SAMPLE = api.SAMPLE
 MAX_BODY = 64 * 1024
+# Signal history upload (0.5.1): the only route that takes raw bytes (a file chunk), up to 8 MB each
+RAW_ROUTE = re.compile(r"/api/signal/import/up_[0-9a-f]{8}/chunk")
+MAX_RAW = 8 * 1024 * 1024
 MUTATING = ("POST", "PATCH", "DELETE")
 VERSION = api.APP_VERSION
 
@@ -160,12 +164,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        if length < 0 or length > MAX_BODY:
+        raw_route = self.command == "POST" and RAW_ROUTE.fullmatch(path) is not None
+        if length < 0 or length > (MAX_RAW if raw_route else MAX_BODY):
             self.close_connection = True
             return self._send_json({"error": "That request is too large."}, False, 413)
         raw = self.rfile.read(length) if length else b""
         body = None
-        if raw.strip():
+        if raw_route:
+            body = raw
+        elif raw.strip():
             try:
                 body = json.loads(raw)
             except ValueError:
@@ -267,6 +274,7 @@ def main(argv=None):
         sys.exit(1)
     if not args.no_scheduler:
         httpd.app.scheduler.start()
+    httpd.app.signal.service.start()  # Signal (0.5.1): signal-cli runs only once Signal is linked
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)
     try:
         httpd.serve_forever()
