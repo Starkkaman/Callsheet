@@ -2527,6 +2527,11 @@
       KN.est[key] = { error: e.message }; KN.counting = null; if (ui.view === 'knowme') renderKnow('[data-win="' + cssq(win) + '"]');
     });
   }
+  /* "About 48,000 emails and 210 files. May take about 6 hours …" → "≈ 48,000 emails and 210 files · about 6 hours" */
+  function knShort(e) {
+    var what = e.summary.split('. May take')[0];
+    return (/^About /.test(what) ? what.replace(/^About /, '≈ ') + ' · ' : '') + e.time;
+  }
   function knEst(win) { return KN.est[win + ':' + knSelected().join(',')]; }
   function knSteps(n) {
     return h('ol', { class: 'knsteps', 'aria-label': 'Steps' }, KNSTEPS.map(function (s, i) {
@@ -2601,7 +2606,7 @@
     var est = knEst(KN.win);
     if (!est && KN.counting !== KN.win && sel.length) setTimeout(function () { if (ui.view === 'knowme' && !knEst(KN.win) && KN.counting !== KN.win) knEstimate(KN.win); }, 0);
     var winBtns = wins.map(function (w) {
-      var e = knEst(w.key), sub = e && !e.error ? e.summary.replace(/^About /, '≈ ').replace(/ May take /, ' · ').replace(/ and use .*$/, '') : KN.counting === w.key ? 'Counting…' : e && e.error ? 'Couldn’t count' : 'Pick to estimate';
+      var e = knEst(w.key), sub = e && !e.error ? knShort(e) : KN.counting === w.key ? 'Counting…' : e && e.error ? 'Couldn’t count' : 'Pick to estimate';
       return on(h('button', { class: 'wopt', type: 'button', role: 'radio', 'aria-checked': KN.win === w.key ? 'true' : 'false', 'data-win': w.key },
         [h('b', null, w.label), h('small', null, sub)]), 'click', function () {
         KN.win = w.key; KN.picked = true;
@@ -2634,15 +2639,16 @@
       h('div', { class: 'go' }, [start, h('span', { class: 'hint' }, plural(sel.length, 'source', 'sources') + ' · ' + winLabel + (est && !est.error ? ' · ' + est.time : ''))]),
       err];
   }
+  function knUnit(n, unit) { return n === 1 && /s$/.test(unit) ? unit.slice(0, -1) : unit; }  /* 1 note, 2 notes */
   function knStat(l, v) { return h('div', { class: 'stat' }, [h('span', { class: 'label' }, l), h('span', { class: 'disp' }, v)]); }
   function knScan(st) {
     var j = st.job, err = h('p', { class: 'err', id: 'kn-err', role: 'alert' });
     var paused = j.state === 'paused', ended = j.state === 'done' || j.state === 'cancelled';
     var rows = j.targets.map(function (t) {
       var skip = t.status === 'skipped', done = t.status === 'done', pct = t.total ? Math.min(100, Math.round(t.done / t.total * 100)) : done ? 100 : 0;
-      var ct = skip ? 'Skipped · ' + (t.error || '') : done ? fmtNum(t.done) + ' ' + t.unit + ' · done' :
-        t.total != null ? fmtNum(t.done) + ' of ~' + fmtNum(t.total) + ' ' + t.unit : fmtNum(t.done) + ' ' + t.unit + ' so far';
-      return h('li', { class: 'src' + (skip ? ' skip' : '') }, [
+      var ct = skip ? 'Skipped · ' + (t.error || '') : done ? fmtNum(t.done) + ' ' + knUnit(t.done, t.unit) + ' · done' :
+        t.total != null ? fmtNum(t.done) + ' of ~' + fmtNum(t.total) + ' ' + knUnit(t.total, t.unit) : fmtNum(t.done) + ' ' + knUnit(t.done, t.unit) + ' so far';
+      return h('li', { class: 'knsrc' + (skip ? ' skip' : '') }, [
         h('div', { class: 'l1' }, [h('span', { class: 'ri' }, ico(KNICON[t.source])), h('span', { class: 'nm' }, t.label), h('span', { class: 'ct' }, ct)]),
         skip ? null : h('div', { class: 'bar' + (done ? ' done' : paused || ended ? ' paused' : ''), role: 'progressbar', 'aria-label': t.label,
           'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, h('i', { style: 'width:' + pct + '%' })),
@@ -2659,7 +2665,7 @@
       h('div', { class: 'stats' }, [knStat('Elapsed', knSecs(j.elapsed_s)), knStat(ended ? (j.state === 'done' ? 'Finished' : 'Stopped') : paused ? 'Paused' : st.waiting ? 'Waiting' : 'Time left', ended || paused || st.waiting ? '—' : j.eta_s != null ? '~' + knSecs(j.eta_s) : 'Working it out'),
         knStat('Found so far', fmtNum(j.read) + ' items')]),
       st.waiting ? h('div', { class: 'calm', role: 'status' }, st.waiting.text) : null,
-      h('ul', { class: 'srcs' }, rows),
+      h('ul', { class: 'knsrcs' }, rows),
       ended ? h('div', { class: 'calm', role: 'status' }, [h('b', null, j.state === 'done' ? 'Done. ' : 'Stopped. '), 'Callsheet kept the ' + fmtNum(j.read) + ' items it read. New mail, events and messages are added every 30 minutes.'])
         : h('div', { class: 'calm' }, [h('b', null, 'You can close this page; Callsheet keeps going. '), 'It pauses 10 minutes before and after each call time so briefs aren’t slowed.']),
       h('div', { class: 'go' }, ended ? [again] : [pause, stop, h('span', { class: 'hint' }, 'Stop keeps what was read so far.')]), err];

@@ -105,12 +105,13 @@ def estimate_words(per_source, free_bytes):
     for s in SOURCE_KEYS:
         if s in per_source and per_source[s][0]:
             c, plus = per_source[s]
-            parts.append(f"{about_count(c)}{'+' if plus else ''} {UNIT_WORDS[s]}")
+            unit = UNIT_WORDS[s][:-1] if c == 1 and not plus else UNIT_WORDS[s]
+            parts.append(f"{about_count(c)}{'+' if plus else ''} {unit}")
     summary = ("About " + _list_words(parts) + ". " if parts else "") + \
         f"May take {about_time(seconds)} and use {about_size(size)} on this box."
     warnings = []
     if seconds >= 3600:
-        warnings.append("This can take hours. Briefs still run on time: the scan pauses around call times. "
+        warnings.append(("This can take hours." if seconds >= 2 * 3600 else "This can take an hour or more.") + " Briefs still run on time: the scan pauses around call times. "
                         "You can pause, stop and resume.")
     if "slack" in per_source and per_source["slack"][0] is None:
         warnings.append("Slack doesn't say how many messages there are, so Slack isn't in this estimate.")

@@ -963,15 +963,15 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .kn .stats{display:flex;flex-wrap:wrap;gap:10px 30px;margin:0 0 14px}
 .kn .stat .label{color:var(--muted);display:block}
 .kn .stat .disp{display:block;font-size:var(--fs-h2);font-variant-numeric:tabular-nums}
-.kn .srcs{list-style:none;margin:0;padding:0;max-width:780px;border-bottom:var(--rule-w) solid var(--rule)}
-.kn .src{padding:10px 0;border-top:var(--rule-w) solid var(--rule)}
-.kn .src .l1{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:var(--fs-md)}
-.kn .src .ri{color:var(--muted);display:flex;align-items:center;flex:none}
-.kn .src .ri .ico{width:18px;height:18px}
-.kn .src .nm{font-weight:700;overflow-wrap:anywhere;min-width:0}
-.kn .src .ct{margin-left:auto;color:var(--muted);font-size:var(--fs-sm);font-variant-numeric:tabular-nums}
-.kn .src.skip .nm{color:var(--muted)}
-.kn .src .help,.kn .src .err{margin:6px 0 0}
+.kn .knsrcs{list-style:none;margin:0;padding:0;max-width:780px;border-bottom:var(--rule-w) solid var(--rule)}
+.kn .knsrc{padding:10px 0;border-top:var(--rule-w) solid var(--rule)}
+.kn .knsrc .l1{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:var(--fs-md)}
+.kn .knsrc .ri{color:var(--muted);display:flex;align-items:center;flex:none}
+.kn .knsrc .ri .ico{width:18px;height:18px}
+.kn .knsrc .nm{font-weight:700;overflow-wrap:anywhere;min-width:0}
+.kn .knsrc .ct{margin-left:auto;color:var(--muted);font-size:var(--fs-sm);font-variant-numeric:tabular-nums}
+.kn .knsrc.skip .nm{color:var(--muted)}
+.kn .knsrc .help,.kn .knsrc .err{margin:6px 0 0}
 .kn .bar{height:10px;background:var(--surface-2);border-radius:var(--radius);margin-top:7px;overflow:hidden;box-shadow:inset 0 0 0 1px var(--rule)}
 .kn .bar i{display:block;height:100%;background:var(--accent)}
 .kn .bar.done i{background:var(--ok)}
@@ -988,5 +988,5 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .kn .stats{gap:8px 20px}
 .kn .stat .disp{font-size:var(--fs-h3)}
 .kn .go .btn.primary{flex:1 1 100%;text-align:center;padding:14px 10px}
-.kn .src .ct{margin-left:0;flex:1 1 100%}
+.kn .knsrc .ct{margin-left:0;flex:1 1 100%}
 }

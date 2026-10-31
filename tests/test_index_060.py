@@ -148,6 +148,9 @@ class Words(unittest.TestCase):
         self.assertTrue(any("Slack doesn't say" in w for w in warns))
         self.assertTrue(any(w.startswith("This box has only 2 GB free; the index may need about 4 GB") for w in warns),
                         warns)
+        _, _, summary, warns = scan.estimate_words({"gmail": (9600, False), "obsidian": (1, False)}, 50e9)
+        self.assertTrue(summary.startswith("About 9,600 emails and 1 note. May take about an hour"), summary)
+        self.assertTrue(warns[0].startswith("This can take an hour or more. Briefs still run on time"), warns)
         self.assertEqual([scan.about_time(x) for x in (30, 600, 3000, 3700, 9 * 3600, 3 * 86400)],
                          ["a minute or two", "about 10 minutes", "about 50 minutes", "about an hour", "about 9 hours",
                           "about 3 days"])
