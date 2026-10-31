@@ -1,0 +1,5 @@
+{"date": "2025-10-01 09:15:00", "sender": "Alice Example", "body": "Morning! Coffee later?", "quote": "", "sticker": "", "reactions": [], "attachments": []}
+{"date": "2025-10-01 09:20:00", "sender": "Me", "body": "Sure, 3pm?", "quote": "", "sticker": "", "reactions": [], "attachments": []}
+{"date": "2025-10-01 09:21:00", "sender": "Alice Example", "body": "", "quote": "", "sticker": "👍", "reactions": [], "attachments": []}
+{"date": broken
+{"date": "2025-10-01T09:30:00", "sender": "Alice Example", "body": "See you then", "quote": "\n\n> Sure, 3pm?\n\n", "sticker": "", "reactions": [{"emoji": "❤", "from": "Me"}], "attachments": []}

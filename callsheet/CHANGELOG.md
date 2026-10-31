@@ -16,6 +16,22 @@
   app. "Send a test notification" checks the setup, and problems (a phone Home Assistant no longer knows, no
   access) are shown in plain words. The app now asks Home Assistant for API access (`homeassistant_api`):
   Callsheet uses it only to list the phones and to send to them.
+- **Signal.** Link Callsheet to your Signal account as a linked device (Setup → Areas → Signal: press Link
+  Signal and scan the QR code with Signal → Settings → Linked devices on your phone). Signal messages become
+  reply rows like Slack's: direct chats where the other person spoke last, and groups where you were mentioned or
+  quoted, with VIPs, Direct question, deadlines and the wait time; busy groups get a Heads up line. Choose the
+  area for Signal rows, ignore chats, and unlink (Callsheet deletes its Signal keys and received messages; remove
+  the device on the phone too). The status shows your masked number and the last message, with reminders to keep
+  the app running (Signal drops a linked device after 45 days offline) and to update at least every 2 months.
+  Callsheet never sends Signal messages, reactions, read receipts or typing notes.
+- **Signal history import.** Upload Signal Desktop's chat export (`main.jsonl`, up to 200 MB, in pieces) or a
+  chat's `data.json` from signal-export, then pick the chats to keep. Only text, names and times are kept;
+  keys and phone numbers in the file are skipped. Imported messages are marked as imported, never become reply
+  rows, and stay until you delete them.
+- Received Signal messages are kept for 30 days. The Signal keys (`/data/signal-cli`) are left out of Home
+  Assistant backups.
+- The image now includes signal-cli 0.14.9 with libsignal and a headless Java 25 runtime (from Alpine's community
+  repository, amd64 and aarch64), so it is larger.
 
 ## 0.5.0
 

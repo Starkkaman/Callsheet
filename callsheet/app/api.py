@@ -18,6 +18,7 @@ import google
 import ha
 import push
 import rules
+import signal_api
 import slack
 from oauth import OAuthFlows
 from scheduler import Scheduler
@@ -67,6 +68,8 @@ class App:
         self.scheduler = Scheduler(self.store, self.syncer, clock=clock, notifier=self.notifier)
         self.evaluator = evaluate.Evaluator(self.store, self.syncer, clock=clock)
         self.memory = self.syncer.memory  # memory.md (0.5.0): one object, one lock
+        # Signal (0.5.1): signal-cli as a read-only linked device, its routes in signal_api.py
+        self.signal = signal_api.SignalApi(self.store, data_dir, clock=clock)
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -108,7 +111,7 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
-        ] + self._memory_routes() + self._push_routes()
+        ] + self._memory_routes() + self._push_routes() + self.signal.routes()
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -127,7 +130,13 @@ class App:
 
     def close(self):
         self.scheduler.stop()
+        self.signal.service.close()  # Signal (0.5.1): stops signal-cli cleanly
         self.store.close()
+
+    def _signal_area(self):
+        """Signal (0.5.1): the area id Signal rows go to while Signal is linked, else None."""
+        m = self.store.signal_meta()
+        return m.get("area_id") if m.get("linked") else None
 
     def handle(self, method, path, body):
         """path: the part after "api/" without a trailing slash. Raises NotFound, MethodNotAllowed,
@@ -308,12 +317,15 @@ class App:
         client = self.store.google_client_public()
         accounts = self.store.accounts()
         workspaces = self.store.slack_workspaces()
+        signal_area = self._signal_area()
         areas = []
         for a in self.store.areas():
             a = dict(a)
             a["accounts"] = [acc for acc in accounts if acc["area_id"] == a["id"]]
             a["slack"] = [w for w in workspaces if w["area_id"] == a["id"]]
             a["chat_available"] = any(w["status"] != "needs_reconnect" for w in a["slack"])
+            a["signal"] = a["id"] == signal_area  # Signal (0.5.1)
+            a["chat_available"] = a["chat_available"] or a["signal"]
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "suppress": self.store.suppress_rules(),
@@ -335,8 +347,9 @@ class App:
     # --- areas ------------------------------------------------------------
     def _area_out(self, area):
         ws = self.store.slack_workspaces(area["id"])
-        return dict(area, accounts=self.store.accounts(area["id"]), slack=ws,
-                    chat_available=any(w["status"] != "needs_reconnect" for w in ws))
+        sig = area["id"] == self._signal_area()  # Signal (0.5.1)
+        return dict(area, accounts=self.store.accounts(area["id"]), slack=ws, signal=sig,
+                    chat_available=sig or any(w["status"] != "needs_reconnect" for w in ws))
 
     def add_area(self, body):
         b = _obj(body)
@@ -380,7 +393,7 @@ class App:
 
     def sync(self, _body):
         if not self.store.has_sources():
-            raise InputError("Connect a Google account or a Slack workspace first.")
+            raise InputError("Connect a Google account or a Slack workspace, or link Signal, first.")
         if self.evaluator.job is not None:  # the live writer would swap the local model mid-evaluation
             raise Conflict("An evaluation is running. Try again when it's finished.")
         return self.syncer.run_now()

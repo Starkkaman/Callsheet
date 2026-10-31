@@ -14,15 +14,19 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   `http://supervisor/core/api` with `SUPERVISOR_TOKEN`, limited by the (method, URL) allowlist in `ha.py` to
   exactly `GET /api/services` (list the `notify.mobile_app_*` targets) and
   `POST /api/services/notify/mobile_app_<name>` (send one notification): no other service, state or event
-  endpoint, and the token is never logged, stored or returned. Each needs the user's setup first. The
+  endpoint, and the token is never logged, stored or returned. Since 0.5.1, signal-cli (linked device, owner
+  approved 2026-10-30) talks to Signal's servers to receive the owner's messages; `signalcli.py`'s JSON-RPC method
+  allow-list keeps it receive-only (no send, reactions, read receipts or typing; delivery receipts are
+  automatic). Each needs the user's setup first. The
   browser page itself never calls out.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
   absolute paths. `tests/test_server.py` checks this.
 - **Data is text.** Render data with `textContent` (see `h()` in app.js), never `innerHTML`.
 - Server: Python stdlib (`http.server`) plus exactly one pinned dependency, `anthropic` (installed in the
-  Dockerfile, imported lazily in `writer.py` so the app runs without it). Nothing else to add without the
-  user's go-ahead. Listens on 0.0.0.0:8099, accepts only the Supervisor (172.30.32.2) and loopback.
+  Dockerfile, imported lazily in `writer.py` so the app runs without it), plus (0.5.1, owner-approved) the
+  Alpine packages signal-cli, java-libsignal-client and openjdk25-jre-headless, and the vendored MIT
+  `vendor/qrcodegen.py`. Nothing else to add without the user's go-ahead. Listens on 0.0.0.0:8099, accepts only the Supervisor (172.30.32.2) and loopback.
 - **AI output is text, never instructions.** Mail and calendar content goes to the writer inside the
   untrusted `<data>` block; the writer has no tools; suggestions are shown with textContent and copied
   by the user, never sent.

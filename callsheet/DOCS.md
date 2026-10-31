@@ -111,6 +111,23 @@ What Callsheet reads, at each brief and check-in, since the last read (at most t
 Callsheet stores Slack ids and times (channel list, names of people, which mentions and threads it is
 watching), not message text. Revoke the token in Slack (or remove the workspace in Callsheet) to stop.
 
+## Signal (optional, read-only)
+
+Callsheet can read your Signal messages as a linked device, like Signal Desktop.
+
+1. Setup → Areas → Signal → **Link Signal**. A QR code appears.
+2. On your phone: Signal → Settings → Linked devices → **+**, and scan the code.
+3. New messages appear from then on: direct chats where the other person spoke last, and groups where you were
+   mentioned, as reply rows like Slack's. Choose their area and ignore chats there.
+
+Callsheet never sends Signal messages, reactions, read receipts or typing notes. Like every linked device it
+confirms delivery automatically. Signal unlinks a device that has been offline for 45 days, so keep the app
+running, and update Callsheet at least every 2 months (older signal-cli versions stop working).
+
+**Your history:** a newly linked device gets no past messages. In Signal Desktop on your Mac, use Settings →
+Chats → **Export chat history**, then in Callsheet upload the export's `main.jsonl` and pick the chats to keep.
+Only text, names and times are kept. More in `docs/signal.md`.
+
 ## Doesn't need a reply
 
 Hide a row from **Needs a reply** for good: this thread, this sender, or (mail only) this sender's domain,

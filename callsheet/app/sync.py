@@ -202,6 +202,7 @@ class Syncer:
             errors.append(f"Reading stopped after {DEADLINE_S} seconds, so some items were skipped.")
 
         slack_rows, slack_heads, n["slack"] = self._read_slack(areas, vips, t0, tz, errors, live)
+        signal_rows, signal_heads, n["signal"] = self._read_signal(areas, vips, t0, tz, live)  # 0.5.1
         fmt = rules.time_format(settings)
         schedule, all_day = rules.build_schedule(events, tz, day, fmt)
         for i, row in enumerate(schedule, 1):
@@ -213,7 +214,7 @@ class Syncer:
             if row:
                 row["_ref"] = {"source": "mail", "acc": acc_id, "thread_id": th.get("id")}
                 replies.append(row)
-        replies += slack_rows
+        replies += slack_rows + signal_rows
         shown = []
         for row in replies:
             if rules.suppressed(row["_sup"], row["vip"], suppress):
@@ -244,13 +245,15 @@ class Syncer:
             row["gist"] = rules.fallback_gist(row)
             refs[row["id"]] = ref
         possible = self._possible(replies, refs, inbound, events + upcoming, areas, tz, day)
-        heads_up = [f"All day: {title}" for title in all_day] + slack_heads + errors
+        heads_up = [f"All day: {title}" for title in all_day] + slack_heads + signal_heads + errors
         written = now.isoformat(timespec="seconds")
         mailboxes = sum(1 for a in self.store.accounts() if a["services"].get("mail"))
         tail = (f"from {mailboxes} mailbox{'es' if mailboxes != 1 else ''}, "
                 f"{n['calendars']} calendar{'s' if n['calendars'] != 1 else ''}")
         if n["slack"]:
             tail += f", {n['slack']} Slack workspace{'s' if n['slack'] != 1 else ''}"
+        if n["signal"]:
+            tail += ", Signal"
         sources = f"Written {rules.clock(now, fmt)} {tail}"
         brief = {
             "date": day.isoformat(), "written_at": written, "kind": rules.kind_for(settings, now),
@@ -320,6 +323,25 @@ class Syncer:
             rows += r
             heads += h
         return rows, heads, count
+
+    def _read_signal(self, areas, vips, t0, tz, live):
+        """Signal rows (0.5.1) from the messages signal-cli stored; nothing is fetched here. Only while Signal is
+        linked and its area reads chat. Returns (rows, heads_up, 1 when read else 0). Live runs prune old
+        messages first (30 days; disappearing messages when their time is up)."""
+        meta = self.store.signal_meta()
+        if not meta.get("linked"):
+            return [], [], 0
+        area = areas.get(meta.get("area_id")) or areas.get("personal")
+        if area is None or not area["reads"].get("chat", True):
+            return [], [], 0
+        if live:
+            self.store.signal_prune(t0)
+        chats = self.store.signal_recent(t0 - rules.SIGNAL_MAX_S)
+        rows, heads = rules.signal_rows(chats, area["id"], t0, vips, tz, rules.time_format(self.store.settings()),
+                                        meta.get("ignored") or [])
+        for row in rows:
+            row["_ref"] = {"source": "signal"}
+        return rows, heads, 1
 
     def _apply_done(self, brief, refs, tz, live=True):
         """Splits the brief's reply rows (and rows already under "done") by the stored done keys: a done row
@@ -418,7 +440,7 @@ class Syncer:
             accs = {}
             for r in rows[:writer.MAX_SUGGEST_ROWS]:  # replies are sorted VIP first, then oldest
                 ref = refs[r["id"]]
-                if ref.get("source") == "slack":
+                if ref.get("source") in ("slack", "signal"):  # chat rows: the stored messages (0.5.1: Signal)
                     if ref.get("messages"):
                         bodies[r["id"]] = [dict(m, text=writer.cap_text(m.get("text") or "")) for m in ref["messages"]]
                     continue

@@ -185,7 +185,7 @@
      formatted here, from brief.time_format. */
   function status(text) { main.textContent = ''; add(main, h('p', { class: 'status', role: 'status' }, text)); clearLayer(); }
   function noAccounts() {
-    return !S || !(S.areas || []).some(function (a) { return (a.accounts || []).length; });
+    return !S || !(S.areas || []).some(function (a) { return (a.accounts || []).length || a.signal; });  /* 0.5.1: or Signal linked */
   }
   var ICONS = document.getElementById('icons');
   function ico(k, label) {
@@ -247,7 +247,7 @@
   function srcKind(r) {
     if (r.via === 'slack' || /^slack/i.test(r.source || '')) return 'slack';
     if (r.via === 'mail' || /^(mail|gmail)/i.test(r.source || '')) return 'mail';
-    return 'signal';   /* other chat sources: the speech-bubble glyph (Signal arrives in 0.5) */
+    return 'signal';   /* Signal (0.5.1) and other chat sources: the speech-bubble glyph */
   }
   function srcName(r) { var k = srcKind(r); return k === 'mail' ? 'Gmail' : k === 'slack' ? 'Slack' : (r.source || 'Message'); }
   function reasonOf(r) {
@@ -255,7 +255,7 @@
     function find(re) { return rs.filter(function (x) { return re.test(x); })[0]; }
     var x;
     if (r.vip || find(/^VIP$/)) return ['vip', 'VIP'];
-    if ((x = find(/^Mentioned|In your thread/))) return ['men', x];
+    if ((x = find(/^Mentioned|In your thread|^Replied to you/))) return ['men', x];
     if ((x = find(/question/i))) return ['q', x];
     if ((x = find(/deadline/i))) return ['due', x];
     if ((x = find(/^Waiting/))) return ['wait', r.wait ? 'Waiting' : x]; /* the wait text carries the days */
@@ -1439,6 +1439,10 @@
         ['Install it to your workspace, then copy the User OAuth Token (it starts with ', h('code', null, 'xoxp-'), ').'])]),
       h('li', null, [h('span', { class: 'num', 'aria-hidden': 'true' }, '3'), h('div', null, [form, err])])]);
   }
+  function chatNames(a) {
+    var live = (a.slack || []).some(function (w) { return w.status !== 'needs_reconnect'; });
+    return live && a.signal ? 'Slack and Signal' : a.signal ? 'Signal' : 'Slack';
+  }
   function areaCard(a) {
     var c = clampColour(a.colour), reads = a.reads || {}, err = errBox();
     function readChip(key, label) {
@@ -1463,8 +1467,8 @@
       slackBlock(a),
       h('div', { class: 'reads' }, [h('div', { class: 'q', id: 'q-' + a.id }, 'What may the brief read?'),
         h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'),
-          a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack first'), readChip('writer', 'AI writer'), later('Tasks')]),
-        err, h('p', { class: 'note' }, a.chat_available ? 'Chat is Slack. Check your employer\u2019s policy first.' : 'Check your employer\u2019s policy first.')]),
+          a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack or link Signal first'), readChip('writer', 'AI writer'), later('Tasks')]),
+        err, h('p', { class: 'note' }, a.chat_available ? 'Chat is ' + chatNames(a) + '. Check your employer\u2019s policy first.' : 'Check your employer\u2019s policy first.')]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
       }) : h('div', { class: 'acct-f' }, askBtn(key, 'Delete area'))]);
@@ -1498,6 +1502,7 @@
       h('p', { class: 'intro' }, 'One area per part of your life. Personal is always there; add one per employer.'),
       keyPanel(),
       h('div', { class: 'cards' }, S.areas.map(areaCard).concat([addAreaCard()])),
+      signalCard(),
       h('div', { class: 'callout' }, [h('div', { class: 'h' }, 'Always'),
         h('p', null, 'The brief reads and drafts. It never sends, accepts or deletes anything.')])];
   }
@@ -1572,7 +1577,7 @@
       });
       return h('div', { class: 'mrow', role: 'row' }, [
         h('span', { class: 'nm', role: 'cell' }, [r.label || r.value || '', ' ', h('span', { class: 'k' }, NNR_KIND[r.kind] || r.kind || '')]),
-        h('span', { class: 'src', role: 'cell' }, r.source === 'slack' ? 'Slack' : 'Mail'),
+        h('span', { class: 'src', role: 'cell' }, r.source === 'slack' ? 'Slack' : r.source === 'signal' ? 'Signal' : 'Mail'),
         h('span', { class: 'dt', role: 'cell' }, fmtDay(r.created)),
         h('span', { class: 'x', role: 'cell' }, rm)]);
     });
@@ -1966,8 +1971,8 @@
   }
   function stepReview() {
     var st = S.settings, nAcc = 0, err = errBox();
-    var nSlack = 0;
-    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; });
+    var nSlack = 0, sig = false;
+    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
     var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
     var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
     var timesSum = [morning ? morning.time + ' brief' : 'No morning brief',
@@ -1977,7 +1982,7 @@
       [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
       [S.areas.map(function (a) { return a.name; }).join(', '),
         S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
-        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null].filter(Boolean).join(' · '),
+        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean).join(' · '),
       plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
         ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
       timesSum,
@@ -2003,6 +2008,254 @@
       err,
       h('p', { class: 'syncst', role: 'status' }, ls.at ? 'Last refreshed ' + fmtWhen(ls.at, true) + (ls.ok === false ? ', with problems:' : '.') : 'Not refreshed yet.'),
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+
+  /* ---------- 0.5.1: Setup → Areas → Signal: link (QR code), status, area, ignored chats, unlink, history import ----------
+     signal-cli runs on the server as a read-only linked device. The QR code is an SVG the server draws from the
+     code's modules; the page shows it as an <img> from a data: URL, so it is never parsed into the page. */
+  var SIG = { st: null, imp: null, loading: false, err: '', timer: null, ignOpen: false, ignAll: false, unlinked: false,
+              file: null, prog: '', pick: null, done: '' };
+  var SIG_CHUNK = 4 * 1024 * 1024;
+  function sigLoad() {
+    if (SIG.loading) return;
+    SIG.loading = true;
+    Promise.all([api('GET', 'api/signal'), api('GET', 'api/signal/import')]).then(function (r) {
+      SIG.st = r[0] || {}; SIG.imp = r[1] || {}; SIG.err = ''; SIG.at = Date.now();
+    }, function (e) { SIG.err = e.message; }).then(function () { SIG.loading = false; sigRedraw(); });
+  }
+  /* redraws only the Signal card (the rest of Setup keeps its state and focus) */
+  function sigRedraw(focusKey) {
+    if (ui.view !== 'setup' || ui.step !== 2) return;
+    var old = main.querySelector('.sigcard');
+    if (!old) return;
+    var a = document.activeElement, fk = focusKey || (a && old.contains(a) ? a.getAttribute('data-fk') : null);
+    var nu = signalCard();
+    old.parentNode.replaceChild(nu, old);
+    if (fk) { var f = nu.querySelector('[data-fk="' + cssq(fk) + '"]'); if (f) f.focus(); }
+  }
+  /* while a link code waits for the phone: ask every 2 s whether it was scanned */
+  function sigPollSoon() {
+    if (SIG.timer) return;
+    SIG.timer = setTimeout(function () {
+      SIG.timer = null;
+      if (ui.view !== 'setup' || ui.step !== 2 || !SIG.st || !SIG.st.link || SIG.st.link.state !== 'waiting') return;
+      api('GET', 'api/signal').then(function (r) {
+        SIG.st = r || SIG.st;
+        if (SIG.st.linked) return reload('sig-h');  /* the areas' Chat chip changes too */
+        sigRedraw();
+      }, function () { sigPollSoon(); });
+    }, 2000);
+  }
+  function sigRawPost(path, blob) {
+    return fetch(path, { method: 'POST', cache: 'no-store', body: blob,
+      headers: { Accept: 'application/json', 'X-Callsheet': '1', 'Content-Type': 'application/octet-stream' } }).then(function (r) {
+      return r.text().then(function (t) {
+        var j = null;
+        try { j = t ? JSON.parse(t) : null; } catch (e) { j = null; }
+        if (!r.ok) throw new Error(j && j.error ? String(j.error) : 'Something went wrong (HTTP ' + r.status + ').');
+        return j;
+      });
+    }, function () { throw new Error('Callsheet did not answer. Check the connection and try again.'); });
+  }
+  function sigDay(ts) {
+    var d = new Date(Number(ts) * 1000);
+    if (isNaN(d.getTime())) return '';
+    var tz = (S && S.settings && S.settings.timezone) || undefined;
+    try { return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: tz }); } catch (e) { return d.toDateString(); }
+  }
+  function sigStep(n, kids) { return h('li', null, [h('span', { class: 'num', 'aria-hidden': 'true' }, String(n)), h('div', null, kids)]); }
+  function signalCard() {
+    var st = SIG.st, kids = [h('h3', { class: 'sighead', tabindex: '-1', 'data-fk': 'sig-h' }, 'Signal')];
+    if (!st) {
+      if (!SIG.loading && !SIG.err) sigLoad();
+      kids.push(SIG.err ? [h('p', { class: 'err', role: 'alert' }, SIG.err),
+        btn('tbtn', 'Try again', { 'data-fk': 'sig-retry' }, function () { SIG.err = ''; sigLoad(); sigRedraw(); })]
+        : h('p', { class: 'note', role: 'status' }, 'Loading…'));
+      return h('section', { class: 'sigcard', 'aria-label': 'Signal' }, kids);
+    }
+    if (!SIG.loading && Date.now() - (SIG.at || 0) > 15000) sigLoad();  /* back in Setup: refresh in the background */
+    var link = st.link || { state: 'idle' }, err = errBox();
+    var tag = !st.available && !st.linked ? h('span', { class: 'st off' }, 'Not available')
+      : st.linked ? (st.error ? h('span', { class: 'st warn' }, 'Needs attention') : h('span', { class: 'st' }, 'Linked'))
+      : link.state === 'waiting' ? h('span', { class: 'st warn' }, 'Waiting for your phone') : h('span', { class: 'st off' }, 'Not linked');
+    kids.push(h('div', { class: 'acct-h' }, [h('span', { class: 'em' }, st.linked ? 'Your Signal account' : 'Read your Signal chats'), tag]));
+    if (st.linked) kids.push(sigLinked(st));
+    else {
+      kids.push(h('p', { class: 'note' }, 'Callsheet links to Signal as an extra device, like Signal Desktop, and only reads. It never sends a message.'));
+      if (SIG.unlinked) kids.push(h('p', { class: 'note sigdone', role: 'status' }, 'Signal is unlinked. On your phone, remove “Callsheet” too: Signal → Settings → Linked devices.'));
+      if (!st.available) kids.push(h('p', { class: 'note' }, 'This copy of Callsheet doesn’t include signal-cli, the part that talks to Signal. Update Callsheet, then come back here.'));
+      else if (link.state === 'waiting') kids.push(sigQr(link, err));
+      else {
+        if (link.error) kids.push(h('p', { class: 'err', role: 'alert' }, link.error));
+        var lb = btn('btn sm primary', 'Link Signal', { 'data-fk': 'sig-link' }, function () {
+          run([lb], err, function () { return api('POST', 'api/signal/link'); }, function (r) { SIG.st = r; SIG.unlinked = false; sigRedraw('sig-cancel'); });
+        });
+        kids.push(h('div', { class: 'cbtn' }, lb), h('p', { class: 'help sighelp' }, 'Starting Signal on the server can take up to a minute.'));
+      }
+      kids.push(err);
+    }
+    kids.push(sigImport(st));
+    return h('section', { class: 'sigcard', 'aria-label': 'Signal' }, kids);
+  }
+  function sigQr(link, err) {
+    var img = h('img', { class: 'sigqr', alt: 'QR code to link Signal. Scan it with Signal on your phone.', width: '232', height: '232' });
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(String(link.qr_svg || ''));
+    var mins = Math.max(1, Math.ceil((Number(link.expires_in) || 0) / 60));
+    var cancel = btn('tbtn', 'Cancel', { 'data-fk': 'sig-cancel' }, function () {
+      run([cancel], err, function () { return api('POST', 'api/signal/link/cancel'); }, function (r) { SIG.st = r; sigRedraw('sig-link'); });
+    });
+    sigPollSoon();
+    return h('div', { class: 'sigqrw' }, [
+      h('div', { class: 'sigqrf' }, img),
+      h('div', null, [
+        h('ol', { class: 'steps sigsteps', 'aria-label': 'Link Signal' }, [
+          sigStep(1, 'Open Signal on your phone.'),
+          sigStep(2, ['Go to ', h('b', null, 'Settings → Linked devices'), ' and tap ', h('b', null, '+'), ' (Link a new device).']),
+          sigStep(3, 'Scan this code. Callsheet shows up in the list as “Callsheet”.')]),
+        h('p', { class: 'note sigwait', role: 'status' }, 'Waiting for your phone. This code works for ' + plural(mins, 'more minute', 'more minutes') + '.'),
+        cancel])]);
+  }
+  function sigLinked(st) {
+    var err = errBox(), out = [];
+    out.push(h('dl', { class: 'sigdl' }, [
+      h('dt', null, 'Number'), h('dd', null, st.number || 'Hidden'),
+      h('dt', null, 'Linked'), h('dd', null, st.linked_at ? fmtWhen(st.linked_at, true) : '—'),
+      h('dt', null, 'Last message'), h('dd', null, st.last_message_at ? fmtWhen(st.last_message_at, true) : 'None yet')]));
+    if (st.error) out.push(h('p', { class: 'acct-err' }, st.error));
+    out.push(h('p', { class: 'note' }, 'Keep Callsheet running: Signal removes a linked device that hasn’t been online for 45 days. Update Callsheet at least every 2 months too, because Signal stops working with old versions.'));
+    out.push(h('p', { class: 'note' }, 'New messages are kept ' + plural(st.keep_days || 30, 'day', 'days') + '. Disappearing messages are deleted when their time is up.'));
+    var sel = h('select', { class: 'inp', id: 'sig-area', 'data-fk': 'sig-area' }, S.areas.map(function (a) {
+      return h('option', { value: a.id, selected: a.id === st.area_id }, a.name);
+    }));
+    on(sel, 'change', function () {
+      run([sel], err, function () { return api('PATCH', 'api/signal', { area_id: sel.value }); }, function (r) { SIG.st = r; return reload('sig-area'); });
+    });
+    out.push(h('div', { class: 'sigarea' }, [h('label', { class: 'label', for: 'sig-area' }, 'Signal rows go to'), h('span', { class: 'selw' }, sel)]));
+    var chats = (st.chats || []).filter(function (c) { return c.live > 0; }), ign = (st.ignored || []).slice();
+    var disc = btn('tbtn disc', 'Ignore chats (' + ign.length + ')', { 'aria-expanded': String(SIG.ignOpen), 'aria-controls': 'sig-ign', 'data-fk': 'sig-ign' }, function () {
+      SIG.ignOpen = !SIG.ignOpen; sigRedraw('sig-ign');
+    });
+    out.push(disc);
+    if (SIG.ignOpen) {
+      var many = chats.length > 40 && !SIG.ignAll;
+      out.push(h('div', { class: 'ign', id: 'sig-ign' }, [
+        h('p', { class: 'help' }, 'Tap a chat to ignore it. Ignored chats never show up in the brief.'),
+        chats.length ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Signal chats' }, (many ? chats.slice(0, 40) : chats).map(function (c) {
+          var name = (c.title || (c.kind === 'group' ? 'Signal group' : 'Signal chat')) + (c.kind === 'group' ? ' (group)' : '');
+          var b = btn('chip', name, { 'aria-pressed': String(ign.indexOf(c.id) >= 0), 'aria-label': 'Ignore ' + name }, function () {
+            run([b], err, function () {
+              var cur = (SIG.st.ignored || []).slice(), i = cur.indexOf(c.id);
+              if (i >= 0) cur.splice(i, 1); else cur.push(c.id);
+              return api('PATCH', 'api/signal', { ignored: cur });
+            }, function (r) {
+              SIG.st = r;
+              b.setAttribute('aria-pressed', String((r.ignored || []).indexOf(c.id) >= 0));
+              disc.textContent = 'Ignore chats (' + (r.ignored || []).length + ')';
+            });
+          });
+          return b;
+        }).concat(many ? [btn('tbtn', 'Show all ' + chats.length, { 'data-fk': 'sig-ignall' }, function () { SIG.ignAll = true; sigRedraw('sig-ign'); })] : []))
+          : h('p', { class: 'help' }, 'No chats yet. They show up here after the first messages arrive.'),
+        err]));
+    } else out.push(err);
+    out.push(ui.confirm === 'signal' ? confirmRow('Unlink Signal? Callsheet stops reading and deletes its Signal keys and the messages it received. Imported history stays until you delete it.', 'Unlink', function (y, c, e) {
+      run([y, c], e, function () { return api('POST', 'api/signal/unlink', { confirm: true }); }, function (r) {
+        ui.confirm = null; SIG.st = r; SIG.unlinked = true; SIG.ignOpen = false; return reload('sig-h');
+      });
+    }) : h('div', { class: 'acct-f' }, askBtn('signal', 'Unlink Signal')));
+    return h('div', { class: 'siglinked' }, out);
+  }
+  function sigUpload(file, chat, btns, err, prog) {
+    var id, off = 0;
+    function next() {
+      if (off >= file.size) return api('POST', 'api/signal/import/' + encodeURIComponent(id) + '/finish');
+      var end = Math.min(file.size, off + SIG_CHUNK);
+      return sigRawPost('api/signal/import/' + encodeURIComponent(id) + '/chunk', file.slice(off, end)).then(function () {
+        off = end;
+        prog.textContent = 'Uploading… ' + Math.floor(off * 100 / file.size) + '%';
+        return next();
+      });
+    }
+    run(btns, err, function () {
+      return api('POST', 'api/signal/import/start', { name: file.name, size: file.size, chat: chat || null }).then(function (r) {
+        id = r.id; prog.textContent = 'Uploading… 0%';
+        return next();
+      });
+    }, function (r) { SIG.imp = r; SIG.file = null; SIG.pick = null; SIG.done = ''; sigRedraw('sig-pick'); });
+  }
+  function sigImport(st) {
+    var imp = SIG.imp || {}, err = errBox(), staged = imp.staged || [], counts = st.counts || {};
+    var out = [h('h4', { class: 'label slh' }, 'Older messages')];
+    out.push(h('p', { class: 'note' }, 'Import chats from Signal Desktop’s export (main.jsonl), or one chat’s data.json from signal-export. Only text, names and times are kept: keys and phone numbers in the file are skipped. Files up to 200 MB.'));
+    if (SIG.done) out.push(h('p', { class: 'note sigdone', role: 'status' }, SIG.done));
+    if (staged.length) {
+      var last = imp.last;
+      if (last) out.push(h('p', { class: 'line' }, 'Read ' + plural(last.lines || 0, 'line', 'lines') + ': ' + plural(last.kept || 0, 'message', 'messages') + ' with text' +
+        (last.skipped ? ', ' + last.skipped + ' skipped (no text, or disappearing)' : '') + (last.bad ? ', ' + last.bad + ' unreadable' : '') + '.'));
+      if (!SIG.pick) SIG.pick = {};
+      var pick = SIG.pick;
+      function chosen() { return staged.filter(function (c) { return pick[c.chat] !== false; }); }
+      var go, all;
+      function label() {
+        var n = chosen().length;
+        go.textContent = n ? 'Import ' + plural(n, 'chat', 'chats') : 'Pick chats to import';
+        go.disabled = !n;
+        all.textContent = n === staged.length ? 'Select none' : 'Select all';
+      }
+      var list = h('ul', { class: 'sigpick', 'aria-label': 'Chats in the file', 'data-fk': 'sig-pick', tabindex: '-1' }, staged.map(function (c, i) {
+        var id = 'sigp-' + i, cb = h('input', { type: 'checkbox', id: id, checked: pick[c.chat] !== false });
+        on(cb, 'change', function () { pick[c.chat] = cb.checked; label(); });
+        return h('li', null, [cb, h('label', { for: id }, [h('span', { class: 't' }, c.title || 'Untitled chat'),
+          h('span', { class: 'm' }, (c.kind === 'group' ? 'Group · ' : '') + plural(c.count, 'message', 'messages') + ' · ' +
+            (sigDay(c.first) === sigDay(c.last) ? sigDay(c.first) : sigDay(c.first) + ' to ' + sigDay(c.last)))])]);
+      }));
+      go = btn('btn sm primary', 'Import', { 'data-fk': 'sig-commit' }, function () {
+        var ids = chosen().map(function (c) { return c.chat; });
+        run([go, all, discard], err, function () { return api('POST', 'api/signal/import/commit', { chats: ids }); }, function (r) {
+          SIG.imp = r; SIG.pick = null;
+          SIG.done = 'Imported ' + plural(r.added || 0, 'message', 'messages') + ' from ' + plural(ids.length, 'chat', 'chats') + '.';
+          return api('GET', 'api/signal').then(function (s2) { SIG.st = s2; }, function () { }).then(function () { sigRedraw('sig-file'); });
+        });
+      });
+      all = btn('tbtn', 'Select none', { 'data-fk': 'sig-all' }, function () {
+        var none = chosen().length === staged.length;
+        staged.forEach(function (c) { pick[c.chat] = !none; });
+        list.querySelectorAll('input[type=checkbox]').forEach(function (x) { x.checked = !none; });
+        label();
+      });
+      var discard = btn('tbtn', 'Discard', { 'data-fk': 'sig-discard' }, function () {
+        run([go, all, discard], err, function () { return api('DELETE', 'api/signal/import'); }, function (r) { SIG.imp = r; SIG.pick = null; sigRedraw('sig-file'); });
+      });
+      out.push(h('p', { class: 'help' }, 'Pick the chats to keep. The rest of the file is discarded.'), list,
+        h('div', { class: 'btns sigbtns' }, [go, all, discard]), err);
+      label();
+    } else {
+      var prog = h('p', { class: 'note sigprog', role: 'status' }, SIG.prog);
+      var chatW, chatIn = h('input', { class: 'inp', type: 'text', id: 'sig-chat', autocomplete: 'off', placeholder: 'For example: Alex', 'data-fk': 'sig-chat' });
+      var fi = h('input', { type: 'file', id: 'sig-file', class: 'sigfile', accept: '.jsonl,.json', 'data-fk': 'sig-file' });
+      var up = btn('btn sm primary', 'Upload', { 'data-fk': 'sig-up', disabled: true }, function () {
+        if (SIG.file) sigUpload(SIG.file, chatIn.value.trim(), [up, fi], err, prog);
+      });
+      on(fi, 'change', function () {
+        SIG.file = (fi.files && fi.files[0]) || null; SIG.done = '';
+        up.disabled = !SIG.file;
+        chatW.hidden = !(SIG.file && /\.json$/i.test(SIG.file.name));
+        err.textContent = SIG.file && SIG.file.size > (imp.max_bytes || 200 * 1024 * 1024) ? 'That file is larger than 200 MB.' : '';
+        if (err.textContent) up.disabled = true;
+      });
+      chatW = h('div', { class: 'sigchat', hidden: true }, [h('label', { class: 'label', for: 'sig-chat' }, 'Chat name (the data.json’s folder)'), chatIn]);
+      out.push(h('div', { class: 'sigup' }, [h('label', { class: 'label', for: 'sig-file' }, 'Export file'), fi]), chatW,
+        h('div', { class: 'btns sigbtns' }, up), prog, err);
+    }
+    if (counts.imported) {
+      out.push(h('p', { class: 'line' }, 'Imported history: ' + plural(counts.imported, 'message', 'messages') + '. It never shows up as reply rows.'));
+      out.push(ui.confirm === 'sighist' ? confirmRow('Delete all imported Signal history? Messages received since linking stay.', 'Delete', function (y, c, e) {
+        run([y, c], e, function () { return api('POST', 'api/signal/history/clear', { confirm: true }); }, function (r) {
+          ui.confirm = null; SIG.st = r; SIG.done = ''; renderSetup('[data-fk="sig-file"]');
+        });
+      }) : h('div', { class: 'acct-f' }, askBtn('sighist', 'Delete imported history')));
+    }
+    return h('div', { class: 'sigimp' }, out);
   }
 
   /* ---------- 0.5.0: Setup → Delivery → Memory: the whole memory.md (view, edit, clear) ----------
