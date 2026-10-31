@@ -147,6 +147,8 @@ class PayloadTest(unittest.TestCase):
         self.assertEqual(p["message"], "2 to reply, 1 event today. Top: Dana Lee, Budget sign-off")
         self.assertEqual(p["data"]["tag"], "callsheet-brief")
         self.assertNotIn("SECRET", json.dumps(p))
+        off = push.brief_payload(b, show_subject=False)
+        self.assertEqual(off["message"], "2 to reply, 1 event today. Top: Dana Lee")
 
     def test_brief_summary_never_uses_a_snippet_or_slack_text(self):
         p = push.brief_payload(brief([row("r1", "Ana", '"' + BODY + '"', vip=True, reasons=["VIP"])]))
@@ -161,6 +163,8 @@ class PayloadTest(unittest.TestCase):
               {"id": "s2", "time": "10:30 am", "title": "Dentist", "clash": True, "start_hhmm": "10:30", "end_hhmm": "11:00"}]
         self.assertEqual(push.brief_payload(brief([], ev))["message"],
                          "Nothing to reply to, 2 events today. Top: clash at 10:00 am Board")
+        self.assertEqual(push.brief_payload(brief([], ev), False)["message"],
+                         "Nothing to reply to, 2 events today. Top: clash at 10:00 am")
         self.assertEqual(push.brief_payload(brief())["message"], "Nothing to reply to, 0 events today.")
 
     def test_clipping(self):
@@ -179,6 +183,10 @@ class PayloadTest(unittest.TestCase):
         self.assertEqual(a["data"]["priority"], "high")
         self.assertEqual(a["data"]["push"], {"interruption-level": "time-sensitive"})
         self.assertNotIn("tag", a["data"])
+        off = push.alert_payload({"who": "Priya", "subject": "Contract", "reason": "vip", "source": "mail"}, False)
+        self.assertEqual((off["title"], off["message"]), ("VIP message", "New urgent message from Priya"))
+        off = push.alert_payload({"who": "Tomás", "reason": "vip", "source": "slack"}, show_subject=False)
+        self.assertEqual(off["message"], "New urgent message from Tomás")
         s = push.alert_payload({"who": "Tomás", "reason": "vip", "source": "slack"})
         self.assertEqual(s["message"], "Tomás sent you a Slack message")
         self.assertEqual(push.batch_payload(3)["message"], "3 more urgent messages. Open Callsheet to see them.")
@@ -190,9 +198,9 @@ class UrgentRulesTest(unittest.TestCase):
     def test_words(self):
         yes = ["Urgent: need this today", "URGENT - due Friday", "Need the deck today, due 5pm", "Emergency at the site",
                "Can you send it ASAP", "a.s.a.p. please", "urgent, by 3pm", "Urgently need sign-off by end of day",
-               "Today: urgent review"]
-        no = ["Your order arrives today", "Urgent: server down", "Is this urgent?x", "asapx", "today today",
-              "Lunch tomorrow?", "due Friday", "by today"]
+               "Today: urgent review", "Urgent: server down", "URGENT", "Is this urgent?", "re: urgent"]
+        no = ["Your order arrives today", "asapx", "today today", "Lunch tomorrow?", "due Friday", "by today",
+              "nonurgent", "urgentness", "insurgent group", "Not urgent_ish"]
         for t in yes:
             self.assertTrue(push.urgent_words(t), t)
         for t in no:
@@ -201,6 +209,7 @@ class UrgentRulesTest(unittest.TestCase):
     def test_reason_order(self):
         self.assertEqual(push.urgent_reason(True, "hello", "", "hello"), "vip")
         self.assertEqual(push.urgent_reason(False, "Urgent: today", "", ""), "urgent")
+        self.assertEqual(push.urgent_reason(False, "Hi", "this is urgent", "Hi\nthis is urgent"), "urgent")
         self.assertEqual(push.urgent_reason(False, "Contract", "The contract has been signed.",
                                             "Contract\nThe contract has been signed."), "claim")
         self.assertIsNone(push.urgent_reason(False, "Lunch?", "Are you free?", "Lunch?\nAre you free?"))
@@ -221,6 +230,7 @@ class UrgentRulesTest(unittest.TestCase):
         f = lambda th, s=(): push.mail_item(th, "me@example.com", "a1", vips, list(s), since)  # noqa: E731
         self.assertIsNotNone(f(self._thread("Bo <bo@x.com>", "Urgent: sign today")))
         self.assertIsNone(f(self._thread("Bo <bo@x.com>", "Weekly notes")))
+        self.assertEqual(f(self._thread("Bo <bo@x.com>", "Server down", "urgent, please call"))["reason"], "urgent")
         # automated, newsletters, category tabs: skipped unless VIP
         self.assertIsNone(f(self._thread("Shop <noreply@shop.com>", "URGENT: sale ends today, due now")))
         self.assertIsNone(f(self._thread("Bo <bo@x.com>", "Urgent: today due", headers={"List-Id": "x"})))
@@ -351,9 +361,13 @@ class TimingTest(unittest.TestCase):
         good = self.store.update_push({"quiet_start": "23:15", "quiet_end": "06:00", "max_per_hour": 5,
                                        "at_call_times": True, "targets": ["mobile_app_a", "mobile_app_a", "mobile_app_b"]})
         self.assertEqual(good["targets"], ["mobile_app_a", "mobile_app_b"])
+        self.assertIs(good["show_subject"], True)
+        self.assertIs(self.store.update_push({"show_subject": False})["show_subject"], False)
+        good["show_subject"] = False
         from store import InputError
         for bad in ({"targets": "mobile_app_a"}, {"targets": ["light.kitchen"]}, {"targets": ["notify"]},
-                    {"targets": [f"mobile_app_{i}" for i in range(6)]}, {"urgent": "yes"}, {"quiet_start": "7:00"},
+                    {"targets": [f"mobile_app_{i}" for i in range(6)]}, {"urgent": "yes"},
+                    {"show_subject": "no"}, {"show_subject": 0}, {"show_subject": None}, {"quiet_start": "7:00"},
                     {"quiet_end": "24:00"}, {"max_per_hour": 0}, {"max_per_hour": 11}, {"max_per_hour": True},
                     {"max_per_hour": 2.5}, {"other": 1}, ["x"]):
             with self.assertRaises(InputError, msg=bad):
@@ -557,6 +571,17 @@ class CheckTest(PushBase):
         st = self.app.store.push_state()
         self.assertEqual(len(st["seen"]), 1)
         self.assertNotIn("Contract", json.dumps(st))
+
+    def test_subject_off_sender_only(self):
+        r = self.enable(show_subject=False)
+        self.assertIs(r["settings"]["show_subject"], False)
+        self.user["threads"] = [self.thread("t1", "Priya Nair <dana@example.com>", "Contract terms", BODY)]
+        self.app.notifier.check()
+        self.assertEqual(self.ha.sent[0][1]["message"], "New urgent message from Priya Nair")
+        self.assertNotIn("Contract", json.dumps(self.ha.sent))
+        status, data, _ = self.call("PATCH", "/api/push", {"show_subject": "off"})
+        self.assertEqual(status, 400)
+        self.assertIn("show_subject", data["error"])
 
     def test_rate_limit_and_batch(self):
         self.enable(max_per_hour=3)

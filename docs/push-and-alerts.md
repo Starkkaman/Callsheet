@@ -37,6 +37,7 @@ the Home Assistant app's start page.
 | `urgent` | false | bool |
 | `quiet_start`, `quiet_end` | `22:00`, `07:00` | `HH:MM`; start == end means no quiet hours; may cross midnight |
 | `max_per_hour` | 3 | 1 to 10 |
+| `show_subject` | true | bool; off = the sender's name only: "New urgent message from Priya", and the summary's top item without subject or event title |
 
 ## After a scheduled brief
 The scheduler calls `Notifier.after_brief()` after a sync it started for a call time (not the start-up sync and
@@ -68,10 +69,10 @@ not Refresh). It moves the light check's marker to now and clears held alerts (t
 ## Urgent rules (rules only)
 `urgent_reason(vip, subject, snippet, inbound)`:
 1. `vip`: the sender is a VIP (by email; Slack by email, else name, like the brief).
-2. `urgent`: subject + snippet has "emergency" or "asap"/"a.s.a.p.", or "urgent"/"urgently"/"today" together with a
-   separate deadline: `rules.DEADLINE` ("due", "deadline", "by Friday", "by 5", "by end of day") or "today",
+2. `urgent`: subject + snippet has "urgent"/"urgently", "emergency" or "asap"/"a.s.a.p." (whole words), or "today"
+   together with a separate deadline: `rules.DEADLINE` ("due", "deadline", "by Friday", "by 5", "by end of day") or "today",
    "tonight", "EOD", "end of day", "this morning/afternoon/evening", "within the hour", "right away",
-   "immediately", "by noon", "by 5pm". "today" twice doesn't count; "Urgent: server down" alone doesn't.
+   "immediately", "by noon", "by 5pm". "today" alone or twice doesn't count; "Urgent: server down" does.
 3. `claim`: `writer.states_decision` on the inbound text (the subject unless it is a reply or forward, plus the
    snippet): the sender says something was approved, paid, signed and so on (a pure text check).
 Skipped unless VIP: automated or bulk mail (`rules.is_automated`), Gmail's category tabs. The owner's "Doesn't need
@@ -86,7 +87,8 @@ a reply" rules apply as in the brief (thread rules always; sender and domain rul
 
 ## Notification texts
 - Urgent: title "VIP message", "Looks urgent" or "Sender says it's done"; message "Sender: Subject" ("(no subject)"
-  when empty), Slack "Name sent you a Slack message". Never the snippet or body. Title ≤ 40, message ≤ 120
+  when empty), Slack "Name sent you a Slack message"; with `show_subject` off, "New urgent message from Name".
+  Setup says next to that switch that notification text passes through Apple's or Google's push service. Never the snippet or body. Title ≤ 40, message ≤ 120
   characters (clipped with "…").
 - Urgent payloads add `data.priority: high`, `data.ttl: 0` (Android) and `data.push.interruption-level:
   time-sensitive` (iOS). All carry `data.group: callsheet`.

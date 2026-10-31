@@ -5,16 +5,16 @@ The light check is rules only: it never runs a sync, the writer or any AI model.
 account, the INBOX threads newer than the last check (Gmail metadata only: From, Subject, labels, snippet) and,
 per Slack workspace, one conversations.history per VIP DM. A message is urgent when (`urgent_reason`):
   - it is from a VIP, or
-  - its subject or snippet says "emergency" or "asap", or says "urgent" / "today" together with a separate
-    deadline ("due", "by Friday", "by 5pm", "today", "tonight", "end of day", "this afternoon", ...), or
+  - its subject or snippet says "urgent", "emergency" or "asap", or says "today" together with a separate
+    deadline ("due", "by Friday", "by 5pm", "tonight", "end of day", "this afternoon", ...), or
   - the sender states a decision (writer.states_decision, the 0.4.1 inbound claim check: approved, paid, signed).
 Bulk and automated mail, Gmail's category tabs and the owner's "doesn't need a reply" rules are skipped (VIPs
 win over sender and domain rules, like the brief). Each message alerts at most once (seen ids, bounded); at
 most `max_per_hour` alerts in any hour, extras grouped into one "N more urgent messages" alert.
 
-Notification text is the sender's name and the subject (clipped), never body text; Slack alerts say only who
-wrote. Tapping opens Callsheet's Ingress page in the Home Assistant app (`data.url` on iOS, `data.clickAction`
-on Android, both "/hassio/ingress/<app slug>").
+Notification text is the sender's name and the subject (clipped), never body text; with "Show the subject"
+off (`show_subject`), the sender's name only. Slack alerts say only who wrote. Tapping opens Callsheet's Ingress
+page in the Home Assistant app (`data.url` on iOS, `data.clickAction` on Android, both "/hassio/ingress/<app slug>").
 
 Logs counts only. Settings live in the meta key "push", state in "push_state" (store.py).
 """
@@ -48,8 +48,8 @@ TEXT_MAX = 120
 BRIEF_STALE_S = 15 * 60
 QUERY = "in:inbox -category:promotions -category:social -category:forums"
 
-URGENT_WORD = re.compile(r"\b(?:urgent(?:ly)?|today)\b", re.I)
-STRONG_WORD = re.compile(r"\b(?:emergency|asap|a\.s\.a\.p\.?)(?=\W|$)", re.I)
+URGENT_WORD = re.compile(r"\btoday\b", re.I)
+STRONG_WORD = re.compile(r"\b(?:urgent(?:ly)?|emergency|asap|a\.s\.a\.p\.?)(?=\W|$)", re.I)
 DEADLINE_HINT = re.compile(r"\b(?:today|tonight|eod|end\s+of\s+(?:the\s+)?day|this\s+(?:morning|afternoon|evening)|"
                            r"within\s+the\s+hour|right\s+away|immediately|by\s+noon|"
                            r"by\s+\d{1,2}(?::\d\d)?\s*(?:am|pm)?)\b", re.I)
@@ -57,7 +57,7 @@ TITLES = {"vip": "VIP message", "urgent": "Looks urgent", "claim": "Sender says 
 
 
 def defaults():
-    return {"targets": [], "at_call_times": False, "urgent": False,
+    return {"targets": [], "at_call_times": False, "urgent": False, "show_subject": True,
             "quiet_start": "22:00", "quiet_end": "07:00", "max_per_hour": 3}
 
 
@@ -88,7 +88,7 @@ def patch_config(cur, patch):
             if len(val) > MAX_TARGETS:
                 raise Invalid(f"Pick at most {MAX_TARGETS} phones.")
             c["targets"] = val
-        elif key in ("at_call_times", "urgent"):
+        elif key in ("at_call_times", "urgent", "show_subject"):
             if not isinstance(val, bool):
                 raise Invalid(f"{key} must be true or false.")
             c[key] = val
@@ -155,8 +155,9 @@ def _subject_of(row):
     return "" if t.startswith('"') else t
 
 
-def brief_payload(brief):
-    """After a scheduled brief: counts and the top item's who/what (subject or event title), no message text."""
+def brief_payload(brief, show_subject=True):
+    """After a scheduled brief: counts and the top item's who/what (subject or event title), no message text.
+    show_subject=False: the sender's name only (no subject, no event title)."""
     replies, schedule = brief.get("replies") or [], brief.get("schedule") or []
     n_r, n_e = len(replies), len(schedule)
     parts = [f"{n_r} to reply" if n_r else "Nothing to reply to",
@@ -167,19 +168,23 @@ def brief_payload(brief):
         ref = top[0]["ref"]
         row = next((r for r in replies if r.get("id") == ref), None)
         if row is not None:
-            subj = _subject_of(row)
+            subj = _subject_of(row) if show_subject else ""
             what = subj or ("Slack" if row.get("via") != "mail" else "")
             msg += " Top: " + _clip(row.get("who") or "Someone", 40) + (f", {what}" if what else "")
         else:
             ev = next((e for e in schedule if e.get("id") == ref), None)
             if ev is not None:
-                msg += f" Top: clash at {ev.get('time') or ''} {ev.get('title') or ''}".rstrip()
+                title = (ev.get('title') or '') if show_subject else ''
+                msg += f" Top: clash at {ev.get('time') or ''} {title}".rstrip()
     return _payload(brief.get("kind") or "Callsheet", msg, tag="callsheet-brief")
 
 
-def alert_payload(item):
+def alert_payload(item, show_subject=True):
+    """show_subject=False: the sender's name only ("New urgent message from Priya")."""
     who = _clip(item.get("who") or "Someone", 50)
-    if item.get("source") == "slack":
+    if not show_subject:
+        msg = f"New urgent message from {who}"
+    elif item.get("source") == "slack":
         msg = f"{who} sent you a Slack message"
     else:
         subj = item.get("subject") or "(no subject)"
@@ -194,7 +199,7 @@ def batch_payload(n):
 
 # --- the urgent rules (pure) -------------------------------------------------------------
 def urgent_words(text):
-    """True for "emergency"/"asap", or "urgent"/"today" with a separate deadline in the same text."""
+    """True for "urgent", "emergency" or "asap", or "today" with a separate deadline in the same text."""
     text = str(text or "")
     if STRONG_WORD.search(text):
         return True
@@ -387,7 +392,7 @@ class Notifier:
             return None
         if age > BRIEF_STALE_S:
             return None
-        return self._send(brief_payload(brief), cfg["targets"], "brief")
+        return self._send(brief_payload(brief, cfg["show_subject"]), cfg["targets"], "brief")
 
     # --- the light check ---------------------------------------------------
     def due(self, now=None):
@@ -477,7 +482,7 @@ class Notifier:
         st.update(last_check=now, seen=(seen + new_ids)[-SEEN_KEEP:], sent=sent, held=held)
         self.store.set_push_state(st)
         for it in singles:
-            self._send(alert_payload(it), cfg["targets"], "urgent")
+            self._send(alert_payload(it, cfg["show_subject"]), cfg["targets"], "urgent")
         if batch:
             self._send(batch_payload(batch), cfg["targets"], "urgent batch")
         self.log(f"Callsheet urgent check: {n_mail} threads, {n_slack} Slack DMs, {len(items)} urgent, "

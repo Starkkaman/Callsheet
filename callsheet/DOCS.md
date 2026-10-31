@@ -270,7 +270,7 @@ then has a `notify.mobile_app_<phone>` service, and Callsheet lists it. Pick one
   (sender and subject, or an event title).
 - **Urgent alerts between briefs**: every 10 minutes between call times Callsheet looks at new inbox mail
   (headers and Gmail's short preview) and at Slack DMs from your VIPs, with fixed rules and no AI. It alerts for
-  a VIP; for mail that says emergency or ASAP, or urgent or today together with a deadline ("due", "by 5pm",
+  a VIP; for mail that says urgent, emergency or ASAP, or today together with a deadline ("due", "by 5pm",
   "end of day"); and for a sender saying something was approved, paid or signed. Newsletters, automated mail,
   Gmail's other tabs and senders you marked "Doesn't need a reply" are skipped. Each message alerts once; at
   most 3 an hour by default (the rest are grouped into one alert); never in quiet hours (22:00 to 07:00 by
@@ -278,7 +278,8 @@ then has a `notify.mobile_app_<phone>` service, and Callsheet lists it. Pick one
 
 A notification shows who wrote and the subject only. Tapping it opens Callsheet in the Home Assistant app.
 Home Assistant delivers it through Apple's or Google's push service, so the sender's name and the subject pass
-through that service. Use **Send a test notification** to check; if Home Assistant no longer knows a phone,
+through that service. Turn off **Show the subject in notifications** to send the sender's name only ("New urgent
+message from Priya"). Use **Send a test notification** to check; if Home Assistant no longer knows a phone,
 open the Home Assistant app on it or pick another phone.
 
 ## Your data

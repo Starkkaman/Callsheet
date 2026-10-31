@@ -7,11 +7,12 @@
   or more. "At call times" sends a short note after each scheduled brief: how many replies and events, and
   the top item's sender and subject (or event title). "Urgent alerts between briefs" looks every 10 minutes
   between call times, without AI, at new inbox mail (headers and Gmail's short preview only) and at Slack DMs
-  from your VIPs. It alerts for a VIP, for mail that says emergency or ASAP, or urgent or today together with a
+  from your VIPs. It alerts for a VIP, for mail that says urgent, emergency or ASAP, or today together with a
   deadline, and for a sender saying something has been approved, paid or signed. Each message alerts once, at
   most 3 alerts an hour (you can change it; more are grouped into one "N more urgent messages" alert), never
   in quiet hours (default 22:00 to 07:00) and not on days off when check-ins skip them. A notification shows
-  only who wrote and the subject, never the message text; tapping it opens Callsheet in the Home Assistant
+  only who wrote and the subject, never the message text ("Show the subject in notifications" off: the
+  sender's name only, as notification text passes through Apple's or Google's push service); tapping it opens Callsheet in the Home Assistant
   app. "Send a test notification" checks the setup, and problems (a phone Home Assistant no longer knows, no
   access) are shown in plain words. The app now asks Home Assistant for API access (`homeassistant_api`):
   Callsheet uses it only to list the phones and to send to them.

@@ -2094,7 +2094,7 @@
     if (!PUSH.data && !PUSH.err && !PUSH.loading) loadPush();
     var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'push-h' }, 'Phone notifications')]);
     var intro = h('p', { class: 'note' }, 'Through the Home Assistant app on your phone. A notification says who wrote and the subject, ' +
-      'never the message itself. Home Assistant delivers it through Apple’s or Google’s push service.');
+      'never the message itself.');
     var d = PUSH.data;
     if (!d) {
       return h('div', { class: 'where push', role: 'region', 'aria-labelledby': 'push-h' }, [head, intro,
@@ -2142,6 +2142,10 @@
       patch(function () { return { urgent: !((PUSH.data.settings || {}).urgent) }; }, [urg], 'p-urgent');
     });
     urg.setAttribute('data-fk', 'p-urgent');
+    var subj = sw(c.show_subject !== false, 'Show the subject in notifications', function () {
+      patch(function () { return { show_subject: ((PUSH.data.settings || {}).show_subject === false) }; }, [subj], 'p-subj');
+    });
+    subj.setAttribute('data-fk', 'p-subj');
     var qErr = errBox();
     function timeIn(id, key) {
       var inp = on(h('input', { class: 'inp', type: 'time', id: id, value: c[key] || '', 'data-fk': id }), 'change', function () {
@@ -2173,8 +2177,10 @@
       h('p', { class: 'note' }, 'After each scheduled brief: how many replies and events, and the top item. Tap it to open Callsheet.'),
       h('div', { class: 'swrow' }, [urg, h('span', { 'aria-hidden': 'true' }, 'Urgent alerts between briefs')]),
       h('p', { class: 'note' }, 'Every ' + every + ' minutes between call times Callsheet looks at new mail and Slack DMs, without AI. ' +
-        'It alerts for a VIP, for mail that says urgent or ASAP with a deadline, or for a sender saying something is approved, paid or signed. ' +
+        'It alerts for a VIP, for mail that says urgent, ASAP or emergency (or today with a deadline), or for a sender saying something is approved, paid or signed. ' +
         'Each message once. Not on days off when check-ins skip them, and not in quiet hours.'),
+      h('div', { class: 'swrow' }, [subj, h('span', { 'aria-hidden': 'true' }, 'Show the subject in notifications')]),
+      h('p', { class: 'note' }, 'Notification text passes through Apple’s or Google’s push service. Off: the sender’s name only (“New urgent message from Priya”).'),
       h('div', { class: 'pfields' }, [
         h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qs' }, 'Quiet hours from'), timeIn('p-qs', 'quiet_start')]),
         h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qe' }, 'Quiet hours until'), timeIn('p-qe', 'quiet_end')]),
