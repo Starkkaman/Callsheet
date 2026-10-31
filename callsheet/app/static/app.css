@@ -899,3 +899,12 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .mem .memfoot .tbtn{color:var(--alert)}
 @container pane (max-width:640px){.bv .pgrid{grid-template-columns:1fr}}
 @media (max-width:700px){.bv .pgrid{grid-template-columns:1fr}}
+/* 0.5.1: Setup → Delivery → Phone notifications (.push) */
+.push{margin-top:34px;padding-top:18px;border-top:var(--rule-mid) solid var(--rule);max-width:860px}
+.push .chips{margin-top:2px}
+.push .chip{text-transform:none;letter-spacing:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.push .chip[aria-pressed=false]{background:transparent;color:var(--text);box-shadow:inset 0 0 0 1px var(--rule)}
+.push .chip.gone,.push .chip.gone[aria-pressed=true]{background:transparent;color:var(--alert);box-shadow:inset 0 0 0 1px var(--alert)}
+.push .pfields{display:flex;flex-wrap:wrap;gap:0 18px;align-items:end;margin-top:14px}
+.push .pfields .field{flex:1 1 140px;max-width:220px;min-width:0;margin-bottom:8px}
+.push .testrow{margin-top:6px}

@@ -17,6 +17,7 @@ import urllib.parse
 import zoneinfo
 
 import evaluate
+import push
 import writer
 
 SCHEMA_VERSION = 1
@@ -996,6 +997,28 @@ class Store:
 
     def set_last_writer(self, value):
         self._set_meta("last_writer", value)
+
+    # --- 0.5.1: phone notifications (push.py) ------------------------------
+    def push_config(self):
+        """{targets, at_call_times, urgent, quiet_start, quiet_end, max_per_hour} (push.defaults)."""
+        return push.config_from(self._get_meta("push", {}))
+
+    def update_push(self, patch):
+        with self.lock:
+            try:
+                c = push.patch_config(self.push_config(), patch)
+            except push.Invalid as err:
+                raise InputError(str(err)) from None
+            self._set_meta("push", c)
+        return c
+
+    def push_state(self):
+        """The light check's state: last_check, seen ids, sent times, held count, last_sent, last_error."""
+        v = self._get_meta("push_state", {})
+        return v if isinstance(v, dict) else {}
+
+    def set_push_state(self, value):
+        self._set_meta("push_state", value)
 
     # --- sync results ---------------------------------------------------
     def last_sync(self):

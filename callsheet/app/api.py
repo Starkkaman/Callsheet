@@ -15,6 +15,8 @@ import memory
 import writer
 
 import google
+import ha
+import push
 import rules
 import slack
 from oauth import OAuthFlows
@@ -61,7 +63,8 @@ class App:
         self._apply_options(data_dir)
         self.flows = OAuthFlows(self.store, clock=clock)
         self.syncer = Syncer(self.store, clock=clock)
-        self.scheduler = Scheduler(self.store, self.syncer, clock=clock)
+        self.notifier = push.Notifier(self.store, self.syncer, clock=clock)  # 0.5.1 phone notifications
+        self.scheduler = Scheduler(self.store, self.syncer, clock=clock, notifier=self.notifier)
         self.evaluator = evaluate.Evaluator(self.store, self.syncer, clock=clock)
         self.memory = self.syncer.memory  # memory.md (0.5.0): one object, one lock
         self.routes = [
@@ -105,7 +108,7 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
-        ] + self._memory_routes()
+        ] + self._memory_routes() + self._push_routes()
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -175,6 +178,53 @@ class App:
                 ("POST", r"memory/notes", self.add_note),
                 ("PATCH", r"memory/notes/(n[0-9a-f]{6,12})", self.patch_note),
                 ("DELETE", r"memory/notes/(n[0-9a-f]{6,12})", self.delete_note)]
+
+    # --- 0.5.1: phone notifications through Home Assistant (push.py, ha.py) ------------------------------------
+    def _push_routes(self):
+        return [("GET", r"push", self.get_push),
+                ("PATCH", r"push", self.patch_push),
+                ("GET", r"push/targets", self.push_targets),
+                ("POST", r"push/test", self.push_test)]
+
+    def _push_out(self):
+        st = self.store.push_state()
+        cfg = self.store.push_config()
+        return {"settings": cfg, "names": {t: ha.friendly(t) for t in cfg["targets"]},
+                "available": ha.available(), "link": push.ingress_path(),
+                "last_sent": st.get("last_sent"), "last_error": st.get("last_error"),
+                "every_min": push.CHECK_EVERY_S // 60, "max_targets": push.MAX_TARGETS}
+
+    def get_push(self, _body=None):
+        return self._push_out()
+
+    def patch_push(self, body):
+        self.store.update_push(_obj(body))
+        return self._push_out()
+
+    def push_targets(self, _body=None):
+        """The phones Home Assistant lists (notify.mobile_app_*), with friendly names."""
+        if not ha.available():
+            return {"available": False, "targets": [], "error": ha.NOT_IN_HA}
+        try:
+            return {"available": True, "targets": ha.notify_targets(), "error": None}
+        except ha.HAError as e:
+            raise UpstreamError(str(e)) from None
+
+    def push_test(self, _body=None):
+        try:
+            sent, errors = self.notifier.test()
+        except ha.HAError as e:
+            if e.code in ("none", "unavailable"):
+                raise InputError(str(e)) from None
+            raise UpstreamError(str(e)) from None
+        n = len(self.store.push_config()["targets"])
+        if not errors:
+            msg = "Sent. Check your phone." if n == 1 else f"Sent to {n} phones. Check them."
+        elif sent:
+            msg = f"Sent to {sent} of {n} phones. " + " ".join(dict.fromkeys(errors))
+        else:
+            msg = " ".join(dict.fromkeys(errors))
+        return dict(self._push_out(), ok=not errors, message=msg)
 
     def _mem(self, fn, *args):
         try:
@@ -269,7 +319,7 @@ class App:
                 "suppress": self.store.suppress_rules(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
-                "eval": self.store.eval_settings(), "version": APP_VERSION,
+                "eval": self.store.eval_settings(), "push": self.store.push_config(), "version": APP_VERSION,
                 "setup_done": self.store.setup_done() or (client["configured"] and bool(accounts))}
 
     # --- Google client ----------------------------------------------------

@@ -1637,8 +1637,8 @@
       h('p', { class: 'intro' }, 'Where the brief shows up.'),
       h('div', { class: 'opts' }, [
         row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
-        row(false, 'Phone push', 'via the Home Assistant app', 'Coming later')]),
-      writerBlock(), writingBlock(), memoryBlock()];
+        row(pushOn(), 'Phone notifications', 'via the Home Assistant app · set up below', pushOn() ? 'On' : 'Off')]),
+      pushBlock(), writerBlock(), writingBlock(), memoryBlock()];
   }
 
   /* step 5: writing instructions. Profiles (Default is built in and read-only); five texts per profile, each saved
@@ -1981,7 +1981,7 @@
       plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
         ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
       timesSum,
-      'Sidebar page in Home Assistant · Writer: ' + writerName(writerOf()) + profileLine()];
+      'Sidebar page in Home Assistant' + (pushOn() ? ' · Phone notifications' : '') + ' · Writer: ' + writerName(writerOf()) + profileLine()];
     var ls = S.last_sync || {};
     var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () {
       run([refresh, goB], err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="sync"]'); });
@@ -2067,6 +2067,129 @@
         h('div', { class: 'lh', id: 'mem-lock' }, [ico('lock'), 'Sent with your notes (can’t be changed)']),
         h('p', { class: 'fixtext' }, m.rule || ''),
         h('p', { class: 'muted' }, 'Your notes go to the writer in their own block, apart from mail and chat. The safety rules still come first.')])]);
+  }
+
+  /* ---------- 0.5.1: Setup → Delivery → Phone notifications (through Home Assistant's notify.mobile_app_*) ----------
+     GET api/push (settings, available, last sent/error) and GET api/push/targets (the phones Home Assistant lists)
+     when the step is shown; each change is PATCH api/push; "Send a test notification" = POST api/push/test.
+     Errors from Home Assistant come back as plain sentences and are shown as they are (textContent). */
+  var PUSH = { data: null, targets: null, tErr: null, err: null, seq: 0, loading: false };
+  function loadPush() {
+    var seq = ++PUSH.seq;
+    PUSH.loading = true;
+    function done() { PUSH.loading = false; if (seq === PUSH.seq && ui.view === 'setup' && ui.step === 5) renderSetup(); }
+    var a = api('GET', 'api/push').then(function (r) { if (seq === PUSH.seq) { PUSH.data = r; PUSH.err = null; } },
+      function (e) { if (seq === PUSH.seq) PUSH.err = e && e.message ? e.message : 'error'; });
+    var b = api('GET', 'api/push/targets').then(function (r) {
+      if (seq !== PUSH.seq) return;
+      PUSH.targets = (r && r.targets) || []; PUSH.tErr = r && r.available === false ? null : (r && r.error) || null;
+    }, function (e) { if (seq === PUSH.seq) { PUSH.targets = null; PUSH.tErr = e && e.message ? e.message : 'error'; } });
+    return Promise.all([a, b]).then(done, done);
+  }
+  function pushOn() {
+    var c = (PUSH.data && PUSH.data.settings) || (S && S.push) || {};
+    return !!((c.targets || []).length && (c.at_call_times || c.urgent));
+  }
+  function pushBlock() {
+    if (!PUSH.data && !PUSH.err && !PUSH.loading) loadPush();
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'push-h' }, 'Phone notifications')]);
+    var intro = h('p', { class: 'note' }, 'Through the Home Assistant app on your phone. A notification says who wrote and the subject, ' +
+      'never the message itself.');
+    var d = PUSH.data;
+    if (!d) {
+      return h('div', { class: 'where push', role: 'region', 'aria-labelledby': 'push-h' }, [head, intro,
+        PUSH.err ? h('p', { class: 'err', role: 'alert' }, ['Couldn’t load the phone settings (' + PUSH.err + '). ',
+          btn('tbtn', 'Try again', null, function () { PUSH.err = null; loadPush(); })]) : h('p', { class: 'muted' }, 'Loading…')]);
+    }
+    var c = d.settings || {}, err = errBox();
+    function patch(body, btns, focusKey, e) {
+      return run(btns || [], e || err, function () { return api('PATCH', 'api/push', typeof body === 'function' ? body() : body); }, function (r) {
+        PUSH.data = r || PUSH.data; if (S) S.push = PUSH.data.settings;
+        renderSetup(focusKey ? '[data-fk="' + cssq(focusKey) + '"]' : null);
+      });
+    }
+    /* phones: Home Assistant's list, plus saved ones it no longer lists (shown so they can be removed) */
+    var listed = PUSH.targets || [], saved = c.targets || [], max = Number(d.max_targets) || 5;
+    var names = {}, savedNames = d.names || {};
+    listed.forEach(function (t) { names[t.id] = t.name; });
+    var all = listed.map(function (t) { return t.id; });
+    saved.forEach(function (id) { if (all.indexOf(id) < 0 && PUSH.targets) all.push(id); });
+    var chips = all.map(function (id) {
+      var sel = saved.indexOf(id) >= 0, gone = PUSH.targets && !names[id];
+      var label = (names[id] || savedNames[id] || id) + (gone ? ' · not found' : '');
+      return btn('chip' + (gone ? ' gone' : ''), label, { 'aria-pressed': String(sel), 'data-fk': 'pt:' + id, title: 'notify.' + id }, function (e) {
+        patch(function () {
+          var cur = ((PUSH.data && PUSH.data.settings) || {}).targets || [];
+          return { targets: sel ? cur.filter(function (x) { return x !== id; }) : cur.concat([id]) };
+        }, [e.currentTarget], 'pt:' + id);
+      });
+    });
+    var tErr = PUSH.tErr ? h('p', { class: 'err', role: 'alert' }, [PUSH.tErr + ' ',
+      btn('tbtn', 'Try again', { 'data-fk': 'pt-again' }, function () { PUSH.tErr = null; loadPush(); })]) : null;
+    var phones = h('div', { class: 'field', role: 'group', 'aria-labelledby': 'push-to' }, [
+      h('span', { class: 'label', id: 'push-to' }, 'Send to (up to ' + max + ')'),
+      chips.length ? h('div', { class: 'chips' }, chips)
+        : !d.available ? null
+        : PUSH.targets ? h('p', { class: 'muted' }, 'Home Assistant lists no phones yet. Install the Home Assistant app on your phone and sign in, then reload this page.')
+        : null,
+      saved.length && !PUSH.targets ? h('p', { class: 'muted' }, 'Saved: ' + saved.map(function (id) { return savedNames[id] || id; }).join(', ')) : null,
+      tErr]);
+    var calls = sw(c.at_call_times, 'At call times', function () {
+      patch(function () { return { at_call_times: !((PUSH.data.settings || {}).at_call_times) }; }, [calls], 'p-calls');
+    });
+    calls.setAttribute('data-fk', 'p-calls');
+    var urg = sw(c.urgent, 'Urgent alerts between briefs', function () {
+      patch(function () { return { urgent: !((PUSH.data.settings || {}).urgent) }; }, [urg], 'p-urgent');
+    });
+    urg.setAttribute('data-fk', 'p-urgent');
+    var subj = sw(c.show_subject !== false, 'Show the subject in notifications', function () {
+      patch(function () { return { show_subject: ((PUSH.data.settings || {}).show_subject === false) }; }, [subj], 'p-subj');
+    });
+    subj.setAttribute('data-fk', 'p-subj');
+    var qErr = errBox();
+    function timeIn(id, key) {
+      var inp = on(h('input', { class: 'inp', type: 'time', id: id, value: c[key] || '', 'data-fk': id }), 'change', function () {
+        if (!inp.value) { qErr.textContent = 'Pick a time.'; return; }
+        var b = {}; b[key] = inp.value.slice(0, 5);
+        patch(b, [], id, qErr);
+      });
+      return inp;
+    }
+    var perHour = on(h('select', { class: 'inp', id: 'p-max', 'data-fk': 'p-max' }, [1, 2, 3, 4, 5, 6, 8, 10].map(function (n) {
+      return h('option', { value: String(n), selected: n === Number(c.max_per_hour) }, String(n));
+    })), 'change', function () { patch({ max_per_hour: parseInt(perHour.value, 10) }, [perHour], 'p-max', qErr); });
+    var res = h('span', { class: 'testres', role: 'status' }), tstErr = errBox();
+    var test = btn('act', 'Send a test notification', { 'data-fk': 'p-test', disabled: !saved.length || !d.available }, function () {
+      res.textContent = 'Sending…';
+      run([test], tstErr, function () { return api('POST', 'api/push/test', {}); }, function (r) {
+        PUSH.data = r || PUSH.data;
+        res.textContent = '';
+        add(res, [h('span', { class: 'st' + (r && r.ok ? '' : ' warn') }, r && r.ok ? 'Sent' : 'Didn’t work'), ' ', (r && r.message) || '']);
+      }).then(function () { if (res.textContent === 'Sending…') res.textContent = ''; });
+    });
+    var le = d.last_error, ls = d.last_sent;
+    var KIND = { brief: 'brief summary', urgent: 'urgent alert', 'urgent batch': 'urgent alerts', test: 'test' };
+    var every = Number(d.every_min) || 10;
+    return h('div', { class: 'where push', role: 'region', 'aria-labelledby': 'push-h' }, [head, intro,
+      d.available ? null : h('p', { class: 'syncst bad' }, 'Phone notifications work when Callsheet runs as a Home Assistant app.'),
+      phones, err,
+      h('div', { class: 'swrow' }, [calls, h('span', { 'aria-hidden': 'true' }, 'At call times')]),
+      h('p', { class: 'note' }, 'After each scheduled brief: how many replies and events, and the top item. Tap it to open Callsheet.'),
+      h('div', { class: 'swrow' }, [urg, h('span', { 'aria-hidden': 'true' }, 'Urgent alerts between briefs')]),
+      h('p', { class: 'note' }, 'Every ' + every + ' minutes between call times Callsheet looks at new mail and Slack DMs, without AI. ' +
+        'It alerts for a VIP, for mail that says urgent, ASAP or emergency (or today with a deadline), or for a sender saying something is approved, paid or signed. ' +
+        'Each message once. Not on days off when check-ins skip them, and not in quiet hours.'),
+      h('div', { class: 'swrow' }, [subj, h('span', { 'aria-hidden': 'true' }, 'Show the subject in notifications')]),
+      h('p', { class: 'note' }, 'Notification text passes through Apple’s or Google’s push service. Off: the sender’s name only (“New urgent message from Priya”).'),
+      h('div', { class: 'pfields' }, [
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qs' }, 'Quiet hours from'), timeIn('p-qs', 'quiet_start')]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qe' }, 'Quiet hours until'), timeIn('p-qe', 'quiet_end')]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-max' }, 'Urgent alerts per hour'), perHour])]),
+      qErr,
+      h('p', { class: 'note' }, 'More than that in an hour are grouped into one “more urgent messages” alert.'),
+      h('div', { class: 'testrow' }, [test, res]), tstErr,
+      le && le.text ? h('p', { class: 'syncst bad', role: 'status' }, 'Last problem ' + fmtWhen(le.at, true) + ': ' + le.text)
+        : h('p', { class: 'syncst', role: 'status' }, ls && ls.at ? 'Last sent ' + fmtWhen(ls.at, true) + ' (' + (KIND[ls.kind] || 'notification') + ').' : 'Nothing sent yet.')]);
   }
 
   /* ---------- writer evaluation (#eval): owner-run contenders (0.5.0), blind A/B, from Setup, Delivery, Advanced ---------- */
