@@ -198,6 +198,35 @@ class LocalNativeTest(Base):
         self.assertEqual((b["chat_template_kwargs"], b["reasoning_budget_tokens"], b["max_tokens"]),
                          ({"enable_thinking": True}, chat.REASONING_BUDGET, 2048 + chat.REASONING_BUDGET))
 
+    def test_empty_reply_after_a_tool_round_is_asked_once_more_without_tools(self):
+        # 061 S5: Gemma answered a tool result with empty content, finish "stop" (4 tokens)
+        self.local.messages = [tool_msg(call("c1", "search", {"person": "Jonas"})), say(""),
+                               say("Jonas sent invoice 2291 [%d]." % self.ids["Invoice"])]
+        _, msg = self.ask("find Jonas's messages")
+        b = self.bodies()
+        self.assertEqual(len(b), 3)
+        self.assertEqual([x["tool_choice"] for x in b], ["auto", "auto", "none"])
+        self.assertEqual(b[-1]["messages"][-1], {"role": "user", "content": chat.EMPTY_NOTE})
+        self.assertFalse(any(m.get("role") == "assistant" and not m.get("content") and not m.get("tool_calls")
+                             for m in b[-1]["messages"]))  # the empty reply isn't sent back
+        self.assertEqual(msg["text"], "Jonas sent invoice 2291.")
+        self.assertEqual([x["id"] for x in msg["sources"]], [self.ids["Invoice"]])
+        self.assertNotIn("error", msg)
+
+    def test_still_empty_or_a_tool_call_on_the_retry_gives_a_plain_sentence(self):
+        for second in (say("  "), tool_msg(call("c2", "stats", {}))):
+            self.local.requests.clear()
+            self.local.messages = [tool_msg(call("c1", "stats", {})), say(""), second]
+            conv, msg = self.ask("Count?")
+            self.assertEqual(len(self.bodies()), 3)
+            self.assertEqual(msg["text"], chat.NO_ANSWER)
+            self.assertEqual((msg["ctx"], msg["sources"]), ("", []))
+            self.assertNotIn("error", msg)
+            # a blank answer never goes back as history
+            self.local.messages = [say("Six.")]
+            self.ask("again", cid=conv["id"])
+            self.assertEqual([m["content"] for m in self.bodies()[-1]["messages"][1:]], ["again"])
+
     def test_server_errors_are_plain_sentences(self):
         self.local.status = 401
         _, msg = self.ask("Anything?")
@@ -464,6 +493,9 @@ class ClaudeTest(Base):
         last = fake.calls[-1]
         self.assertEqual(last["tool_choice"], {"type": "none"})
         self.assertEqual(last["messages"][-1]["content"][-1], {"type": "text", "text": chat.FINAL_NOTE})
+        fake3 = FakeClaude([ns_resp("end_turn", {"type": "text", "text": " "})])
+        _, msg = self.ask("y", c=self.make_chat(claude_client=lambda k: fake3))
+        self.assertEqual(msg["text"], chat.NO_ANSWER)  # never a blank answer
         fake2 = FakeClaude([ns_resp("refusal")])
         _, msg = self.ask("x", c=self.make_chat(claude_client=lambda k: fake2))
         self.assertEqual(msg["error"], "Claude declined to answer this question.")
