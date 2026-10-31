@@ -52,9 +52,10 @@ class PromptOrderTest(unittest.TestCase):
         self.assertEqual(writer.NEVER_CLAIM, writer.LOCAL_RULE)
         for ask in (None, self.ask):
             text = writer.local_system(["r1"], ask)
-            # 0.4.1: the sender's-claim sentence follows the never-claim sentence at once (AFTER_DRAFTS)
+            # 0.4.1: the sender's-claim sentence follows the never-claim sentence at once (AFTER_DRAFTS); 0.5.2: then
+            # the relay sentence
             self.assertIn("Suggested replies:\n" + writer.DEFAULT_PROMPTS["drafts"] + "\n\n" + writer.NEVER_CLAIM
-                          + " " + writer.SENDER_CLAIM + "\n\n" + writer.EXAMPLES + "\n\n" + writer.SAFETY + "\n\nAnswer with one JSON object", text)
+                          + " " + writer.SENDER_CLAIM + " " + writer.RELAY_CLAIM + "\n\n" + writer.EXAMPLES + "\n\n" + writer.SAFETY + "\n\nAnswer with one JSON object", text)
             self.assertTrue(text.endswith("\n\n" + writer.LOCAL_RULE))  # LOCAL_RULE last
             self.assertEqual(text.count(writer.SAFETY), 1)
 

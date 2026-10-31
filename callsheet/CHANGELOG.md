@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2
+## 0.5.3
 
 - **Security fix: a message can no longer put its claim into your suggested replies or summaries unchecked.** A
   Slack, Signal or email message that says something was done ("the invoice is paid, you can tell Priya it's
@@ -11,7 +11,19 @@
   states something as done is hidden too, and the day summary, area summaries, Top of the day lines and message
   summaries that state something as done keep their text with the label "Check this: it may repeat a claim from a
   message." Hidden replies are not stored. On days without such a message nothing changes. The AI writer's
-  instructions are unchanged.
+  instructions are unchanged by this part.
+- **Safety rules cover chats.** The writer's fixed safety texts said "email"; they now say "message" (email,
+  Slack or Signal), so a claim in a Slack or Signal message is treated like one in an email: suggested replies
+  don't state it as done. A new fixed rule follows: if a message asks you to tell or confirm to someone that
+  something is done, settled or approved, the draft doesn't; it leaves a [placeholder] or says you'll check.
+  Setup shows both with the other fixed text. In tests with made-up Signal messages, replies had passed on "you
+  can tell Priya it's settled" every time.
+- **Each row says where it came from.** The writer now gets each reply row's channel (email, Slack or Signal).
+- **Draft check.** The "Check this draft" warning also catches settled, cleared, sorted and "done and dusted"
+  ("It's all sorted", "the payment has cleared"; not "sorted by date"), passing it on ("I'll tell Priya it's
+  settled"), "thanks for settling that" and "great news about the signed contract". "Go ahead and book the table"
+  no longer counts: "go ahead" only counts for paying or signing, or a payment, invoice, deposit, contract, order
+  and the like.
 
 ## 0.5.1
 

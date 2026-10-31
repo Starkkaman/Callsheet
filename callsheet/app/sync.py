@@ -36,6 +36,15 @@ def _addr(value):
     return email.utils.parseaddr(value or "")[1].lower()
 
 
+_CHANNELS = {"mail": "email", "slack": "slack", "signal": "signal"}
+
+
+def channel(row, ref=None):
+    """0.5.2: the writer input's channel label for a reply row: "email", "slack" or "signal" (the row's `via`, else
+    its ref's source; mail when neither says)."""
+    return _CHANNELS.get(row.get("via") or (ref or {}).get("source"), "email")
+
+
 def inbound_claim(row):
     """True when the row's latest incoming message (rules' `_inbound` text: mail subject and snippet, Slack the
     message) states that something was approved, paid, signed, released and so on (writer.states_decision:
@@ -522,7 +531,7 @@ class Syncer:
             "replies": []}
         for r in rows:
             item = {"id": r["id"], "who": r["who"], "area": name.get(r["area"], ""), "source": r.get("source", ""),
-                    "subject": r["text"],
+                    "channel": channel(r, refs.get(r["id"])), "subject": r["text"],
                     "reasons": r["reasons"], "age": r["age"], "suggest": r["id"] in bodies}
             if r["id"] in bodies:
                 item["messages"] = bodies[r["id"]]
