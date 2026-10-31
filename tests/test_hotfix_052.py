@@ -140,6 +140,130 @@ class GuardRulesTest(unittest.TestCase):
         self.assertEqual(b["summary"]["top_check"], ["r1"])
 
 
+SASHA = row("r7", claim=True, who="Sasha Standin", text="\"Contract's signed, so we're good to go on the shoot\"")
+NICO = row("r8", claim=True, who="Nico Notreal",
+           text="\"The invoice is paid, I sent it this morning — you can tell Priya it's settled\"")
+JAMIE = row("r4", who="Jamie Jest", text="\"Still on for dinner Saturday?\"")
+# 0.5.3: what Gemma wrote in the day summary of signal053 (run 10), not flagged by the post-check
+REAL = ("There are several replies waiting, including a question from Jamie Jest about Saturday dinner and a message "
+        "from Sasha Standin about a signed contract.",
+        "A message from Nico Notreal regarding a paid invoice needs a follow-up to Priya.")
+BENIGN = ("Sasha Standin is waiting for a reply about the shoot.",          # the sender, no done word
+          "Nico Notreal sent a message about the van hire.",                # "sent" is not a done word here
+          "Nico wants to know if the invoice is paid.",                     # a condition
+          "Sasha Standin hasn't signed the contract yet.",                  # a negation
+          "Did Sasha send the signed contract?",                            # a question
+          "Nico Notreal: the van hire is [paid].",                          # [brackets]
+          "Jamie Jest booked a table for Saturday.",                        # Jamie's row makes no claim
+          "Two replies about the shoot wait.")                              # subject words, no done word
+
+
+class SenderSubjectRuleTest(unittest.TestCase):
+    """0.5.3 (rule 3): with a claim row in the brief, a day summary / area / Top of the day sentence that names a
+    claim row's sender or subject together with a done word is marked "Check this" too."""
+
+    def guard(self, text, rows=None):
+        rows = rows if rows is not None else [copy.deepcopy(SASHA), copy.deepcopy(NICO), copy.deepcopy(JAMIE)]
+        return sync.guard_claims(brief(rows, {"text": text, "areas": {"home": text},
+                                              "top": [{"text": text, "ref": "r4"}]}))["summary"]
+
+    def test_real_sentences_are_marked_everywhere(self):
+        for text in REAL:
+            self.assertFalse(writer.states_decision(text))  # the post-check alone misses them
+            s = self.guard(text)
+            self.assertIs(s.get("check"), True, text)
+            self.assertEqual(s.get("areas_check"), ["home"], text)
+            self.assertEqual(s.get("top_check"), ["r4"], text)
+            self.assertEqual(s["text"], text)  # the text is kept
+
+    def test_one_sentence_in_a_paragraph_is_enough(self):
+        text = "Cyril Sample waits 8 days. " + REAL[1] + " Otto needs a decision by Wednesday."
+        self.assertIs(self.guard(text).get("check"), True)
+
+    def test_first_name_and_done_noun_phrases(self):
+        for text in ("A message from Nico about the settled bill.", "Sasha mentioned the countersigned contract.",
+                     "Nico Notreal says it's all done and dusted with the van hire."):
+            self.assertIs(self.guard(text).get("check"), True, text)
+
+    def test_benign_look_alikes_stay_unmarked(self):
+        for text in BENIGN:
+            s = self.guard(text)
+            self.assertEqual(set(s), {"text", "areas", "top"}, text)
+
+    def test_names_match_whole_words_with_their_capitals(self):
+        al = row("r1", claim=True, who="Al Rivera", text="Venue")
+        for text in ("Also approved: the venue for Friday.", "The rivera paid parking is full."):
+            self.assertFalse(writer.states_decision(text))
+            self.assertNotIn("check", self.guard(text, [al]), text)
+        self.assertIs(self.guard("Al approved the plan for the venue.", [copy.deepcopy(al)]).get("check"), True)
+
+    def test_subject_needs_two_significant_words(self):
+        gus = row("r1", claim=True, who="Gus Dummy", text="Re: Quick question about the kitchen quote")
+        self.assertIs(self.guard("A note on the approved kitchen quote.", [gus]).get("check"), True)
+        for text in ("The kitchen quote call is at 10:00.",       # no done word
+                     "A note on the approved kitchen budget.",     # one subject word
+                     "A quick question about the approved plan."):  # stop words only
+            self.assertFalse(writer.states_decision(text))
+            self.assertNotIn("check", self.guard(text, [copy.deepcopy(gus)]), text)
+
+    def test_needs_a_claim_row(self):
+        rows = [row("r7", who="Sasha Standin", text=SASHA["text"]), row("r8", who="Nico Notreal", text=NICO["text"])]
+        b = brief(rows, {"text": " ".join(REAL), "areas": {"home": REAL[0]}, "top": [{"text": REAL[1], "ref": "r8"}]})
+        self.assertEqual(sync.guard_claims(copy.deepcopy(b)), b)
+
+    def test_unknown_sender_and_addresses(self):
+        anon = row("r1", claim=True, who="Unknown sender", text="\"Hi\"")
+        self.assertNotIn("check", self.guard("An unknown sender asked about the approved plan.", [anon]))
+        mail = row("r1", claim=True, who="nico@x.example", text="Hello")
+        self.assertIs(self.guard("A note from nico@x.example about a paid invoice.", [mail]).get("check"), True)
+
+
+class ClaimGistDetailsTest(unittest.TestCase):
+    """0.5.3 (rule 5): a claim row's gist loses the details that quote or state a done claim; nothing else changes."""
+    PAID = {"label": "Status", "value": "The invoice is paid, I sent it this morning — you can tell Priya it's "
+                                        "settled"}
+    SIGNED = {"label": "status", "value": "Contract's signed"}
+    ABOUT = {"label": "About", "value": "the signed contract"}  # a done word the post-check doesn't flag
+    TIME = {"label": "Time", "value": "this morning"}
+
+    def test_done_claim_details_dropped_others_kept(self):
+        self.assertFalse(writer.states_decision("About: the signed contract"))
+        r = dict(copy.deepcopy(NICO), gist={"summary": "Nico asks about the van hire.",
+                                            "details": [self.PAID, self.TIME, self.SIGNED, self.ABOUT]})
+        b = sync.guard_claims(brief([r]))
+        self.assertEqual(b["replies"][0]["gist"], {"summary": "Nico asks about the van hire.", "details": [self.TIME]})
+        dumped = json.dumps(b)
+        for word in ("signed", "settled", "paid"):
+            self.assertNotIn(word, dumped.replace(json.dumps(NICO["text"])[1:-1], ""))
+
+    def test_summary_still_marked_details_gone(self):
+        r = dict(copy.deepcopy(SASHA), gist={"summary": "Sasha says the contract is signed.", "details": [self.SIGNED]})
+        g = sync.guard_claims(brief([r]))["replies"][0]["gist"]
+        self.assertEqual(g, {"summary": "Sasha says the contract is signed.", "details": [], "check": True})
+
+    def test_no_check_left_when_only_a_dropped_detail_was_flagged(self):
+        r = dict(copy.deepcopy(SASHA), gist={"summary": "Sasha writes about the shoot.", "details": [self.SIGNED,
+                                                                                                    self.TIME]})
+        g = sync.guard_claims(brief([r]))["replies"][0]["gist"]
+        self.assertEqual(g, {"summary": "Sasha writes about the shoot.", "details": [self.TIME]})
+
+    def test_other_rows_details_kept_and_marked_as_before(self):
+        other = row("r2", gist={"summary": "Ana asks about lunch.", "details": [self.SIGNED, self.ABOUT]})
+        b = sync.guard_claims(brief([copy.deepcopy(SASHA), other]))
+        self.assertEqual(b["replies"][1]["gist"]["details"], [self.SIGNED, self.ABOUT])
+        self.assertIs(b["replies"][1]["gist"]["check"], True)
+
+    def test_without_a_claim_details_unchanged(self):
+        b = brief([row("r8", who="Nico Notreal", gist={"summary": "Nico.", "details": [self.PAID, self.ABOUT]})])
+        self.assertEqual(sync.guard_claims(copy.deepcopy(b)), b)
+
+    def test_idempotent(self):
+        r = dict(copy.deepcopy(NICO), gist={"summary": "Nico.", "details": [self.PAID, self.TIME]})
+        b = sync.guard_claims(brief([r, copy.deepcopy(JAMIE)], {"text": REAL[1], "areas": {}, "top": []}))
+        once = json.dumps(b)
+        self.assertEqual(json.dumps(sync.guard_claims(b)), once)
+
+
 class ComposeTest(unittest.TestCase):
     NOW = dt.datetime(2026, 10, 30, 9, 0, tzinfo=UTC)
     SETTINGS = {"timezone": "UTC"}
@@ -232,6 +356,19 @@ class SyncEndToEndTest(WriterBase):
         self.assertNotIn("settled", stored)  # neither draft is stored
         self.assertNotIn(LEAK, json.dumps([r.get("suggestion") for r in self.app.store.cached_brief()["replies"]]))
         self.assertNotIn("I'll tell Priya", stored)
+
+    def test_053_sender_sentence_marked_and_claim_details_not_stored(self):
+        self.seed_rows(claim=True)
+        out = json.loads(self.loc.contents[0])
+        out["summary"] = "A message from Nico regarding a paid invoice needs a follow-up to Priya."
+        out["gists"]["r1"]["details"] = [{"label": "status", "value": "The van hire invoice is paid"},
+                                         {"label": "Who", "value": "Priya"}]  # verbatim, kept
+        self.loc.contents = [json.dumps(out)]
+        b = self.sync_brief()
+        self.assertIs(b["summary"]["check"], True)
+        nico = next(r for r in b["replies"] if r["who"] == "Nico")
+        self.assertEqual(nico["gist"]["details"], [{"label": "Who", "value": "Priya"}])
+        self.assertNotIn("The van hire invoice is paid", json.dumps(self.app.store.cached_brief()))
 
     def test_no_claim_brief_unchanged_byte_for_byte(self):
         self.seed_rows(claim=False)

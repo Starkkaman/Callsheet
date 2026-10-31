@@ -65,8 +65,8 @@ and sent in its own block after the facts: `<data>…</data>`, then `<facts>…<
 The block is JSON with `<` and `>` escaped, so a mail that contains `</notes>` or `<data>` stays inside `<data>`.
 
 `writer.NOTES_RULE`, a fixed sentence, follows the facts sentence only when notes are sent. Without notes,
-every prompt was byte-identical to 0.4.1's up to 0.5.1; since 0.5.2 (chat safety, `docs/chat-safety-0.5.2.md`) the
-fixed texts say "message" for "email" and the pinned shape is 0.5.2's. With notes the prompt differs only by
+every prompt was byte-identical to 0.4.1's up to 0.5.1; since 0.5.3 (chat safety, `docs/chat-safety-0.5.3.md`) the
+fixed texts say "message" for "email" and the pinned shape is 0.5.3's. With notes the prompt differs only by
 `NOTES_RULE` and the `<notes>` block (`tests/test_release_050_shape.py`). Both writers (Claude and local) and the writer evaluation
 (`Syncer.writer_data`) get the notes.
 

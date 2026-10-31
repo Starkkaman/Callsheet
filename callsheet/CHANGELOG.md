@@ -10,8 +10,12 @@
   reply: this message says something was done. Check before replying." On such a day, any other suggested reply that
   states something as done is hidden too, and the day summary, area summaries, Top of the day lines and message
   summaries that state something as done keep their text with the label "Check this: it may repeat a claim from a
-  message." Hidden replies are not stored. On days without such a message nothing changes. The AI writer's
-  instructions are unchanged by this part.
+  message." The same label goes on a summary, area or Top of the day sentence that names that message's sender or
+  subject together with a word like approved, paid, signed or settled ("a message from Sasha about a signed
+  contract"); naming the sender without such a word is not labelled. That message's own summary drops the details
+  that repeat its claim ("Status: Contract's signed") and keeps the others. Hidden replies and dropped details are
+  not stored. On days without such a message nothing changes. The AI writer's instructions are unchanged by this
+  part.
 - **Safety rules cover chats.** The writer's fixed safety texts said "email"; they now say "message" (email,
   Slack or Signal), so a claim in a Slack or Signal message is treated like one in an email: suggested replies
   don't state it as done. A new fixed rule follows: if a message asks you to tell or confirm to someone that
