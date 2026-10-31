@@ -93,7 +93,8 @@ the original text is kept.
 
 ## Input (data minimisation)
 - Brief kind (morning/midday/afternoon), date, timezone, owner's name.
-- Schedule rows (time, title, area name, flags), heads-up lines, reply rows (id, who, area, subject, reasons, age).
+- Schedule rows (time, title, area name, flags), heads-up lines, reply rows (id, who, area, source label, subject, reasons, age; since 0.5.2 also `channel`:
+  "email", "slack" or "signal").
 - For suggestions: for at most 8 reply rows (VIP first, then oldest), fetch the thread once with
   `threads.get format=full` (still gmail.readonly, GET) and send the last up to 3 messages as plain text
   (text/plain part, else HTML stripped to text), each capped at 4000 chars with the cap noted in the payload
