@@ -709,6 +709,21 @@ class SignalApiTest(Base):
         self.assertEqual(st, 400)
         self.assertIn("isn't a Signal export", body["error"])
 
+    def test_inbound_claim_on_signal_rows(self):
+        """The sender's-claim check covers Signal: the latest incoming message decides the row's claim flag."""
+        store = self.app.store
+        store.signal_update_meta(linked=True, number="+•••••••••67")
+        now = time.time()
+        for text, uid, want in (("Just so you know, the invoice has been paid.", "aaaaaaaa-0000-4000-8000-000000000011", True),
+                                ("Has the invoice been paid?", "aaaaaaaa-0000-4000-8000-000000000012", False)):
+            env = dm_env(text, int((now - 5 * H) * 1000), name="P" + uid[-2:], uuid_=uid, number="+155500000" + uid[-2:])
+            store.signal_add(signalcli.from_envelope(env, ME, store.signal_hash, now)[1], now)
+        self.app.store.update_writer({"provider": "off"})
+        self.ok("POST", "/api/sync")
+        rows = {r["who"]: r for r in self.ok("GET", "/api/brief")["replies"] if r.get("via") == "signal"}
+        self.assertIs(rows["P11"]["claim"], True)
+        self.assertIs(rows["P12"]["claim"], False)
+
     def test_rows_in_brief(self):
         store = self.app.store
         store.signal_update_meta(linked=True, number="+•••••••••67")
