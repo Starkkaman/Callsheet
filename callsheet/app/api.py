@@ -94,6 +94,10 @@ class App:
             ("POST", r"writer/test", self.test_writer),
             ("PATCH", r"eval/settings", self.patch_eval),
             ("GET", r"eval/status", self.eval_status),
+            ("GET", r"eval/models", self.eval_models),
+            ("POST", r"eval/contenders", self.add_contender),
+            ("PATCH", rf"eval/contenders/({evaluate.CONTENDER_ID})", self.patch_contender),
+            ("DELETE", rf"eval/contenders/({evaluate.CONTENDER_ID})", self.delete_contender),
             ("POST", r"eval/run", self.eval_run),
             ("GET", rf"eval/({evaluate.RUN_ID})", self.eval_view),
             ("POST", rf"eval/({evaluate.RUN_ID})/choices", self.eval_choices),
@@ -405,6 +409,21 @@ class App:
 
     def eval_status(self, _body=None):
         return self._eval_on().status()
+
+    def eval_models(self, _body=None):
+        return self._eval_on().models()
+
+    def add_contender(self, body):
+        self._eval_on()
+        return self.store.save_contender(None, _obj(body))
+
+    def patch_contender(self, body, cid):
+        self._eval_on()
+        return self.store.save_contender(cid, _obj(body))
+
+    def delete_contender(self, _body, cid):
+        self._eval_on()
+        return self.store.delete_contender(cid)
 
     def eval_run(self, _body):
         try:

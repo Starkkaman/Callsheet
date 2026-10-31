@@ -292,11 +292,12 @@ class EvalShapeTest(unittest.TestCase):
         self.opts = writer.local_options({})
 
     def test_bodies_are_what_a_live_brief_sends(self):
-        g0, _ = evaluate.config_body(evaluate.CONFIGS[0], "g", self.payload, self.ids, self.opts, self.ask)
+        g0c, q1c = evaluate.legacy_contenders("g", "q")[:2]
+        g0, _ = evaluate.contender_body(g0c, self.payload, self.ids, self.opts, self.ask)
         live = writer.local_body("g", self.payload, self.ids, dict(self.opts, thinking=False), self.ask)
         self.assertEqual(g0, live)
         self.assertIn("Suggested replies:\nShort.\n\n" + writer.NEVER_CLAIM, g0["messages"][0]["content"])
-        q, _ = evaluate.config_body(evaluate.CONFIGS[1], "q", self.payload, self.ids, self.opts, self.ask)
+        q, _ = evaluate.contender_body(q1c, self.payload, self.ids, self.opts, self.ask)
         self.assertEqual((q["messages"], q["response_format"]), (g0["messages"], g0["response_format"]))
         self.assertEqual(set(q["response_format"]["json_schema"]["schema"]["properties"]),
                          {"summary", "areas", "top", "gists", "replies"})

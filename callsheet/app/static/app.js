@@ -1807,7 +1807,7 @@
         numField('w-lslot', 'id_slot', 'Server slot for briefs', 0, 63,
           'Optional. Pins Callsheet\u2019s requests to one llama.cpp slot. Leave empty unless you know you need it.')]),
       h('div', { class: 'swrow' }, [evSw, h('span', { 'aria-hidden': 'true' }, 'Show the evaluation tools')]), evErr,
-      h('p', { class: 'note' }, 'Compare local model setups on today\u2019s data, side by side and without names. It only runs when you press its button.'),
+      h('p', { class: 'note' }, 'Compare two to four writer setups on today\u2019s data, side by side and without names. It only runs when you press its button.'),
       ev.enabled ? h('div', { class: 'testrow' }, btn('act', 'Writer evaluation', { 'data-fk': 'ev-open' }, function () { location.hash = 'eval'; })) : null]);
     var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(!!ui.writerAdv), 'aria-controls': 'w-adv', 'data-fk': 'w-adv' }, function () {
       ui.writerAdv = !ui.writerAdv;
@@ -1905,16 +1905,10 @@
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
   }
 
-  /* ---------- writer evaluation (#eval): owner-run, blind A/B, from Setup, Delivery, Advanced ---------- */
-  var EV = { status: null, run: null, picks: {}, adv: false, timer: null, seq: 0 };
+  /* ---------- writer evaluation (#eval): owner-run contenders (0.5.0), blind A/B, from Setup, Delivery, Advanced ---------- */
+  var EV = { status: null, run: null, picks: {}, timer: null, seq: 0, edit: null, models: null, modelsBusy: false };
   var EVSTATUS = { running: 'Running', done: 'Finished', stopped: 'Stopped early', failed: 'Didn’t work', interrupted: 'Interrupted (Callsheet restarted)', unreadable: 'Can’t be read' };
-  var METRICS = [
-    ['valid_json', 'Valid JSON'], ['schema_valid', 'Matches the answer format'], ['finish_reason', 'Finish reason'],
-    ['wall_s', 'Time (seconds)'], ['prompt_tokens', 'Prompt tokens'], ['completion_tokens', 'Answer tokens'],
-    ['prompt_n', 'Prompt tokens processed'], ['cache_n', 'Prompt tokens from cache'], ['predicted_per_second', 'Tokens per second'],
-    ['reasoning_chars', 'Thinking (characters)'], ['ids_returned', 'Drafts returned'], ['ids_expected', 'Drafts asked for'],
-    ['empties', 'Empty drafts'], ['flagged', 'Flagged drafts'], ['placeholder_used', 'Drafts with a [placeholder]'],
-    ['placeholder_needed', 'Threads that need one'], ['invented_when_needed', 'Made-up answer where one was needed'], ['error', 'Problem']];
+  var EV_EFFORTS = [['', 'Default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
   function stopEvalPoll() { if (EV.timer) { clearTimeout(EV.timer); EV.timer = null; } }
   function fmtSecs(n) { n = Math.max(0, Math.round(Number(n) || 0)); return n < 60 ? n + ' s' : Math.floor(n / 60) + ' min ' + (n % 60) + ' s'; }
   function showEval() {
@@ -1939,25 +1933,155 @@
       EV.run = v; EV.picks = {}; renderEval('#ev-run');
     });
   }
-  function renderEval(focusSel) {
-    var r = EV.status || {}, err = h('p', { class: 'err', id: 'ev-err', role: 'alert' });
-    var models = r.models || {};
-    function modelField(id, key, label, value) {
-      var inp = on(h('input', { class: 'inp', type: 'text', id: id, value: value || '', autocomplete: 'off', spellcheck: 'false' }), 'change', function () {
-        var body = {}; body[key] = inp.value.trim();
-        run([], err, function () { return api('PATCH', 'api/eval/settings', body); }, function (s) {
-          S.eval = s; models[key === 'gemma_model' ? 'gemma' : 'qwen'] = s[key]; inp.value = s[key];
+  function evSettings() { return (EV.status && EV.status.settings) || { contenders: [], mode: 'each', baseline: null }; }
+  function evSaved(s) { if (EV.status) EV.status.settings = s; S.eval = s; }
+  function evProfiles() { return (S.writer && S.writer.prompt_profiles) || [{ id: 'default', name: 'Default' }]; }
+  function evProfileName(id) { var p = evProfiles().filter(function (x) { return x.id === id; })[0]; return p ? p.name : 'Deleted profile'; }
+  function evModelName(c) {
+    if (c.provider !== 'claude') return c.model;
+    var m = CLAUDE_MODELS.filter(function (x) { return x[0] === c.model; })[0];
+    return m ? m[1] : c.model;
+  }
+  function evThinking(c) {
+    if (!c.thinking) return 'thinking off' + (c.provider === 'claude' && c.effort ? ', effort ' + c.effort : '');
+    return 'thinking on' + (c.effort ? ', effort ' + c.effort : '') + (c.budget ? ', budget ' + fmtNum(c.budget) : '');
+  }
+  function evSummary(c) {
+    var samp = [['temperature', 'temperature'], ['top_p', 'top p'], ['top_k', 'top k']].filter(function (k) { return c[k[0]] != null; })
+      .map(function (k) { return k[1] + ' ' + c[k[0]]; });
+    return [(c.provider === 'claude' ? 'Claude · ' : '') + evModelName(c), evProfileName(c.profile), evThinking(c)]
+      .concat(samp.length ? [samp.join(', ')] : []).join(' · ');
+  }
+  function evPairs(n, mode) { return mode === 'baseline' ? Math.max(0, n - 1) : n * (n - 1) / 2; }
+  function evLoadModels(focusSel) {
+    if (EV.modelsBusy) return;
+    EV.modelsBusy = true;
+    api('GET', 'api/eval/models').then(function (m) { EV.models = m; }, function (e) {
+      EV.models = { local: [], local_error: e && e.message ? e.message : 'Couldn’t load the model list.', claude: [], everyday: null };
+    }).then(function () { EV.modelsBusy = false; if (ui.view === 'eval' && EV.edit) renderEval(focusSel || null); });
+  }
+  function evEdit(c) {
+    var cons = evSettings().contenders;
+    EV.edit = { id: c ? c.id : null, draft: c ? JSON.parse(JSON.stringify(c)) : {
+      name: 'Contender ' + (cons.length + 1), provider: 'local', model: (EV.models && EV.models.everyday) || '', thinking: false,
+      effort: null, budget: null, temperature: null, top_p: null, top_k: null, profile: 'default' } };
+    if (!c && !EV.edit.draft.model && S.writer && S.writer.local) EV.edit.draft.model = S.writer.local.model || '';
+    if (!EV.models) evLoadModels('#ev-c-name');
+    renderEval('#ev-c-name');
+  }
+  /* the add/edit form: plain fields; local-only and thinking-only fields appear when they apply */
+  function evForm(err) {
+    var e = EV.edit, d = e.draft, m = EV.models, local = d.provider !== 'claude';
+    function field(id, label, ctl, note) {
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), ctl, note ? h('p', { class: 'note' }, note) : null]);
+    }
+    function num(id, key, label, attrs, note) {
+      var a = { class: 'inp', type: 'number', id: id, inputmode: 'decimal', value: d[key] != null ? String(d[key]) : '', 'data-fk': id };
+      Object.keys(attrs).forEach(function (k) { a[k] = attrs[k]; });
+      var inp = on(h('input', a), 'input', function () {
+        var v = inp.value.trim();
+        d[key] = v === '' ? null : (isNaN(Number(v)) ? v : Number(v));
+      });
+      return field(id, label, inp, note);
+    }
+    var name = on(h('input', { class: 'inp', type: 'text', id: 'ev-c-name', value: d.name || '', maxlength: '40', autocomplete: 'off', 'data-fk': 'ev-c-name' }), 'input', function () { d.name = name.value; });
+    /* model: the local server's list (+ the saved one if the server doesn't list it now) and, with a key, Claude */
+    var cur = (d.provider === 'claude' ? 'claude:' : 'local:') + (d.model || '');
+    var localIds = (m && m.local) || [], groups = [];
+    var lopts = localIds.map(function (id) { var v = 'local:' + id; return h('option', { value: v, selected: v === cur }, id); });
+    if (local && d.model && localIds.indexOf(d.model) < 0) lopts.unshift(h('option', { value: cur, selected: true }, d.model + ' (not listed by the server now)'));
+    if (local && !d.model) lopts.unshift(h('option', { value: '', selected: true }, m ? 'Pick a model' : 'Loading the list…'));
+    groups.push(h('optgroup', { label: 'Local server' }, lopts));
+    var claude = (m && m.claude) || [];
+    if (claude.length || !local) {
+      groups.push(h('optgroup', { label: 'Claude' }, (claude.length ? claude : CLAUDE_MODELS.filter(function (x) { return x[0] === d.model; }).map(function (x) { return { id: x[0], label: x[1] }; }))
+        .map(function (x) { var v = 'claude:' + x.id; return h('option', { value: v, selected: v === cur }, x.label); })));
+    }
+    var model = on(h('select', { class: 'inp', id: 'ev-c-model', 'data-fk': 'ev-c-model' }, groups), 'change', function () {
+      var v = model.value, i = v.indexOf(':'), prov = v.slice(0, i) || 'local';
+      var changed = prov !== d.provider;
+      d.provider = prov; d.model = v.slice(i + 1);
+      if (changed) renderEval('#ev-c-model');
+    });
+    var modelNote = m && m.local_error ? m.local_error : (local ? '' : 'The brief data goes to Anthropic for this contender.');
+    var think = sw(!!d.thinking, 'Thinking', function () { d.thinking = !d.thinking; renderEval('[data-fk="ev-c-think"]'); });
+    think.setAttribute('data-fk', 'ev-c-think');
+    var effort = on(h('select', { class: 'inp', id: 'ev-c-effort', 'data-fk': 'ev-c-effort' }, EV_EFFORTS.map(function (x) {
+      return h('option', { value: x[0], selected: (d.effort || '') === x[0] }, x[1]);
+    })), 'change', function () { d.effort = effort.value || null; });
+    var prof = on(h('select', { class: 'inp', id: 'ev-c-prof', 'data-fk': 'ev-c-prof' }, (evProfiles().some(function (p) { return p.id === d.profile; }) ? [] :
+      [h('option', { value: d.profile, selected: true }, 'Deleted profile: pick another')]).concat(evProfiles().map(function (p) {
+      return h('option', { value: p.id, selected: p.id === d.profile }, p.name);
+    }))), 'change', function () { d.profile = prof.value; });
+    var save = btn('btn primary', e.id ? 'Save contender' : 'Add contender', { 'data-fk': 'ev-c-save' }, function () {
+      var body = {};
+      ['name', 'provider', 'model', 'thinking', 'effort', 'budget', 'temperature', 'top_p', 'top_k', 'profile'].forEach(function (k) { body[k] = d[k] === undefined ? null : d[k]; });
+      if (body.provider === 'claude') { body.budget = body.temperature = body.top_p = body.top_k = null; }
+      else if (!body.thinking) { body.effort = body.budget = null; }
+      run([save], err, function () {
+        return e.id ? api('PATCH', 'api/eval/contenders/' + encodeURIComponent(e.id), body) : api('POST', 'api/eval/contenders', body);
+      }, function (s) { evSaved(s); EV.edit = null; showEval().then(function () { var f = main.querySelector('[data-fk="ev-add"]'); if (f) f.focus(); }); });
+    });
+    var cancel = btn('btn', 'Cancel', { 'data-fk': 'ev-c-cancel' }, function () { EV.edit = null; renderEval('[data-fk="ev-add"]'); });
+    return h('div', { class: 'wpanel evform', role: 'group', 'aria-labelledby': 'ev-c-h' }, [
+      h('h3', { class: 'label wh', id: 'ev-c-h' }, e.id ? 'Edit ' + (d.name || 'contender') : 'New contender'),
+      h('div', { class: 'lm' }, [
+        field('ev-c-name', 'Name', name),
+        field('ev-c-model', 'Model', model, modelNote || null),
+        field('ev-c-prof', 'Writing profile', prof),
+        h('div', { class: 'field' }, [h('span', { class: 'label' }, 'Thinking'),
+          h('div', { class: 'swrow evsw' }, [think, h('span', { 'aria-hidden': 'true' }, d.thinking ? 'On' : 'Off')])]),
+        local && !d.thinking ? null : field('ev-c-effort', 'Effort', effort, local ? null : 'Claude’s effort; Default is medium, as in the brief.'),
+        local && d.thinking ? num('ev-c-budget', 'budget', 'Thinking budget (tokens)', { min: '256', max: '32768', step: '1', placeholder: String((S.writer && S.writer.local && S.writer.local.reasoning_budget) || '') }, 'Empty: your local setting.') : null,
+        local ? num('ev-c-temp', 'temperature', 'Temperature', { min: '0', max: '2', step: '0.05', placeholder: 'Server default' }) : null,
+        local ? num('ev-c-topp', 'top_p', 'Top p', { min: '0', max: '1', step: '0.01', placeholder: 'Server default' }) : null,
+        local ? num('ev-c-topk', 'top_k', 'Top k', { min: '1', max: '1000', step: '1', placeholder: 'Server default' }) : null]),
+      local ? null : h('p', { class: 'note' }, 'Claude takes no thinking budget or sampling settings.'),
+      h('div', { class: 'btns' }, [save, cancel, local ? btn('tbtn', 'Reload the model list', { 'data-fk': 'ev-c-reload' }, function () { EV.models = null; renderEval('[data-fk="ev-c-reload"]'); evLoadModels('[data-fk="ev-c-reload"]'); }) : null]),
+      err]);
+  }
+  function evContenders(err) {
+    var es = evSettings(), cons = es.contenders || [], lim = (EV.status && EV.status.limits) || { min: 2, max: 4 }, busy = !!(EV.status && EV.status.running);
+    var list = cons.length ? h('ul', { class: 'review evlist' }, cons.map(function (c, i) {
+      var base = es.mode === 'baseline' && es.baseline === c.id;
+      var rm = btn('tbtn', 'Remove', { 'aria-label': 'Remove ' + c.name, disabled: busy ? true : null, 'data-fk': 'ev-rm:' + c.id }, function () {
+        run([rm], err, function () { return api('DELETE', 'api/eval/contenders/' + encodeURIComponent(c.id)); }, function (s) {
+          evSaved(s); if (EV.edit && EV.edit.id === c.id) EV.edit = null; showEval().then(function () { var f = main.querySelector('[data-fk="ev-add"]'); if (f) f.focus(); });
         });
       });
-      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+      return h('li', null, [h('span', { class: 'num' }, String(i + 1)),
+        h('span', { class: 'nm' }, [c.name, base ? h('span', { class: 'act evbase' }, 'Baseline') : null]),
+        h('span', { class: 'sum' }, evSummary(c)),
+        h('span', { class: 'evacts' }, [btn('tbtn', 'Edit', { 'aria-label': 'Edit ' + c.name, disabled: busy ? true : null, 'data-fk': 'ev-ed:' + c.id }, function () { evEdit(c); }), rm])]);
+    })) : h('p', { class: 'note' }, 'No contenders yet. Add two to four: the same model with different writing profiles, or different models.');
+    var addB = cons.length < lim.max && !EV.edit ? btn('btn', 'Add a contender', { 'data-fk': 'ev-add', disabled: busy ? true : null }, function () { evEdit(null); }) : null;
+    /* mode: each against each, or against a baseline (+ which one) */
+    function choice(val, t, sub) {
+      var sel = es.mode === val;
+      return btn('opt' + (sel ? ' sel' : ''), [h('span', { class: 'cb' + (sel ? ' sel' : ''), 'aria-hidden': 'true' }),
+        h('span', null, [h('span', { class: 't' }, t), h('span', { class: 's' }, sub)]),
+        h('span', { class: 'state' }, sel ? 'Selected' : '')], { role: 'radio', 'aria-checked': String(sel), 'data-fk': 'ev-mode:' + val }, function (ev) {
+        if (sel) return;
+        run([ev.currentTarget], err, function () { return api('PATCH', 'api/eval/settings', { mode: val }); }, function (s) { evSaved(s); showEval().then(function () { var f = main.querySelector('[data-fk="ev-mode:' + val + '"]'); if (f) f.focus(); }); });
+      });
     }
-    var advP = h('div', { class: 'lm', id: 'ev-adv', hidden: !EV.adv }, [
-      modelField('ev-gemma', 'gemma_model', 'Gemma model name on the server', models.gemma),
-      modelField('ev-qwen', 'qwen_model', 'Qwen model name on the server', models.qwen)]);
-    var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(EV.adv), 'aria-controls': 'ev-adv' }, function () {
-      EV.adv = !EV.adv; adv.setAttribute('aria-expanded', String(EV.adv)); advP.hidden = !EV.adv;
-    });
-    var runB = btn('btn primary', 'Run evaluation', { disabled: r.reason ? true : null, 'data-fk': 'ev-run' }, function () {
+    var n = cons.length;
+    var modes = h('div', { class: 'opts', role: 'radiogroup', 'aria-label': 'How contenders are compared' }, [
+      choice('each', 'Each against each', 'Every contender meets every other one' + (n >= 2 ? ': ' + plural(evPairs(n, 'each'), 'comparison', 'comparisons') : '')),
+      choice('baseline', 'Against a baseline', 'Every other contender meets the baseline' + (n >= 2 ? ': ' + plural(evPairs(n, 'baseline'), 'comparison', 'comparisons') : ''))]);
+    var baseSel = es.mode === 'baseline' && n ? on(h('select', { class: 'inp', id: 'ev-base', 'data-fk': 'ev-base' }, cons.map(function (c) {
+      return h('option', { value: c.id, selected: c.id === es.baseline }, c.name);
+    })), 'change', function () {
+      run([baseSel], err, function () { return api('PATCH', 'api/eval/settings', { baseline: baseSel.value }); }, function (s) { evSaved(s); showEval().then(function () { var f = main.querySelector('#ev-base'); if (f) f.focus(); }); });
+    }) : null;
+    return [h('h2', { class: 'h3 where' }, 'Contenders'), list,
+      EV.edit ? evForm(err) : (addB ? h('div', { class: 'btns' }, addB) : null),
+      h('h3', { class: 'label evh' }, 'Compare'), modes,
+      baseSel ? h('div', { class: 'field evbasef' }, [h('label', { class: 'label', for: 'ev-base' }, 'Baseline'), baseSel]) : null];
+  }
+  function renderEval(focusSel) {
+    var r = EV.status || {}, err = h('p', { class: 'err', id: 'ev-err', role: 'alert' }), cErr = errBox();
+    var runB = btn('btn primary', 'Run evaluation', { disabled: r.reason || EV.edit ? true : null, 'data-fk': 'ev-run' }, function () {
       run([runB], err, function () { return api('POST', 'api/eval/run', {}); }, function () { EV.run = null; showEval(); });
     });
     var p = r.progress, last = r.last;
@@ -1965,9 +2089,9 @@
       last ? 'Last run: ' + (EVSTATUS[last.status] || last.status) + '.' : 'No runs yet.';
     var runs = r.runs || [];
     var body = [
-      h('p', { class: 'intro' }, 'Compare local model setups on today’s real brief data, without knowing which is which.'),
-      h('p', { class: 'note' }, 'It runs only when you press the button. Callsheet reads your mail and calendar the way a refresh does and sends that data only to your local model server. Three setups answer one after another (Gemma, then Qwen thinking a little and thinking more), then Gemma is loaded again. This can take up to half an hour. Your brief is never changed, and results stay in Callsheet until you download them.'),
-      adv, advP,
+      h('p', { class: 'intro' }, 'Compare two to four writer setups on today’s real brief data, without knowing which is which.'),
+      h('p', { class: 'note' }, 'It runs only when you press the button. Callsheet reads your mail and calendar the way a refresh does and sends that data to your local model server, and to Anthropic for Claude contenders. Contenders answer one after another, then your everyday model is loaded again. With thinking on this can take half an hour or more. Your brief is never changed, and results stay in Callsheet until you download them.'),
+      evContenders(cErr),
       h('div', { class: 'go' }, [runB]),
       r.reason && !p ? h('p', { class: 'note' }, r.reason) : null,
       err,
@@ -1976,7 +2100,7 @@
       h('h2', { class: 'h3 where' }, 'Past runs'),
       runs.length ? h('ul', { class: 'review' }, runs.map(function (x, i) {
         return h('li', null, [h('span', { class: 'num' }, String(i + 1)), h('span', { class: 'nm' }, fmtWhen(x.at, true) || x.id),
-          h('span', { class: 'sum' }, (EVSTATUS[x.status] || x.status) + (x.chosen ? ' · choices submitted' : '')),
+          h('span', { class: 'sum' }, (EVSTATUS[x.status] || x.status) + (x.contenders ? ' · ' + plural(x.contenders, 'contender', 'contenders') : '') + (x.chosen ? ' · choices submitted' : '')),
           x.status === 'running' ? h('span') : btn('tbtn', 'Open', { 'aria-label': 'Open the run from ' + (fmtWhen(x.at, true) || x.id) }, function () { openRun(x.id); })]);
       })) : h('p', { class: 'note' }, 'Nothing yet.'),
       EV.run ? evalRun(EV.run) : null];
@@ -1985,7 +2109,7 @@
         h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup · Advanced'), h('h1', { id: 'ev-title', tabindex: '-1' }, 'Writer evaluation')]),
         h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Runs kept'), h('div', { class: 'disp' }, runs.length + ' / 5')])]),
       h('section', { class: 'step', 'aria-labelledby': 'ev-title' }, body),
-      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { ui.step = 5; location.hash = 'setup'; })])]);
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { EV.edit = null; ui.step = 5; location.hash = 'setup'; })])]);
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
@@ -2000,10 +2124,6 @@
       return h('div', { class: 'field' }, [h('span', { class: 'label' }, label),
         h('div', { class: 'sugp' }, h('p', { class: 'sugtext' }, t ? String(t) : 'No usable answer.'))]);
     }
-    function nameOf(cfg) {
-      var m = (v.metrics || []).filter(function (x) { return x.config === cfg; })[0];
-      return cfg + (m && m.model ? ' · ' + m.model : '');
-    }
     var submit = btn('btn primary', 'Submit choices', { 'data-fk': 'ev-submit' }, function () {
       var picks = {}, missing = pairs.some(function (p) { picks[p.id] = EV.picks[p.id]; return !picks[p.id]; });
       if (missing) { err.textContent = 'Pick A, B or Same for every comparison first.'; return; }
@@ -2016,8 +2136,8 @@
       v.errors && v.errors.length ? h('ul', { class: 'syncerr' }, v.errors.map(function (x) { return h('li', null, String(x)); })) : null,
       h('div', { class: 'btns' }, [h('a', { class: 'btn', href: 'api/eval/' + encodeURIComponent(v.id) + '/export', download: 'callsheet-writer-eval-' + v.id + '.jsonl' }, 'Download results')]),
       h('p', { class: 'note' }, 'The download holds the brief data that was sent and every answer. Keep it private.')];
-    if (!pairs.length) { out.push(h('p', { class: 'note' }, 'This run has nothing to compare.')); return out; }
-    if (!revealed) out.push(h('p', { class: 'note' }, 'Read each comparison and pick the better one. Which setup wrote A or B is shown after you submit.'));
+    if (!pairs.length) out.push(h('p', { class: 'note' }, 'This run has nothing to compare.'));
+    else if (!revealed) out.push(h('p', { class: 'note' }, 'Read each comparison and pick the better one. Which contender wrote A or B is shown after you submit.'));
     pairs.forEach(function (p, i) {
       var pick = revealed ? p.pick : EV.picks[p.id];
       function choice(val, t) {
@@ -2029,7 +2149,7 @@
           });
       }
       out.push(h('div', { class: 'wpanel', role: 'group', 'aria-labelledby': 'ev-h-' + p.id }, [
-        h('h3', { class: 'label wh', id: 'ev-h-' + p.id }, 'Comparison ' + (i + 1) + (revealed ? ': A = ' + nameOf(p.a_config) + ', B = ' + nameOf(p.b_config) : '')),
+        h('h3', { class: 'label wh', id: 'ev-h-' + p.id }, 'Comparison ' + (i + 1) + (revealed ? ': A = ' + (p.a_name || '?') + ', B = ' + (p.b_name || '?') : '')),
         h('div', { class: 'lm' }, [textBox('Summary A', p.a && p.a.summary), textBox('Summary B', p.b && p.b.summary)]),
         rows.map(function (row) {
           var da = p.a && p.a.drafts ? p.a.drafts[row.id] : null, db = p.b && p.b.drafts ? p.b.drafts[row.id] : null;
@@ -2040,16 +2160,30 @@
           choice('A', 'A is better'), choice('B', 'B is better'), choice('same', 'Same')])]));
     });
     if (!revealed) { out.push(h('div', { class: 'go' }, submit), err); return out; }
-    var ms = v.metrics || [];
-    out.push(h('h3', { class: 'h3 where' }, 'Numbers per setup'),
-      h('table', null, [
-        h('thead', null, h('tr', null, [h('th', null, 'Measure')].concat(ms.map(function (m) { return h('th', null, m.config); })))),
-        h('tbody', null, METRICS.map(function (k) {
-          return h('tr', null, [h('td', null, k[1])].concat(ms.map(function (m) {
-            var x = (m.metrics || {})[k[0]];
-            return h('td', null, x === true ? 'Yes' : x === false ? 'No' : x == null ? '—' : String(x));
-          })));
-        }))]));
+    var rs = v.results || [];
+    if (!rs.length) return out;
+    function yn(x) { return x === true ? 'Yes' : x === false ? 'No' : '—'; }
+    function n0(x) { return x == null ? '—' : fmtNum(x); }
+    var MEASURES = [
+      ['Model', function (c) { return evModelName(c); }],
+      ['Writing profile', function (c) { return c.profile || '—'; }],
+      ['Thinking', function (c) { return evThinking(c); }],
+      ['Result', function (c) { return c.ok ? 'OK' : 'Failed'; }],
+      ['Matches the answer format', function (c) { return yn(c.schema_valid); }],
+      ['Time', function (c) { return c.wall_s == null ? '—' : fmtSecs(c.wall_s); }],
+      ['Prompt tokens', function (c) { return n0(c.prompt_tokens); }],
+      ['Answer tokens', function (c) { return n0(c.completion_tokens); }],
+      ['Empty suggestions', function (c) { return n0(c.empties); }],
+      ['Flagged drafts', function (c) { return n0(c.flagged); }],
+      ['Picked better · worse · same', function (c) { return pairs.length ? c.wins + ' · ' + c.losses + ' · ' + c.ties : '—'; }],
+      ['Problem', function (c) { return c.error || '—'; }]];
+    out.push(h('h3', { class: 'h3 where' }, 'Results per contender' + (v.mode === 'baseline' && v.baseline ? ' (baseline: ' + v.baseline + ')' : '')),
+      h('div', { class: 'evtbl' }, h('table', null, [
+        h('thead', null, h('tr', null, [h('th', { scope: 'col' }, 'Measure')].concat(rs.map(function (c) { return h('th', { scope: 'col' }, String(c.name)); })))),
+        h('tbody', null, MEASURES.map(function (k) {
+          return h('tr', null, [h('th', { scope: 'row' }, k[0])].concat(rs.map(function (c) { return h('td', null, String(k[1](c))); })));
+        }))])),
+      h('p', { class: 'note' }, 'Flagged drafts state an approval, payment or agreement. Every other number is in the download.'));
     return out;
   }
 

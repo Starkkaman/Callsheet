@@ -218,30 +218,41 @@ a minute while the model loads; if the server says it is still loading, Callshee
 seconds later. With **If the local model fails, use Claude instead** on (off by default), a failed local
 run is sent to Claude if a Claude key is saved; off keeps your data on your network.
 
-### Writer evaluation (optional, for comparing local models)
+### Writer evaluation (optional, for comparing writer setups)
 
 Off by default. Under Setup, Delivery, Local model, open **Advanced** and turn on **Show the evaluation
 tools**, then press **Writer evaluation**. When the switch is off the page is hidden and Callsheet refuses
 its requests.
 
+- **Contenders**: add two to four (**Add a contender**, then **Edit** or **Remove**). Each has a name, a
+  model (picked from the list your local model server reports, or a Claude model when a Claude key is
+  saved), thinking on or off, an effort (low, medium, high) and, for local models, an optional thinking
+  budget and sampling (temperature, top p, top k; empty means the server's default), and a writing profile
+  (Default or one of yours). The same model with different profiles works as well as different models.
+  Contenders are saved for the next run. Claude takes no thinking budget or sampling settings.
+- **Compare**: **Each against each** (every pair: 1, 3 or 6 comparisons) or **Against a baseline** (every
+  other contender against the one you pick).
 - **Run evaluation** reads your mail and calendar the same read-only way a refresh does and builds the same
   writer input, but it never changes your brief, the last refresh or the last writer run. It only runs
   when you press the button; it is refused within 10 minutes before or after a brief or check-in, while a
-  refresh runs, while another evaluation runs, or when no local model server is set. While it runs,
-  **Refresh** is refused (scheduled briefs are kept apart by the 10-minute rule).
-- The data goes only to your local model server, one request at a time: **Gemma** with thinking off (as
-  the brief uses it), **Qwen** thinking a little (`reasoning_effort` low, 2,048-token budget) and thinking
-  more (medium, 4,096), both with temperature 1.0, top_p 0.95 and top_k 20, each with up to 450 seconds, then one tiny request so Gemma is loaded again. If a
-  brief comes within 10 minutes before a setup starts, the run stops early. A run can take up to about half
-  an hour. Under the page's **Advanced** you can change the model names if your server calls them
-  differently.
-- When it has finished, **Open** a run: two comparisons (Gemma against Qwen medium, Qwen low against Qwen
-  medium) show the summary and each draft as A and B, in a random order. Pick **A is better**, **B is
-  better** or **Same** for each and press **Submit choices**; only then does the page show which setup was
-  A or B and a table of numbers per setup.
+  refresh runs, while another evaluation runs, with fewer than two contenders, without a local model
+  server (for local contenders) or a Claude key (for Claude contenders). While it runs, **Refresh** is
+  refused (scheduled briefs are kept apart by the 10-minute rule).
+- The contenders answer one at a time, in your order, all with the same data. The data goes to your local
+  model server and, only for Claude contenders, to Anthropic. A local model with thinking on gets at least
+  450 seconds. Afterwards one tiny request loads your everyday local model again, when a contender used
+  another one. If a brief comes within 10 minutes before a contender starts, the run stops early.
+- When it has finished, **Open** a run: each comparison shows the summary and each draft as A and B, in a
+  random order. Pick **A is better**, **B is better** or **Same** for each and press **Submit choices**;
+  only then does the page show which contender was A or B and a table per contender: model, profile,
+  thinking, OK or failed, whether the answer matched the format, time, tokens, empty suggestions, flagged
+  drafts (drafts that state an approval, payment or agreement) and how often it was picked better, worse
+  or the same.
 - Results are kept in the app's data folder under `writer-eval/` (the last 5 runs, readable only by the
-  app). **Download results** saves a file with the data that was sent, each setup's answer and numbers and
-  your choices. It contains your real mail text: keep it private.
+  app). **Download results** saves a file with the data that was sent, each contender's settings, answer
+  and numbers and your choices. It contains your real mail text: keep it private. Runs from before 0.5.0
+  (Gemma against Qwen) can still be opened and downloaded; old evaluation settings become three contenders
+  (G0, Q-low, Q-med, compared against Q-med).
 
 ### App options
 
@@ -255,7 +266,7 @@ setup wins and these options are ignored. Empty fields change nothing.
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable
   only by the app): your settings, areas, VIPs, the Google client secret, the account sign-in tokens and
   the latest brief. Nothing is sent anywhere else. If you use the writer evaluation, its last 5 runs
-  (including the mail text that was sent to your local model) are kept in `writer-eval/` too.
+  (including the mail text that was sent to the contenders) are kept in `writer-eval/` too.
 - Home Assistant backups of this app include that file, so treat backups as private.
 - The only outbound traffic is to Google's sign-in and read-only Gmail and Calendar APIs, Slack's
   read-only Web API (`slack.com`) when you connect a workspace, and, when you turn on the AI writer, to

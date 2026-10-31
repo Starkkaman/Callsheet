@@ -850,3 +850,21 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .bv .rmain .age{max-width:38%;overflow:hidden;text-overflow:ellipsis} /* a long wait text gives way to the name */
   .bv-layer .toast{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:none;width:auto;max-width:none}
 }
+/* writer evaluation: contenders (0.5.0): list with Edit/Remove, the add/edit form, mode, results table */
+.evlist .nm{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+.evlist .evbase{font-family:var(--font-body)}
+.evlist .sum{font-size:var(--fs-sm);overflow-wrap:anywhere}
+.evacts{display:flex;gap:4px 12px;flex-wrap:wrap;justify-content:flex-end}
+.evform{margin:14px 0 4px}
+.evform .evsw{margin:2px 0 0}
+.evform .btns{margin-top:4px}
+.evh{display:block;color:var(--muted);margin:22px 0 8px}
+.evbasef{margin:12px 0 0}
+.evtbl{overflow-x:auto;max-width:900px;margin-bottom:8px}
+.evtbl th[scope=row]{border-bottom-width:var(--rule-w);vertical-align:top;padding-bottom:7px;min-width:120px}
+.evtbl td{overflow-wrap:anywhere;min-width:110px}
+@media (max-width:700px){
+  .evlist .nm{grid-column:2}
+  .evlist .evacts{grid-column:3;grid-row:1;flex-direction:column;align-items:flex-end}
+  .evform .lm{grid-template-columns:1fr}
+}

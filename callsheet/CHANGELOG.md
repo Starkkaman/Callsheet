@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- **Writer evaluation with contenders.** The evaluation no longer compares fixed Gemma and Qwen setups: you
+  define two to four contenders, each with a name, a model (from your local server's model list, or Claude
+  when a Claude key is saved), thinking on or off, effort, a thinking budget, optional sampling (temperature,
+  top p, top k; local models only) and a writing profile, saved for the next run. Compare each against each,
+  or every contender against a baseline; the same model with different profiles works too. Blind pairs,
+  names after submitting, the results per contender (OK or failed, answer format, time, tokens, empty
+  suggestions, flagged drafts, picked better/worse/same) and Download work as before, as do the call-time
+  rules, the "Loading model" retry and loading your everyday model again afterwards. Your old evaluation
+  settings become three contenders (G0, Q-low, Q-med against Q-med); old runs still open and download.
+
 ## 0.4.1
 
 - **Facts for the writer.** Callsheet now works out the numbers the writer used to guess: per reply row the

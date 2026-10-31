@@ -943,28 +943,50 @@ class Store:
 
     # --- writer evaluation (owner-run, see evaluate.py) -------------------
     def eval_settings(self):
-        """{enabled (default off), gemma_model, qwen_model}: model ids the evaluation sends to the local server."""
-        e = {"enabled": False, "gemma_model": evaluate.GEMMA_MODEL, "qwen_model": evaluate.QWEN_MODEL}
-        saved = self._get_meta("eval", {})
-        e.update({k: v for k, v in (saved if isinstance(saved, dict) else {}).items() if k in e})
-        return e
+        """{enabled (default off), mode ("each" or "baseline"), baseline (a contender id), contenders (2 to 4 to
+        run)}. A pre-0.5.0 value (gemma_model/qwen_model) reads as the old three setups (evaluate.settings_from)."""
+        return evaluate.settings_from(self._get_meta("eval", {}))
 
     def update_eval(self, patch):
-        if not isinstance(patch, dict):
-            raise InputError("Send the evaluation settings as a JSON object.")
+        with self.lock:
+            try:
+                e = evaluate.patch_settings(self.eval_settings(), patch)
+            except evaluate.Invalid as err:
+                raise InputError(str(err)) from None
+            self._set_meta("eval", e)
+        return e
+
+    def _eval_profiles(self):
+        return {p["id"]: p["name"] for p in self._profiles(self.writer_config())}
+
+    def save_contender(self, cid, body):
+        """Add a contender (cid None) or change one. Returns the evaluation settings."""
         with self.lock:
             e = self.eval_settings()
-            for key, val in patch.items():
-                if key == "enabled":
-                    if not isinstance(val, bool):
-                        raise InputError("enabled must be true or false.")
-                    e["enabled"] = val
-                elif key in ("gemma_model", "qwen_model"):
-                    if not isinstance(val, str) or len(val.strip()) > 120 or re.search(r"[\x00-\x1f]", val):
-                        raise InputError("The model name must be text of at most 120 characters.")
-                    e[key] = val.strip() or (evaluate.GEMMA_MODEL if key == "gemma_model" else evaluate.QWEN_MODEL)
-                else:
-                    raise InputError(f"The evaluation settings can't change {str(key)[:40]}.")
+            old = next((c for c in e["contenders"] if c["id"] == cid), None) if cid else None
+            if cid and old is None:
+                raise NotFound(evaluate.GONE)
+            if old is None and len(e["contenders"]) >= evaluate.MAX_CONTENDERS:
+                raise InputError(f"There can be at most {evaluate.MAX_CONTENDERS} contenders. Remove one first.")
+            others = [c for c in e["contenders"] if c["id"] != cid]
+            try:
+                c = evaluate.check_contender(body, old, others, self._eval_profiles(),
+                                             bool(self.writer_config()["claude"]["api_key"]))
+            except evaluate.Invalid as err:
+                raise InputError(str(err)) from None
+            e["contenders"] = [c if x["id"] == cid else x for x in e["contenders"]] if old else e["contenders"] + [c]
+            e["baseline"] = e["baseline"] or c["id"]
+            self._set_meta("eval", e)
+        return e
+
+    def delete_contender(self, cid):
+        with self.lock:
+            e = self.eval_settings()
+            if not any(c["id"] == cid for c in e["contenders"]):
+                raise NotFound(evaluate.GONE)
+            e["contenders"] = [c for c in e["contenders"] if c["id"] != cid]
+            if e["baseline"] == cid:
+                e["baseline"] = e["contenders"][0]["id"] if e["contenders"] else None
             self._set_meta("eval", e)
         return e
 
