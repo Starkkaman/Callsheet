@@ -419,11 +419,12 @@ class PageTest(unittest.TestCase):
         # the claim note stays; the hidden line replaces the draft block (only shown when there's no suggestion)
         self.assertIn("r.claim === true ? h('p', { class: 'pflag claim' }, CLAIM_NOTE) : null", js)
         self.assertRegex(js, r"'Edit it here\. Nothing is sent for you\.'\)\]\)\] : hiddenLine\(r\)")
-        # per item: day summary, Top of the day, area summaries (Briefing and Areas), the gist (panel and list)
+        # per item: day summary, Top of the day, area summaries (Briefing), the gist (panel and list). 0.6.0: the
+        # Areas tab is gone (Replies has area chips), so area summaries only show in the Briefing's "By area".
         for needle in ("checkLabel('p', sum.check === true)", "checkLabel('span', t.check === true)",
-                       "checkLabel('span', chk)", "checkLabel('p', areaCheck(B.summary, a.id))",
-                       "checkLabel('p', gistCheck(r))", "title: CHECK_LABEL }, '!')"):
+                       "checkLabel('span', chk)", "checkLabel('p', gistCheck(r))", "title: CHECK_LABEL }, '!')"):
             self.assertIn(needle, js)
+        self.assertNotIn("function T_areas", js)
         self.assertIsNone(re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write", js))
 
     def test_css_uses_theme_tokens(self):

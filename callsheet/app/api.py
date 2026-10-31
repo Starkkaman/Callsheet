@@ -25,6 +25,7 @@ import scan as index_scan            # 0.6.0 index
 import sources as index_sources      # 0.6.0 index
 from index import Index, IndexError_  # 0.6.0 index
 import know_profile                  # 0.6.0 profile
+import chat                          # 0.6.0 chat
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -76,6 +77,7 @@ class App:
         self.signal = signal_api.SignalApi(self.store, data_dir, clock=clock)
         self._index_init(data_dir)  # 0.6.0 index: Know me (index.db, scanner)
         self._profile_init()  # 0.6.0 profile: the drafted profile and questions
+        self._chat_init(data_dir)  # 0.6.0 chat: Ask Callsheet over the index (chat.py)
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -119,6 +121,7 @@ class App:
             ("GET", rf"eval/({evaluate.RUN_ID})/export", self.eval_export),
         ] + self._memory_routes() + self._push_routes() + self.signal.routes() + self._index_routes() \
             + self._profile_routes()
+        self.routes += self._chat_routes()  # 0.6.0 chat
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -138,6 +141,7 @@ class App:
     def close(self):
         self.scheduler.stop()
         self.signal.service.close()  # Signal (0.5.1): stops signal-cli cleanly
+        self.chat.close()  # 0.6.0 chat
         if self.scanner:  # 0.6.0 index
             self.scanner.stop()
             self.index.close()
@@ -888,3 +892,60 @@ class App:
         if not isinstance(body.get("vip"), bool):
             raise InputError("vip takes true or false.")
         return self._pf("set_vip", key, body["vip"])
+
+    # --- 0.6.0 chat: Ask Callsheet, read-only tool use over the local index (chat.py, docs/chat.md) ---------------
+    def _chat_init(self, data_dir):
+        self.chat = chat.Chat(self.store, self.index, syncer=self.syncer, evaluator=self.evaluator,
+                              data_dir=data_dir, clock=self.clock)
+
+    def _chat_routes(self):
+        cid = f"({chat.CONV_ID})"
+        return [("GET", r"chat", self.chat_overview),
+                ("DELETE", r"chat", self.chat_clear),
+                ("POST", r"chat/ask", self.chat_ask),
+                ("GET", r"chat/settings", self.chat_settings),
+                ("PATCH", r"chat/settings", self.patch_chat_settings),
+                ("POST", r"chat/models", self.chat_models),
+                ("POST", r"chat/test", self.chat_test),
+                ("GET", r"chat/item/(\d{1,12})", self.chat_item),
+                ("GET", rf"chat/{cid}", self.chat_view),
+                ("DELETE", rf"chat/{cid}", self.chat_delete),
+                ("POST", rf"chat/{cid}/stop", self.chat_stop)]
+
+    def chat_overview(self, _body=None):
+        return self.chat.overview()
+
+    def chat_clear(self, _body=None):
+        return self.chat.clear()
+
+    def chat_ask(self, body):
+        body = _obj(body)
+        conv = body.get("conversation_id")
+        if conv is not None and not isinstance(conv, str):
+            raise InputError("conversation_id must be text.")
+        return self.chat.ask(conv or None, body.get("text"))
+
+    def chat_settings(self, _body=None):
+        return chat.public_settings(self.store)
+
+    def patch_chat_settings(self, body):
+        return chat.update_settings(self.store, _obj(body))
+
+    def chat_models(self, body):
+        body = body if isinstance(body, dict) else {}
+        return chat.list_models(self.store, body.get("base_url") or None, body.get("api_key") or None)
+
+    def chat_test(self, _body=None):
+        return chat.test_connection(self.store)
+
+    def chat_item(self, _body, item_id):
+        return self.chat.item(int(item_id))
+
+    def chat_view(self, _body, conv_id):
+        return self.chat.view(conv_id)
+
+    def chat_delete(self, _body, conv_id):
+        return self.chat.delete(conv_id)
+
+    def chat_stop(self, _body, conv_id):
+        return self.chat.stop(conv_id)

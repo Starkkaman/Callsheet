@@ -1108,3 +1108,75 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .pf .pfcard{padding:12px}
 }
 
+/* 0.6.0 chat: Replies area chips, the Chat tab (knowme-v2 frames 6 and 8), the source item panel, Setup → Chat.
+   Theme tokens only. */
+.bv .afil{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.bv .afil .chip{box-shadow:inset 4px 0 0 var(--a,transparent);padding-left:12px;text-transform:none;letter-spacing:0;font-size:var(--fs-sm)}
+.bv .afil .chip[aria-pressed=true]{box-shadow:none}
+.bv .afnote{font-size:var(--fs-sm);color:var(--muted);margin:0 0 10px}
+.bv .chatcol{display:flex;flex-direction:column;height:min(760px,calc(100vh - var(--tabs-top) - var(--tabs-h,50px) - 90px));min-height:420px;max-width:860px;margin:0 auto;
+  border:var(--rule-w) solid var(--rule);border-radius:var(--radius);background:var(--surface)}
+.bv .body.open .chatcol{max-width:none}
+.bv .chatcol .dtop{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:8px 10px 8px 16px;border-bottom:var(--rule-mid) solid var(--rule)}
+.bv .chatcol .dtop h2{font-size:var(--fs-h3)}
+.bv .chatcol .dtop .sp{flex:1}
+.bv .cmodel{font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:50%}
+.bv .act.cnew{display:inline-flex;align-items:center;gap:6px}
+.bv .act.cnew .ico{width:14px;height:14px}
+.bv .act[disabled]{opacity:.5;cursor:default}
+.bv .cearly{flex:none;max-height:40%;overflow-y:auto;padding:6px 16px 10px;border-bottom:var(--rule-mid) solid var(--rule);background:var(--surface-2)}
+.bv .cearly ul{list-style:none;margin:0;padding:0}
+.bv .cearly li button{display:flex;gap:10px;width:100%;padding:7px 4px;text-align:left;font-size:var(--fs-md);border-bottom:var(--rule-w) solid var(--rule)}
+.bv .cearly li button:hover,.bv .cearly li button[aria-current=true]{background:var(--surface)}
+.bv .cearly .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.bv .cearly .d{flex:none;color:var(--muted);font-size:var(--fs-sm)}
+.bv .cclear{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:8px;font-size:var(--fs-sm)}
+.bv .cclear p{margin:0;flex-basis:100%;font-weight:700}
+.bv .msgs{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 16px;display:flex;flex-direction:column;gap:14px;overscroll-behavior:contain}
+.bv .mq{align-self:flex-end;max-width:85%;padding:8px 12px;background:var(--sel);color:var(--on-sel);border-radius:var(--radius);font-size:var(--fs-md);overflow-wrap:anywhere;white-space:pre-wrap}
+.bv .ma{font-size:var(--fs-md);min-width:0;max-width:720px}
+.bv .ma>.label{color:var(--muted);display:block;margin-bottom:4px}
+.bv .ma>.label .by{text-transform:none;letter-spacing:0;font-weight:400}
+.bv .ma p{margin:0 0 6px;overflow-wrap:anywhere;white-space:pre-line}
+.bv .ma .sugwarn{margin:0 0 8px}
+.bv .cintro{color:var(--muted);max-width:560px}
+.bv .cintro p{margin:0 0 8px}
+.bv .from{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
+.bv .from>.label{color:var(--muted)}
+.bv .schip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 10px;font-size:var(--fs-sm);font-weight:600;background:var(--surface-2);color:var(--text);border-radius:var(--chip-radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.bv .schip:hover{box-shadow:inset 0 0 0 2px var(--text)}
+.bv .schip.sel{background:var(--sel);color:var(--on-sel);box-shadow:none}
+.bv .schip .ico{width:14px;height:14px;flex:none}
+.bv .schip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;text-underline-offset:3px}
+.bv .macts{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px;margin-top:4px}
+.bv .csteps{flex:1 1 200px;margin:0;font-size:var(--fs-xs);color:var(--muted);overflow-wrap:anywhere}
+.bv .busy{display:flex;align-items:center;gap:8px;font-weight:700}
+.bv .spin{width:14px;height:14px;flex:none;border-radius:50%;box-shadow:inset 0 0 0 2px var(--rule);border-top:2px solid var(--accent);animation:cs-spin 1s linear infinite}
+@keyframes cs-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){ .bv .spin{animation:none} }
+.bv .bsteps{display:flex;flex-wrap:wrap;gap:4px 12px;margin:6px 0 2px;font-size:var(--fs-sm);color:var(--text)}
+.bv .bst{display:inline-flex;align-items:center;gap:5px;overflow-wrap:anywhere}
+.bv .bst.done::after{content:"✓";color:var(--ok);font-weight:700}
+.bv .compose{flex:none;padding:10px 16px 12px;border-top:var(--rule-mid) solid var(--rule);background:inherit;border-radius:0 0 var(--radius) var(--radius)}
+.bv .compose .err{margin:0 0 8px}
+.bv .compose .cnote{margin:0 0 8px;font-size:var(--fs-md)}
+.bv .sugg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.bv .sugg button{font-size:var(--fs-sm);padding:5px 10px;border-radius:var(--chip-radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.bv .sugg button:hover{background:var(--surface-2)}
+.bv .inrow{display:flex;gap:8px}
+.bv .inrow .inp{flex:1;width:auto;max-width:none;min-width:0}
+.bv .inrow .act{display:flex;align-items:center;gap:6px;padding:0 14px;font-size:var(--fs-sm)}
+.bv .fine{font-size:var(--fs-xs);color:var(--muted);margin:8px 0 0}
+.bv .fine .tbtn{color:var(--text)}
+.bv .ppl{margin:0;font-size:var(--fs-md);overflow-wrap:anywhere}
+.chatset .wpanel .note{margin-top:6px}
+@media (max-width:700px){
+  .bv .pane.chatpane{padding:0 0 0}
+  .bv .pane.chatpane>.foot{display:none}
+  .bv .chatcol{height:auto;min-height:0;max-width:none;border:0;border-radius:0;background:var(--phone)}
+  .bv .chatcol .dtop{padding:6px 8px 6px 14px}
+  .bv .cmodel{max-width:40%}
+  .bv .msgs{padding:12px}
+  .bv .compose{padding:8px 12px 10px}
+  .bv .inrow .act{padding:0 12px}
+}

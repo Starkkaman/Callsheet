@@ -197,9 +197,17 @@
     return s;
   }
   var KEY_TAB = 'callsheet.tab', KEY_DISMISS = 'callsheet.dismissed';
+  /* 0.6.0 chat: Chat takes the place of Areas (area summaries are in Briefing, Replies has area chips) */
   var TABS = [['briefing', 'Briefing', 'Brief', 'brief'], ['replies', 'Replies', 'Replies', 'mail'], ['agenda', 'Agenda', 'Agenda', 'cal'],
-    ['areas', 'Areas', 'Areas', 'areas'], ['tasks', 'Tasks', 'Tasks', 'tasks']];
-  var LIVE_TABS = ['briefing', 'replies', 'agenda', 'areas'];
+    ['chat', 'Chat', 'Chat', 'chat'], ['tasks', 'Tasks', 'Tasks', 'tasks']];
+  var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat'];
+  var OLD_TABS = { areas: 'replies' };  /* 0.6.0 chat: a saved tab or #areas link from before opens Replies */
+  function tabFromHash(hash) {          /* #briefing, #replies, #agenda, #chat (and the old #areas) open the brief there */
+    var t = String(hash || '').replace(/^#/, '');
+    t = OLD_TABS[t] || t;
+    return LIVE_TABS.indexOf(t) >= 0 ? t : null;
+  }
+  function savedTab() { var t = load(KEY_TAB); t = OLD_TABS[t] || t; return LIVE_TABS.indexOf(t) >= 0 ? t : 'briefing'; }
   /* one reason dot per row, strongest first; the legend uses the same words */
   var REASONS = [['vip', 'VIP'], ['men', 'Mentioned'], ['q', 'Question'], ['due', 'Deadline'], ['wait', 'Waiting']];
   var RNAME = {}; REASONS.forEach(function (x) { RNAME[x[0]] = x[1]; });
@@ -208,8 +216,8 @@
 
   var B = null;            /* the brief being shown */
   var U = {                /* brief UI state; survives re-renders and refreshes */
-    tab: LIVE_TABS.indexOf(load(KEY_TAB)) >= 0 ? load(KEY_TAB) : 'briefing',
-    open: null,            /* {kind: 'reply'|'event', id} */
+    tab: tabFromHash(location.hash) || savedTab(),
+    open: null,            /* {kind: 'reply'|'event'|'item', id} ('item': an index item from a chat source chip, 0.6.0) */
     pop: null,             /* notepad menu {kind: 'reply'|'event'|'heads'|'para', id, anc, sub} */
     doneOpen: false, area: null, more: false, drafts: {}, toast: null, busy: false
   };
@@ -406,7 +414,7 @@
     var byArea = areas.length ? [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
       var chk = areaCheck(sum, a.id);
       return h('div', { class: 'para cn' }, [
-        h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + (chk ? ' ' + CHECK_LABEL : '') + ' (open in Areas)' }, [
+        h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + (chk ? ' ' + CHECK_LABEL : '') + ' (show its replies)' }, [
           h('span', { class: 'ptag' }, tagOf(a.id)), h('span', { class: 'ptext' }, sum.areas[a.id]), checkLabel('span', chk)]),
         npBtn('para', a.id, 'pa-' + a.id)]);
     }))] : null;
@@ -426,10 +434,12 @@
     return [h('div', { class: 'bf' }, [h('article', null, [head, text, topEl, byArea]), aside])];
   }
   function T_replies() {
-    var rs = openReplies(), nNew = B.previous_at ? rs.filter(function (r) { return r.new; }).length : 0;
-    return [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, rs.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
+    var all = openReplies(), nNew = B.previous_at ? all.filter(function (r) { return r.new; }).length : 0;
+    var rs = U.area ? all.filter(function (r) { return r.area === U.area; }) : all;  /* 0.6.0 chat: the area chips */
+    return [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, all.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
+      areaChips(all),
       rs.length ? legend() : null,
-      rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, 'Nothing waiting.'),
+      rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, U.area ? 'Nothing waiting in this area.' : 'Nothing waiting.'),
       hiddenLine(), doneRows()];
   }
   function timeline() {
@@ -517,31 +527,7 @@
       possibleSection()];
   }
   function areaCheck(sum, id) { return !!(sum && Array.isArray(sum.areas_check) && sum.areas_check.indexOf(id) >= 0); }
-  function T_areas() {
-    var list = (B.areas || []).filter(function (a) { return !U.area || a.id === U.area; });
-    var sumA = (B.summary && B.summary.areas) || {};
-    var filt = U.area ? h('div', { class: 'afilt' }, [h('span', { class: 'muted' }, 'Showing ' + areaOf(U.area).name + ' · '),
-      h('button', { type: 'button', class: 'tbtn', 'data-allareas': '1' }, 'All areas')]) : null;
-    var cols = h('div', { class: 'bycols' }, list.map(function (a) {
-      var reps = openReplies().filter(function (r) { return r.area === a.id; }), evs = events().filter(function (e) { return e.area === a.id; });
-      return h('section', { class: 'acol a' + clampColour(a.colour), 'aria-label': a.name }, [
-        h('h2', { class: 'areahead' }, a.name),
-        sumA[a.id] ? h('p', { class: 'asum' }, sumA[a.id]) : null, sumA[a.id] ? checkLabel('p', areaCheck(B.summary, a.id)) : null,
-        h('h3', { class: 'sub-h' }, ['Replies ', h('span', { class: 'n' }, String(reps.length))]),
-        reps.length ? h('div', { class: 'list' }, reps.map(function (r) { return rowEl(r, 'ar'); })) : h('p', { class: 'empty' }, 'Nothing waiting.'),
-        h('h3', { class: 'sub-h' }, ['Today ', h('span', { class: 'n' }, String(evs.length))]),
-        evs.length ? h('div', { class: 'evs' }, evs.map(function (e) {
-          var sel = U.open && U.open.kind === 'event' && U.open.id === e.id;
-          return h('div', { class: 'evr cn' + (sel ? ' sel' : '') }, [
-            h('button', { type: 'button', class: 'emain', 'data-open': 'event:' + e.id }, [h('span', { class: 'tm' }, e.time || ''),
-              h('span', { class: 'w' }, [e.title, e.clash ? h('span', { class: 'ct' }, 'Clash') : null])]),
-            npBtn('event', e.id, 'ae-' + e.id)]);
-        })) : h('p', { class: 'empty' }, 'Nothing booked.')]);
-    }));
-    if (list.length) cols.style.setProperty('--cols', String(Math.min(4, list.length)));
-    return [filt, list.length ? cols : h('p', { class: 'empty' }, 'No areas yet.')];
-  }
-  var TFN = { briefing: T_briefing, replies: T_replies, agenda: T_agenda, areas: T_areas };
+  var TFN = { briefing: T_briefing, replies: T_replies, agenda: T_agenda, chat: T_chat };  /* 0.6.0 chat */
 
   /* ----- detail panel ----- */
   function panelReply(r) {
@@ -576,6 +562,7 @@
   }
   function panelEl() {
     if (!U.open) return null;
+    if (U.open.kind === 'item') return itemPanel();  /* 0.6.0 chat: a source chip's item */
     var r = U.open.kind === 'reply' ? replyById(U.open.id) : eventById(U.open.id);
     if (!r) { U.open = null; return null; }
     var phone = isPhone(), isEv = U.open.kind === 'event';
@@ -747,7 +734,7 @@
     (B.replies || []).forEach(function (r, i) { if (!r.id) r.id = 'x' + (i + 1); });
     (B.schedule || []).forEach(function (e, i) { if (!e.id) e.id = 'xs' + (i + 1); });
     (B.done || []).forEach(function (r, i) { if (!r.id) r.id = 'xd' + (i + 1); });
-    if (U.open && !(U.open.kind === 'reply' ? replyById(U.open.id) : eventById(U.open.id))) U.open = null;
+    if (U.open && U.open.kind !== 'item' && !(U.open.kind === 'reply' ? replyById(U.open.id) : eventById(U.open.id))) U.open = null;
   }
   function renderBrief(focusSel) {
     if (ui.view !== 'brief' || !B) return;
@@ -785,6 +772,7 @@
     syncTabsH();
     renderLayer();
     syncBg();
+    if (U.tab === 'chat') chatAfterRender();  /* 0.6.0 chat: scroll to the latest message, phone height */
     if (focusSel) { var f = document.querySelector(focusSel); if (f) f.focus({ preventScroll: true }); }
   }
   function syncTabsH() {
@@ -902,7 +890,9 @@
   function setTab(t, focus) {
     if (LIVE_TABS.indexOf(t) < 0) return;
     U.tab = t; U.pop = null; save(KEY_TAB, t);
-    if (t !== 'areas') U.area = null;
+    if (tabFromHash(location.hash) && history.replaceState) history.replaceState(null, '', '#' + t);  /* 0.6.0 chat: a tab link follows the tab */
+    if (t !== 'replies') U.area = null;
+    if (U.open && U.open.kind === 'item' && t !== 'chat') U.open = null;  /* 0.6.0 chat */
     renderBrief(focus ? '[data-tab="' + t + '"]' : null);
     if (!isPhone()) { var tb = main.querySelector('.tabbar'); if (tb && tb.getBoundingClientRect().top < 0) window.scrollTo(0, 0); }
     else window.scrollTo(0, 0);
@@ -930,8 +920,8 @@
     else if (d.markdone) markDone(d.markdone);
     else if (d.donefold) { U.doneOpen = !U.doneOpen; renderBrief('[data-donefold]'); }
     else if (d.more) { U.more = !U.more; renderBrief('[data-more]'); }
-    else if (d.goarea) { U.area = d.goarea; setTab('areas'); var ah = main.querySelector('.tabbar [data-tab="areas"]'); if (ah) ah.focus({ preventScroll: true }); }
-    else if (d.allareas) { U.area = null; renderBrief('.tabbar [data-tab="areas"]'); }
+    else if (d.goarea) { U.area = d.goarea; setTab('replies'); var ah = main.querySelector('.tabbar [data-tab="replies"]'); if (ah) ah.focus({ preventScroll: true }); }
+    else if (d.afil) { U.area = d.afil === 'all' ? null : d.afil; renderBrief('[data-afil="' + cssq(d.afil) + '"]'); }  /* 0.6.0 chat */
     else if (d.manage) { ui.step = 3; ui.focusNext = '#nnr-h'; location.hash = 'setup'; }
     else if (d.copy) copyDraft(t);
     else if (d.np) {
@@ -1051,7 +1041,9 @@
     if (v !== 'knowme') stopKnowPoll();  /* 0.6.0 index */
     if (v !== 'profile' && v !== 'profileq') stopProfilePoll();  /* 0.6.0 profile */
     refreshErr.textContent = '';
-    if (!changed && main.querySelector('.sheet, .bv')) return;
+    var ht = v === 'brief' ? tabFromHash(location.hash) : null;  /* 0.6.0 chat: #replies, #chat, … (and #areas) */
+    if (ht && ht !== U.tab) { U.tab = ht; save(KEY_TAB, ht); if (ht !== 'replies') U.area = null; }
+    if (!changed && main.querySelector('.sheet, .bv')) { if (ht && B) renderBrief(); return; }
     window.scrollTo(0, 0);
     if (v === 'setup') {
       var fs = ui.focusNext; ui.focusNext = null; ui.confirm = null;
@@ -1659,7 +1651,7 @@
       h('div', { class: 'opts' }, [
         row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
         row(pushOn(), 'Phone notifications', 'via the Home Assistant app · set up below', pushOn() ? 'On' : 'Off')]),
-      pushBlock(), writerBlock(), writingBlock(), memoryBlock()];
+      pushBlock(), writerBlock(), chatBlock(), writingBlock(), memoryBlock()];  /* 0.6.0 chat: chatBlock */
   }
 
   /* step 5: writing instructions. Profiles (Default is built in and read-only); five texts per profile, each saved
@@ -3271,6 +3263,473 @@
       h('div', { class: 'go' }, [btn('act', 'See it in Memory (Setup)', { 'data-fk': 'pf-mem' }, function () { PF.done = false; ui.step = 5; location.hash = 'setup'; }),
         btn('btn ghost', 'Back to the draft', null, function () { PF.done = false; location.hash = 'profile'; })])];
   }
+
+  /* ---------- 0.6.0 chat: the Chat tab (Ask Callsheet: read-only search over the index; chat.py, docs/chat.md),
+     the source item panel, and Setup → Delivery → Chat. Kept in its own section (profile/interview is built on another
+     branch). Data is text (h(), textContent); every URL is relative (api/chat…). ---------- */
+  var KEY_CHAT = 'callsheet.chat';
+  var CH = {
+    ov: null,            /* GET api/chat: conversations, ready/why, label, provider, index_total, busy */
+    conv: null,          /* the open conversation (GET api/chat/<id>), with .pending while Callsheet answers */
+    cid: load(KEY_CHAT) || null,
+    input: '', err: '', loading: false, sending: null, timer: null, fails: 0,
+    items: {},           /* index item id -> api/chat/item/<id> (null while loading) */
+    earlier: false, clearAsk: false, scroll: true, keepTop: null
+  };
+  var CHAT_SUGG = ['What’s waiting on me?', 'When did I last talk to…', 'Summarise this week'];
+  var SRC_ICON = { gmail: 'mail', slack: 'slack', calendar: 'cal', drive: 'drive', obsidian: 'note', signal: 'signal' };
+  var SRC_NAME = { gmail: 'Gmail', slack: 'Slack', calendar: 'Calendar', drive: 'Google Drive', obsidian: 'Obsidian', signal: 'Signal' };
+  var ITEM_KIND = { email: 'Email', sent: 'Sent email', event: 'Event', message: 'Message', note: 'Note' };
+
+  function chatLoad() {
+    if (CH.loading) return;
+    CH.loading = true;
+    var cid = CH.cid;
+    api('GET', 'api/chat').then(function (ov) {
+      CH.ov = ov || { conversations: [] };
+      if (!cid) return null;
+      return api('GET', 'api/chat/' + encodeURIComponent(cid)).then(function (c) { CH.conv = c; },
+        function () { CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); });
+    }).then(function () { CH.loading = false; CH.err = ''; CH.scroll = true; chatRender(); chatPoll(); },
+      function (e) { CH.loading = false; CH.err = e.message; chatRender(); });
+  }
+  function chatOverview() {
+    return api('GET', 'api/chat').then(function (ov) { CH.ov = ov || CH.ov; chatRender(); }, function () { });
+  }
+  /* a full re-render of the brief while the chat is shown, keeping the focus in the question box */
+  function chatRender(focusSel) {
+    if (ui.view !== 'brief' || !B || U.tab !== 'chat') return;
+    var a = document.activeElement;
+    if (!focusSel && a && a.hasAttribute && a.hasAttribute('data-ask-in') && main.contains(a)) focusSel = '[data-ask-in]';
+    renderBrief(focusSel);
+  }
+  /* while Callsheet answers: only the message list is replaced (the question box keeps its text and focus) */
+  function chatRefreshMsgs() {
+    var box = main.querySelector('.chatcol .msgs');
+    if (!box || ui.view !== 'brief' || U.tab !== 'chat') return;
+    var atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    box.textContent = '';
+    add(box, chatMsgs());
+    if (atEnd) box.scrollTop = box.scrollHeight;
+    var sb = main.querySelector('[data-csend]');
+    if (sb) sb.disabled = chatPending();
+  }
+  function chatPending() { return !!(CH.sending || (CH.conv && CH.conv.pending)); }
+  function chatPoll() {
+    clearTimeout(CH.timer); CH.timer = null;
+    if (!CH.conv || !CH.conv.pending) return;
+    var cid = CH.conv.id;
+    CH.timer = setTimeout(function () {
+      CH.timer = null;
+      api('GET', 'api/chat/' + encodeURIComponent(cid)).then(function (c) {
+        if (!CH.conv || CH.conv.id !== cid) return;
+        CH.fails = 0; CH.conv = c;
+        if (c.pending) { chatRefreshMsgs(); chatPoll(); }
+        else { CH.scroll = true; chatRender(); chatOverview(); }
+      }, function (e) {
+        if (!CH.conv || CH.conv.id !== cid) return;
+        if (++CH.fails < 5) { chatPoll(); return; }
+        CH.fails = 0; CH.conv.pending = null; CH.err = e.message; chatRender();
+      });
+    }, 1000);
+  }
+  function chatAsk(text) {
+    text = String(text || '').trim();
+    if (!text || chatPending()) return;
+    CH.sending = text; CH.err = ''; CH.input = ''; CH.scroll = true;
+    chatRender('[data-ask-in]');
+    api('POST', 'api/chat/ask', { conversation_id: CH.conv ? CH.conv.id : null, text: text }).then(function (c) {
+      CH.sending = null; CH.conv = c; CH.cid = c.id; save(KEY_CHAT, c.id); CH.scroll = true;
+      chatRender('[data-ask-in]'); chatPoll();
+    }, function (e) { CH.sending = null; CH.input = text; CH.err = e.message; chatRender('[data-ask-in]'); });
+  }
+  function chatNew() {
+    clearTimeout(CH.timer); CH.timer = null;
+    CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.input = ''; CH.err = ''; CH.earlier = false; CH.scroll = true;
+    if (U.open && U.open.kind === 'item') U.open = null;
+    chatRender('[data-ask-in]');
+    chatOverview();
+  }
+  function chatOpen(id) {
+    api('GET', 'api/chat/' + encodeURIComponent(id)).then(function (c) {
+      CH.conv = c; CH.cid = c.id; save(KEY_CHAT, c.id); CH.earlier = false; CH.err = ''; CH.scroll = true;
+      chatRender('[data-ask-in]'); chatPoll();
+    }, function (e) { CH.err = e.message; chatRender(); });
+  }
+  function chatStop(b) {
+    if (!CH.conv) return;
+    b.disabled = true;
+    api('POST', 'api/chat/' + encodeURIComponent(CH.conv.id) + '/stop').then(function (c) { CH.conv = c; chatRefreshMsgs(); chatPoll(); },
+      function (e) { b.disabled = false; CH.err = e.message; chatRender(); });
+  }
+  function chatClearAll(b) {
+    b.disabled = true;
+    api('DELETE', 'api/chat').then(function () {
+      clearTimeout(CH.timer); CH.timer = null;
+      CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.earlier = false; CH.clearAsk = false; CH.items = {};
+      if (CH.ov) CH.ov.conversations = [];
+      if (U.open && U.open.kind === 'item') U.open = null;
+      chatRender('[data-ask-in]');
+    }, function (e) { b.disabled = false; CH.err = e.message; chatRender(); });
+  }
+  function chatCopy(b, i) {
+    var m = CH.conv && CH.conv.messages && CH.conv.messages[i];
+    if (!m) return;
+    var s = m.text || '';
+    function said(t) { b.textContent = t; setTimeout(function () { b.textContent = 'Copy'; }, 2000); }
+    function fallback() {
+      var ta = h('textarea', { class: 'sr', 'aria-hidden': 'true', tabindex: '-1' }), ok = false;
+      ta.value = s; document.body.appendChild(ta);
+      try { ta.select(); ok = document.execCommand && document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta); b.focus();
+      said(ok ? 'Copied' : 'Couldn’t copy');
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(function () { said('Copied'); }, fallback);
+    else fallback();
+  }
+  function chatDay(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000), tz = (S && S.settings && S.settings.timezone) || undefined;
+    try {
+      var day = d.toLocaleDateString('en-CA', { timeZone: tz }), today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+      return day === today ? 'Today' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: tz });
+    } catch (e) { return d.toDateString(); }
+  }
+
+  function T_chat() {
+    if (!CH.ov && !CH.loading && !CH.err) chatLoad();
+    var old = main.querySelector('.chatcol .msgs');   /* the list being replaced: keep where the owner had scrolled */
+    CH.keepTop = old ? old.scrollTop : null;
+    return [chatCol()];
+  }
+  function chatCol() {
+    var ov = CH.ov, convs = (ov && ov.conversations) || [];
+    var head = h('div', { class: 'dtop' }, [h('h2', null, 'Chat'), ov && ov.label ? h('span', { class: 'cmodel' }, ov.label) : null, h('span', { class: 'sp' }),
+      convs.length ? h('button', { type: 'button', class: 'tbtn', 'data-cearlier': '1', 'aria-expanded': String(CH.earlier), 'aria-controls': 'ch-earlier' }, 'Earlier chats') : null,
+      h('button', { type: 'button', class: 'act ghost cnew', 'data-cnew': '1', disabled: !CH.conv && !CH.sending }, [ico('chat'), 'New chat'])]);
+    var earlier = CH.earlier && convs.length ? h('div', { class: 'cearly', id: 'ch-earlier' }, [
+      h('ul', null, convs.map(function (c) {
+        var on = CH.conv && CH.conv.id === c.id;
+        return h('li', null, h('button', { type: 'button', 'data-cconv': c.id, 'aria-current': on ? 'true' : null }, [
+          h('span', { class: 't' }, c.title || 'Chat'), h('span', { class: 'd' }, (c.pending ? 'Answering… · ' : '') + chatDay(c.updated_at))]));
+      })),
+      CH.clearAsk ? h('div', { class: 'cclear', role: 'group', 'aria-label': 'Delete all chats' }, [
+        h('p', null, 'Delete all chats? They can’t be brought back.'),
+        h('button', { type: 'button', class: 'act', 'data-cclearyes': '1' }, 'Delete all'),
+        h('button', { type: 'button', class: 'tbtn', 'data-cclearno': '1' }, 'Cancel')])
+        : h('p', { class: 'fine' }, ['Chats stay on this box for ' + ((ov && ov.retention_days) || 30) + ' days. ',
+          h('button', { type: 'button', class: 'tbtn', 'data-cclear': '1' }, 'Clear all')])]) : null;
+    var body;
+    if (!ov) body = CH.err ? h('div', { class: 'msgs' }, h('div', { class: 'ma' }, [h('p', { class: 'err', role: 'alert' }, CH.err),
+      h('button', { type: 'button', class: 'act', 'data-cretry': '1' }, 'Try again')]))
+      : h('div', { class: 'msgs' }, h('p', { class: 'muted', role: 'status' }, 'Loading…'));
+    else body = h('div', { class: 'msgs', 'aria-live': 'polite' }, chatMsgs());
+    return h('section', { class: 'chatcol', 'aria-label': 'Chat' }, [head, earlier, body, chatCompose(ov)]);
+  }
+  function chatMsgs() {
+    var conv = CH.conv, msgs = (conv && conv.messages) || [], out = [];
+    if (!msgs.length && !CH.sending) out.push(chatIntro());
+    msgs.forEach(function (m, i) {
+      out.push(m.role === 'user' ? h('div', { class: 'mq' }, [h('span', { class: 'sr' }, 'You asked: '), m.text]) : chatAnswer(m, i));
+    });
+    if (CH.sending) out.push(h('div', { class: 'mq' }, [h('span', { class: 'sr' }, 'You asked: '), CH.sending]), chatBusy({ text: 'Sending…', steps: [] }, false));
+    else if (conv && conv.pending) out.push(chatBusy(conv.pending, true));
+    return out;
+  }
+  function chatIntro() {
+    var ov = CH.ov || {};
+    var kids = [h('p', null, 'Ask about your own mail, chat, calendar and notes. Callsheet searches them here on this box and shows where each answer comes from.')];
+    if (ov.index_available === false) kids.push(h('p', { class: 'err' }, 'The index isn’t available, so Callsheet can’t search. Check the app log.'));
+    else if (!ov.index_total) kids.push(h('p', null, 'Callsheet hasn’t read your history yet.'),
+      h('button', { type: 'button', class: 'act', 'data-cknow': '1' }, 'Get to know me'));
+    return h('div', { class: 'cintro' }, kids);
+  }
+  function chatChip(s) {
+    var sel = U.open && U.open.kind === 'item' && String(U.open.id) === String(s.id);
+    var name = SRC_NAME[s.source] || s.source || 'Item';
+    return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
+      'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') }, [
+      ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : ''))]);
+  }
+  function chatAnswer(m, i) {
+    var kids = [h('span', { class: 'label' }, ['Callsheet', m.by ? h('span', { class: 'by' }, ' · ' + m.by) : null])];
+    if (m.error) kids.push(h('p', { class: 'err' }, m.error));
+    else if (m.stopped) kids.push(h('p', { class: 'muted' }, 'Stopped.'));
+    else {
+      if (m.warning) kids.push(h('p', { class: 'err sugwarn' }, m.warning));
+      String(m.text || '').split(/\n{2,}/).forEach(function (p) { if (p.trim()) kids.push(h('p', null, p.trim())); });
+      if (m.sources && m.sources.length) kids.push(h('div', { class: 'from' }, [h('span', { class: 'label' }, 'From'), m.sources.map(chatChip)]));
+    }
+    var steps = (m.steps || []).length ? h('p', { class: 'csteps' }, m.steps.join(' · ')) : null;
+    kids.push(h('div', { class: 'macts' }, [steps, m.text ? h('button', { type: 'button', class: 'tbtn', 'data-ccopy': String(i) }, 'Copy') : null]));
+    return h('div', { class: 'ma' }, kids);
+  }
+  function chatBusy(p, canStop) {
+    var steps = p.steps || [];
+    return h('div', { class: 'ma' }, [h('span', { class: 'label' }, 'Callsheet'),
+      h('div', { class: 'busy', role: 'status' }, [h('span', { class: 'spin', 'aria-hidden': 'true' }), p.text || 'Thinking…']),
+      steps.length ? h('div', { class: 'bsteps' }, steps.map(function (s) { return h('span', { class: 'bst done' }, s); })) : null,
+      canStop ? h('button', { type: 'button', class: 'tbtn', 'data-cstop': '1' }, 'Stop') : null]);
+  }
+  function chatCompose(ov) {
+    if (!ov) return null;
+    if (!ov.ready) return h('div', { class: 'compose' }, [h('p', { class: 'cnote' }, ov.why || 'Set up the chat model first.'),
+      h('button', { type: 'button', class: 'act', 'data-csetup': '1' }, 'Set up the chat model')]);
+    var inp = h('input', { class: 'inp', id: 'ch-ask', type: 'text', 'data-ask-in': '1', maxlength: '2000', autocomplete: 'off', enterkeyhint: 'send',
+      placeholder: 'Ask about your mail, chat or calendar…' });
+    inp.value = CH.input;
+    var empty = !(CH.conv && CH.conv.messages && CH.conv.messages.length) && !CH.sending;
+    return h('div', { class: 'compose' }, [
+      empty ? h('div', { class: 'sugg', role: 'group', 'aria-label': 'Suggestions' }, CHAT_SUGG.map(function (s) { return h('button', { type: 'button', 'data-csug': s }, s); })) : null,
+      CH.err && CH.ov ? h('p', { class: 'err', role: 'alert' }, CH.err) : null,
+      h('div', { class: 'inrow' }, [h('label', { class: 'sr', for: 'ch-ask' }, 'Ask Callsheet'), inp,
+        h('button', { type: 'button', class: 'act', 'data-csend': '1', 'aria-label': 'Ask', disabled: chatPending() }, [ico('send'), h('span', { class: 'd-only' }, 'Ask')])]),
+      h('p', { class: 'fine' }, 'Answers come from your own mail, chat and calendar on this box. Callsheet can’t send or change anything.'
+        + (ov.provider === 'claude' ? ' With Claude, the search results for each question go to Anthropic.' : ''))]);
+  }
+  /* after renderBrief: the latest message in view; on a phone the column fills the screen above the tab bar */
+  function chatAfterRender() {
+    var col = main.querySelector('.chatcol'), box = col && col.querySelector('.msgs');
+    if (!col) return;
+    var pane = col.closest('.pane'); if (pane) pane.classList.add('chatpane');
+    if (isPhone()) {
+      var tb = main.querySelector('.tabbar'), top = col.getBoundingClientRect().top + window.scrollY;
+      col.style.height = Math.max(300, window.innerHeight - top - (tb ? tb.offsetHeight : 0)) + 'px';
+    } else {
+      var t = col.getBoundingClientRect().top + window.scrollY;   // banners above the tabs push the column down
+      col.style.height = Math.max(420, Math.min(760, window.innerHeight - t - 16)) + 'px';
+    }
+    if (!box) return;
+    if (CH.scroll) { box.scrollTop = box.scrollHeight; CH.scroll = false; }
+    else if (CH.keepTop != null) box.scrollTop = CH.keepTop;
+  }
+  window.addEventListener('resize', function () {
+    if (ui.view !== 'brief' || U.tab !== 'chat') return;
+    var box = main.querySelector('.chatcol .msgs'), atEnd = box && box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    CH.keepTop = box ? box.scrollTop : null; CH.scroll = !!atEnd;
+    chatAfterRender();
+  });
+
+  /* Replies: area filter chips (All + each area, with open counts); they replace the old Areas tab */
+  function areaChips(all) {
+    var areas = (B && B.areas) || [];
+    if (areas.length < 2) return null;
+    function n(id) { return all.filter(function (r) { return !id || r.area === id; }).length; }
+    return [h('div', { class: 'afil', role: 'group', 'aria-label': 'Filter by area' },
+      [h('button', { type: 'button', class: 'chip', 'data-afil': 'all', 'aria-pressed': String(!U.area) }, 'All ' + n(null))].concat(areas.map(function (a) {
+        return h('button', { type: 'button', class: 'chip a' + clampColour(a.colour), 'data-afil': a.id, 'aria-pressed': String(U.area === a.id) }, a.name + ' ' + n(a.id));
+      }))),
+      h('p', { class: 'afnote' }, 'Area summaries are at the top of Briefing.')];
+  }
+
+  /* the side panel for a source chip: like a Replies detail (title, people, date, snippet, Open in …) */
+  function itemPanel() {
+    var id = String(U.open.id), it = CH.items[id], phone = isPhone();
+    if (it === undefined) {
+      CH.items[id] = null;
+      api('GET', 'api/chat/item/' + encodeURIComponent(id)).then(function (r) { CH.items[id] = r || { error: 'Nothing to show.' }; }, function (e) { CH.items[id] = { error: e.message }; })
+        .then(function () { if (ui.view === 'brief' && U.open && U.open.kind === 'item' && String(U.open.id) === id) renderBrief('.panel [data-close]'); });
+    }
+    var closeB = h('button', { type: 'button', class: 'xbtn', 'data-close': '1' }, phone ? [ico('back'), 'Back to chat'] : [ico('close'), 'Close']);
+    var body;
+    if (!it) body = [h('h2', { id: 'bv-ptitle', class: 'sr' }, 'Item'), h('p', { class: 'muted', role: 'status' }, 'Loading…')];
+    else if (it.error) body = [h('h2', { id: 'bv-ptitle', class: 'sr' }, 'Item'), h('p', { class: 'err', role: 'alert' }, it.error)];
+    else {
+      var link = safeHttps(it.url), name = it.source_name || SRC_NAME[it.source] || it.source;
+      body = [h('div', { class: 'phd' }, [h('h2', { id: 'bv-ptitle' }, it.title || '(no title)'),
+          h('div', { class: 'pmeta' }, [it.area ? h('span', { class: 'tag ' + areaOf(it.area_id).cls }, it.area) : null,
+            h('span', { class: 's' }, [ico(SRC_ICON[it.source] || 'note'), name]), it.when ? h('span', null, it.when) : null])]),
+        it.people ? [h('h3', { class: 'plab' }, 'People'), h('p', { class: 'ppl' }, it.people)] : null,
+        it.snippet ? [h('h3', { class: 'plab' }, 'Snippet'), h('p', { class: 'what' }, it.snippet)] : null,
+        h('div', { class: 'pacts' }, link ? h('a', { class: 'act', href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + name)
+          : h('span', { class: 'muted' }, it.source === 'obsidian' ? 'In your Obsidian vault' : 'No link for this item'))];
+    }
+    var attrs = { class: 'panel', 'aria-labelledby': 'bv-ptitle' };
+    if (phone) { attrs.role = 'dialog'; attrs['aria-modal'] = 'true'; }
+    return h('aside', attrs, h('div', { class: 'panel-in' }, [
+      h('div', { class: 'ptop' }, [phone ? closeB : h('span', { class: 'label lbl' }, (it && ITEM_KIND[it.kind]) || 'Item'), h('span', { class: 'sp' }), phone ? null : closeB]),
+      h('div', { class: 'pbody' }, body)]));
+  }
+
+  document.addEventListener('click', function (e) {
+    if (ui.view !== 'brief' || !B || U.tab !== 'chat') return;
+    var t = e.target.closest ? e.target.closest('button') : null;
+    if (!t || t.disabled || !main.contains(t)) return;
+    var d = t.dataset;
+    if (d.csend) { var inp = main.querySelector('[data-ask-in]'); chatAsk(inp ? inp.value : CH.input); }
+    else if (d.csug) {
+      if (/…$/.test(d.csug)) { CH.input = d.csug.replace(/…$/, ' '); chatRender('[data-ask-in]'); }
+      else chatAsk(d.csug);
+    }
+    else if (d.cnew) chatNew();
+    else if (d.cstop) chatStop(t);
+    else if (d.ccopy) chatCopy(t, parseInt(d.ccopy, 10));
+    else if (d.cearlier) { CH.earlier = !CH.earlier; CH.clearAsk = false; chatRender('[data-cearlier]'); }
+    else if (d.cconv) chatOpen(d.cconv);
+    else if (d.cclear) { CH.clearAsk = true; chatRender('[data-cclearno]'); }
+    else if (d.cclearno) { CH.clearAsk = false; chatRender('[data-cclear]'); }
+    else if (d.cclearyes) chatClearAll(t);
+    else if (d.csetup) { ui.step = 5; ui.focusNext = '#ch-h'; location.hash = 'setup'; }
+    else if (d.cknow) location.hash = 'knowme';
+    else if (d.cretry) { CH.err = ''; chatLoad(); }
+  });
+  document.addEventListener('input', function (e) {
+    if (e.target.dataset && e.target.dataset.askIn) CH.input = e.target.value;
+  });
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && t.dataset && t.dataset.askIn) { e.preventDefault(); chatAsk(t.value); }
+  });
+
+  /* Setup → Delivery → Chat: the chat's own model (local or Claude), independent of the writer */
+  var CHS = null, CHS_LOADING = false, CHM = null, CHS_CLEAR = false;  /* settings, loaded models, the clear confirm */
+  function chatSetupRender(focusKey) {
+    if (ui.view !== 'setup' || ui.step !== 5) return;
+    var a = document.activeElement, keep = focusKey || (a && a.getAttribute && main.contains(a) ? a.getAttribute('data-fk') : null);
+    renderSetup(keep ? '[data-fk="' + cssq(keep) + '"]' : null);
+  }
+  function chatBlock() {
+    var title = h('h2', { class: 'h3', id: 'ch-h', tabindex: '-1' }, 'Chat');
+    if (!CHS || CHS.error) {
+      if (!CHS && !CHS_LOADING) {
+        CHS_LOADING = true;
+        api('GET', 'api/chat/settings').then(function (r) { CHS = r; }, function (e) { CHS = { error: e.message }; })
+          .then(function () { CHS_LOADING = false; chatSetupRender(); });
+      }
+      return h('div', { class: 'where chatset' }, [title, CHS && CHS.error ? h('p', { class: 'err', role: 'alert' }, CHS.error) : h('p', { class: 'note' }, 'Loading…')]);
+    }
+    var c = CHS, err = errBox();
+    function patch(body, e, btns, focusKey) {
+      return run(btns || [], e || err, function () { return api('PATCH', 'api/chat/settings', body); }, function (r) {
+        CHS = r || CHS; CH.ov = null; CH.err = '';   /* the Chat tab reloads its model label and readiness */
+        chatSetupRender(focusKey);
+      });
+    }
+    function choice(val, t, sub) {
+      var sel = c.provider === val;
+      return btn('opt' + (sel ? ' sel' : ''), [h('span', { class: 'cb' + (sel ? ' sel' : ''), 'aria-hidden': 'true' }),
+        h('span', null, [h('span', { class: 't' }, t), h('span', { class: 's' }, sub)]),
+        h('span', { class: 'state' }, sel ? 'Selected' : '')], { role: 'radio', 'aria-checked': String(sel), 'data-fk': 'cp:' + val }, function (e) {
+        if (!sel) patch({ provider: val }, err, [e.currentTarget], 'cp:' + val);
+      });
+    }
+    var opts = h('div', { class: 'opts', role: 'radiogroup', 'aria-label': 'Which model answers in Chat' }, [
+      choice('local', 'Local model', 'Your own OpenAI-compatible server. Questions and results stay on your network.'),
+      choice('claude', 'Claude (cloud)', 'Uses the Anthropic key saved for the writer. The search results for each question go to Anthropic.')]);
+
+    /* local: the writer's server and model, or the chat's own (server URL + a model from its /v1/models) */
+    var L = c.local, lErr = errBox(), same = L.same_as_writer;
+    var sameSw = sw(same, 'Same server and model as the brief writer', function () { patch({ local: { same_as_writer: !same } }, lErr, [sameSw], 'ch-same'); });
+    sameSw.setAttribute('data-fk', 'ch-same');
+    var own = null;
+    if (!same) {
+      var url = on(h('input', { class: 'inp', type: 'url', id: 'ch-url', value: L.base_url || '', placeholder: LOCAL_URL_EG, autocomplete: 'off', spellcheck: 'false', 'data-fk': 'ch-url' }), 'change', function () {
+        CHM = null; patch({ local: { base_url: url.value.trim() } }, lErr, [], 'ch-url');
+      });
+      var models = CHM && CHM.models && CHM.models.length ? CHM.models.slice() : null;
+      var model;
+      if (models) {
+        if (L.model && models.indexOf(L.model) < 0) models.unshift(L.model);
+        model = on(h('select', { class: 'inp', id: 'ch-model', 'data-fk': 'ch-model' }, [L.model ? null : h('option', { value: '' }, 'Pick a model')].concat(models.map(function (m) {
+          return h('option', { value: m, selected: m === L.model }, m);
+        }))), 'change', function () { if (model.value) patch({ local: { model: model.value } }, lErr, [model], 'ch-model'); });
+      } else {
+        model = on(h('input', { class: 'inp', type: 'text', id: 'ch-model', value: L.model || '', placeholder: LOCAL_MODEL_EG, autocomplete: 'off', spellcheck: 'false', 'data-fk': 'ch-model' }), 'change', function () {
+          patch({ local: { model: model.value.trim() } }, lErr, [], 'ch-model');
+        });
+      }
+      var mRes = h('span', { class: 'testres', role: 'status' }, CHM && CHM.message ? CHM.message : '');
+      var mLoad = btn('act', 'Load models', { 'data-fk': 'ch-mload' }, function () {
+        mRes.textContent = 'Loading…';
+        run([mLoad], lErr, function () { return api('POST', 'api/chat/models', { base_url: url.value.trim() }); }, function (r) {
+          CHM = r || { models: [] };
+          if (!CHM.ok) { CHM = null; mRes.textContent = ''; lErr.textContent = (r && r.message) || 'Couldn’t load the models.'; return; }
+          chatSetupRender('ch-model');
+        }).then(function () { if (mRes.textContent === 'Loading…') mRes.textContent = ''; });
+      });
+      var key = on(h('input', { class: 'inp', type: 'password', id: 'ch-key', autocomplete: 'off', spellcheck: 'false', placeholder: L.key_hint ? 'Saved key ' + L.key_hint : 'none', 'data-fk': 'ch-key' }), 'change', function () {
+        var v = key.value.trim();
+        if (v) patch({ local: { api_key: v } }, lErr, [], 'ch-key');
+      });
+      var kDel = L.key_hint ? btn('tbtn', 'Remove key', { 'data-fk': 'ch-kdel' }, function () { patch({ local: { api_key: '' } }, lErr, [kDel], 'ch-key'); }) : null;
+      own = h('div', { class: 'lm' }, [
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-url' }, 'Server URL'), url]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-model' }, 'Model'), model, h('div', { class: 'btns kb' }, [mLoad, mRes])]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-key' }, L.key_hint ? 'API key (optional, saved ' + L.key_hint + ')' : 'API key (optional)'), key,
+          kDel ? h('div', { class: 'btns kb' }, kDel) : null])]);
+    }
+    var thL = sw(L.thinking === true, 'Thinking (local)', function () { patch({ local: { thinking: L.thinking !== true } }, lErr, [thL], 'ch-lth'); });
+    thL.setAttribute('data-fk', 'ch-lth');
+    var tools = on(h('select', { class: 'inp', id: 'ch-tools', 'data-fk': 'ch-tools' }, [['auto', 'Automatic (recommended)'], ['native', 'Server tool calling'], ['json', 'Simple JSON (for models without tool calling)']].map(function (o) {
+      return h('option', { value: o[0], selected: L.tools === o[0] }, o[1]);
+    })), 'change', function () { patch({ local: { tools: tools.value } }, lErr, [tools], 'ch-tools'); });
+    function num(id, k, label) {
+      var lim = (c.limits && c.limits[k]) || [1, 99999];
+      var inp = on(h('input', { class: 'inp', type: 'number', id: id, min: String(lim[0]), max: String(lim[1]), step: '1', inputmode: 'numeric', value: String(L[k]), 'data-fk': id }), 'change', function () {
+        var v = inp.value.trim(), body = { local: {} };
+        if (!v) return;
+        body.local[k] = Number(v);
+        patch(body, lErr, [], id);
+      });
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+    }
+    var local = h('div', { class: 'wpanel' + (c.provider === 'local' ? '' : ' off'), role: 'group', 'aria-labelledby': 'ch-lh' }, [
+      h('h3', { class: 'label wh', id: 'ch-lh' }, 'Local model'),
+      h('div', { class: 'swrow' }, [sameSw, h('span', { 'aria-hidden': 'true' }, 'Same server and model as the brief writer')]),
+      same ? h('p', { class: 'note' }, L.writer.base_url && L.writer.model ? 'Uses ' + L.writer.model + ' at ' + L.writer.base_url + '.' : 'Set up the writer’s local model above first, or turn this off.') : own,
+      h('div', { class: 'lm' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-tools' }, 'Tool use'), tools]),
+        num('ch-time', 'timeout', 'Timeout per step (seconds)'), num('ch-max', 'max_tokens', 'Max tokens per answer')]),
+      h('div', { class: 'swrow' }, [thL, h('span', { 'aria-hidden': 'true' }, 'Thinking')]),
+      lErr,
+      h('p', { class: 'note' }, 'Automatic uses the server’s tool calling (llama.cpp needs --jinja) and falls back to simple JSON when the server refuses it. Thinking is slower.')]);
+
+    /* Claude: model, effort, thinking; the key is the writer's */
+    var C = c.claude, cErr = errBox();
+    var cModel = on(h('select', { class: 'inp', id: 'ch-cmodel', 'data-fk': 'ch-cmodel' }, CLAUDE_MODELS.map(function (m) {
+      return h('option', { value: m[0], selected: m[0] === C.model }, m[1] + ' · ' + m[2]);
+    })), 'change', function () { patch({ claude: { model: cModel.value } }, cErr, [cModel], 'ch-cmodel'); });
+    var effort = on(h('select', { class: 'inp', id: 'ch-effort', 'data-fk': 'ch-effort' }, [['low', 'Low (fastest)'], ['medium', 'Medium'], ['high', 'High (most thorough)']].map(function (o) {
+      return h('option', { value: o[0], selected: C.effort === o[0] }, o[1]);
+    })), 'change', function () { patch({ claude: { effort: effort.value } }, cErr, [effort], 'ch-effort'); });
+    var thC = sw(C.thinking === true, 'Thinking (Claude)', function () { patch({ claude: { thinking: C.thinking !== true } }, cErr, [thC], 'ch-cth'); });
+    thC.setAttribute('data-fk', 'ch-cth');
+    var claude = h('div', { class: 'wpanel' + (c.provider === 'claude' ? '' : ' off'), role: 'group', 'aria-labelledby': 'ch-ch' }, [
+      h('h3', { class: 'label wh', id: 'ch-ch' }, 'Claude'),
+      h('div', { class: 'lm' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-cmodel' }, 'Model · USD per million tokens'), cModel]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-effort' }, 'Effort'), effort])]),
+      h('div', { class: 'swrow' }, [thC, h('span', { 'aria-hidden': 'true' }, 'Thinking')]),
+      cErr,
+      h('p', { class: 'note' }, C.has_key ? 'Uses the Anthropic API key saved for the writer.' : 'Add an Anthropic API key in Writer above first.')]);
+
+    var tRes = h('span', { class: 'testres', role: 'status' }), tErr = errBox();
+    var tBtn = btn('act', 'Test chat model', { 'data-fk': 'ch-test' }, function () {
+      tRes.textContent = 'Testing…';
+      run([tBtn], tErr, function () { return api('POST', 'api/chat/test', {}); }, function (r) {
+        tRes.textContent = '';
+        add(tRes, [h('span', { class: 'st' + (r && r.ok ? '' : ' warn') }, r && r.ok ? 'Works' : 'Didn’t work'), ' ', (r && r.message) || '']);
+      }).then(function () { if (tRes.textContent === 'Testing…') tRes.textContent = ''; });
+    });
+    var clrErr = errBox(), clr;
+    if (CHS_CLEAR) {
+      var yes = btn('btn danger', 'Delete all chats', { 'data-fk': 'ch-clryes' }, function () {
+        run([yes], clrErr, function () { return api('DELETE', 'api/chat'); }, function () {
+          CHS_CLEAR = false; CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.ov = null; CH.items = {};
+          chatSetupRender('ch-clr');
+        });
+      });
+      clr = h('div', { class: 'confirm', role: 'group', 'aria-label': 'Delete all chats' }, [h('p', null, 'Delete all chats? They can’t be brought back.'),
+        h('div', { class: 'btns' }, [yes, btn('btn', 'Cancel', { 'data-fk': 'ch-clrno' }, function () { CHS_CLEAR = false; chatSetupRender('ch-clr'); })]), clrErr]);
+    } else clr = h('div', { class: 'testrow' }, btn('tbtn', 'Clear all chats', { 'data-fk': 'ch-clr' }, function () { CHS_CLEAR = true; chatSetupRender('ch-clryes'); }));
+    return h('div', { class: 'where chatset' }, [
+      title,
+      h('p', { class: 'note' }, 'Ask about your own mail, chat, calendar and notes in the Chat tab. It searches the index on this box with read-only tools: it can’t send, reply or change anything.'),
+      opts, err, local, claude,
+      h('div', { class: 'testrow' }, [tBtn, tRes]), tErr,
+      h('p', { class: 'syncst' + (c.ready ? '' : ' bad'), role: 'status' }, c.ready ? 'Chat uses ' + c.label + '.' : c.why),
+      h('p', { class: 'note' }, 'Chats are kept on this box for ' + c.retention_days + ' days after the last message, then deleted. Nothing you ask is added to Memory.'),
+      clr]);
+  }
+  /* ---------- end 0.6.0 chat ---------- */
 
   route();
 })();

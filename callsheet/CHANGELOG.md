@@ -2,6 +2,14 @@
 
 ## 0.6.0
 
+- **Chat (Get to know me, part 3).** A new Chat tab answers questions about your own mail, Slack, calendar,
+  Drive and notes from the local index, with the sources it used as chips you can open. It only reads: four
+  search tools, no sending or changing anything, and answers that state a decision get the usual warning.
+  Pick the model in Setup → Delivery → Chat: your local server (tool calling, or a simple JSON fallback for
+  servers without it) or Claude with your saved key. Questions wait while the brief is being written, and
+  one local request runs at a time. Chats stay on this box for 30 days; "Clear all chats" deletes them.
+- Tabs are now Briefing · Replies · Agenda · Chat · Tasks. The Areas tab is gone: Replies has area filter
+  chips, and old links to Areas open Replies.
 - **Get to know me (part 2: the drafted profile).** From the index, Callsheet drafts who you write to,
   your recurring commitments, reply habits, VIP candidates and projects, and shows them to check: edit, accept
   or remove each one. Your writer model can suggest roles and project names from names, counts and subject lines

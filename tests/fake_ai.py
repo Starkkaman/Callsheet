@@ -65,6 +65,7 @@ class FakeAnthropic(_Fake):
         self.status = 200
         self.reject_beta = False
         self.answer_model = None
+        self.responses = []  # 0.6.0 chat: queue of {"content": [blocks], "stop_reason": ...} (tool use), used first
         super().__init__()
 
     def env(self):
@@ -86,6 +87,11 @@ class FakeAnthropic(_Fake):
                     529: "overloaded_error"}.get(self.status, "invalid_request_error")
             return self.status, {"type": "error", "error": {"type": kind, "message": "nope"}}, quick
         body = req["body"] or {}
+        if self.responses:  # 0.6.0 chat
+            r = self.responses.pop(0)
+            return 200, {"id": "msg_fake", "type": "message", "role": "assistant", "model": body.get("model"),
+                         "content": r["content"], "stop_reason": r.get("stop_reason", "end_turn"),
+                         "stop_sequence": None, "usage": {"input_tokens": 500, "output_tokens": 60}}, None
         text = self.text if self.text is not None else json.dumps(self.output)
         resp = {"id": "msg_fake", "type": "message", "role": "assistant",
                 "model": self.answer_model or body.get("model"),
@@ -99,7 +105,8 @@ class FakeAnthropic(_Fake):
 
 class FakeLocal(_Fake):
     """OpenAI-compatible: GET /v1/models, POST /v1/chat/completions. .contents: queue of message contents
-    (the last one repeats). .status: error status for every request. Like llama.cpp with a thinking model,
+    (the last one repeats). .messages (0.6.0 chat): queue of whole messages, used before .contents;
+    .reject_tools: HTTP 400 for requests with `tools`. .status: error status for every request. Like llama.cpp with a thinking model,
     every answer also carries message.reasoning_content (.reasoning); .finish: finish_reason; .timings: llama.cpp
     timings. .loading: the next N chat requests get HTTP 500 "Loading model"; .resets: the next N chat requests
     get the connection dropped."""
@@ -113,6 +120,8 @@ class FakeLocal(_Fake):
         self.timings = {"prompt_n": 880, "cache_n": 20, "predicted_n": 120}
         self.loading = 0
         self.resets = 0
+        self.messages = []        # 0.6.0 chat: queue of whole message dicts (e.g. with tool_calls), used first
+        self.reject_tools = False  # 0.6.0 chat: HTTP 400 for any request that carries `tools`
         super().__init__()
 
     @property
@@ -134,10 +143,15 @@ class FakeLocal(_Fake):
             if self.loading:
                 self.loading -= 1
                 return 500, {"error": {"code": 500, "message": "Loading model", "type": "unavailable_error"}}, None
-            content = self.contents.pop(0) if len(self.contents) > 1 else self.contents[0]
+            if self.reject_tools and "tools" in (req["body"] or {}):  # 0.6.0 chat: a server without tool calling
+                return 400, {"error": {"code": 400, "message": "tools param requires --jinja flag"}}, None
+            if self.messages:  # 0.6.0 chat
+                msg = dict(self.messages.pop(0))
+            else:
+                content = self.contents.pop(0) if len(self.contents) > 1 else self.contents[0]
+                msg = {"role": "assistant", "content": content, "reasoning_content": self.reasoning}
             return 200, {"id": "c1", "object": "chat.completion", "model": (req["body"] or {}).get("model"),
-                         "choices": [{"index": 0, "message": {"role": "assistant", "content": content,
-                                                              "reasoning_content": self.reasoning},
+                         "choices": [{"index": 0, "message": msg,
                                       "finish_reason": self.finish}],
                          "usage": {"prompt_tokens": 900, "completion_tokens": 120},
                          "timings": self.timings}, None

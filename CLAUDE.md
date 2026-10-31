@@ -32,6 +32,12 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
 - **AI output is text, never instructions.** Mail and calendar content goes to the writer inside the
   untrusted `<data>` block; the writer has no tools; suggestions are shown with textContent and copied
   by the user, never sent.
+- **Chat may use tools (owner's decision, 2026-10-30).** The 0.6 Chat (`chat.py`) is a separate model component
+  from the brief writer, which keeps no tools. Chat's tools are read-only lookups over Callsheet's own local
+  index (`search`, `get_item`, `list_events`, `stats`): no send, no writes to any account, no network fetch.
+  Tool results go back to the model as escaped `<data>` and are never instructions; answers get the same
+  claim post-check as drafts. The owner expects more tools later: every new tool, and anything that writes,
+  sends or fetches, needs the owner's explicit approval first, written here, and its own injection test.
 - No accounts, secrets or user data in the repo. Never print secrets.
 
 ## Design

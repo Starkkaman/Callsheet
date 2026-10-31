@@ -27,6 +27,7 @@
 - `callsheet/app/index.py`: 0.6.0 Know me index: `/data/index.db` (0600) with items + FTS5, idempotent upserts, cursors, search/get/stats, delete per source/account, wipe.
 - `callsheet/app/know_profile.py`: 0.6.0 Know me 3b: the drafted profile from the index (people, recurring, habits, VIP candidates, projects), AI suggestions and questions (aggregates only), owner saves and answers into memory.md.
 - `callsheet/app/sources.py`: 0.6.0 index sources (read-only): Gmail, Calendar, Slack, Drive (scope check via token refresh), Obsidian (vault check + note parsing); retry/skip errors in plain words.
+- `callsheet/app/chat.py`: 0.6.0 Chat: settings (meta `chat`), four read-only tools over the index, local native/JSON and Claude tool loops with limits, `<data>` results, citation check and decision warning, queue behind the brief writer, conversations in `chat/` (0600, 30 days).
 - `callsheet/app/scan.py`: 0.6.0 scan job: windows, estimates and warnings, background thread with pause/resume/cancel, call-time pauses, backoff, 30-minute refresh, orphan prune.
 - `callsheet/app/rules.py`: pure rules: schedule rows, clashes, all-day, needs-a-reply reasons (Gmail categories, suppression), Slack rows and Heads up, Signal rows and Heads up (0.5.1), rules-based Top of the day, 12h/24h display times, call times, brief composition.
 - `callsheet/app/facts.py`: pure facts for the writer (0.4.1): waiting days, unanswered messages and follow-ups, deadlines found in the last message, clash pairs in time order, oldest wait, due today, counts; the content of the `<facts>` block; the rows' wait wording for the page (`row_wait`).
@@ -48,7 +49,7 @@
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
-- `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content and timings, "Loading model" 500s, dropped connections) for tests; record requests.
+- `tests/fake_ai.py`: fake Anthropic API and fake OpenAI-compatible local server (llama.cpp-like reasoning_content and timings, "Loading model" 500s, dropped connections; 0.6.0: queued tool-call replies, servers that refuse `tools`) for tests; record requests.
 - `tests/test_writer.py`: AI writer end to end against the fakes (Claude tests skip without the `anthropic` package): settings, payload minimisation, injection, errors, local JSON mode, fallback, app options seeding.
 - `tests/test_writer_local.py`: writer fixes (0.3.2) against the fakes: per-request schema (replies keyed by row id, both writers, legacy array), quote and signature stripping, decision/payment post-check and its warning, thinking off/on request body, retry while the model loads, answer rescued from the thinking channel, counts-only logs, local settings validation.
 - `tests/test_eval.py`: writer evaluation with contenders against fake Google, a fake local server that answers per model id (and 503 "Loading model") and the fake Anthropic API: toggle off, contender CRUD and validation, the model list, migration of old settings and runs, call-time window, concurrency, live brief unchanged, per-contender request bodies (profile, model, thinking, sampling), both pairing modes, storage and retention, metrics, blind pairs, choices and tally, export, Claude contenders.
@@ -68,6 +69,7 @@
 - `tests/test_push.py`: 0.5.1 phone notifications: the notify-only allowlist, target listing, payloads (no body text, clipping, deep link), scheduler timing, dedupe, rate limit and batching, the urgent rules, settings validation, the test button, VIP Slack DMs, the token never in logs, no writer or model in the light check.
 - `tests/test_profile_060.py`: 0.6.0 profile: Signal source, draft aggregates, AI suggestions/questions against fakes (schema, junk, injection), the memory boundary, gating, routes.
 - `tests/test_index_060.py`: 0.6.0 index: FTS ranking/filters, idempotency, deletion, each source against fakes (pages, resume, backoff, quota), Drive grant, Obsidian, estimates, call-time pauses, API, static checks.
+- `tests/test_chat_060.py`: 0.6.0 Chat: native and JSON protocols, tool allowlist and arguments, injection in results, citations and warning, Claude via fakes, settings, storage and retention, queueing, API, page checks.
 - `tests/fake_slack.py`: fake Slack Web API (read methods, 429 with Retry-After, request log).
 - `tests/test_slack.py`: Slack against the fake: allowlist, manifest scopes, connect and channels API, DM/mention/thread rules, Heads up, ignore list, VIPs, rate limits and the request cap, reconnect, suppression.
 - `tests/test_signal.py`: 0.5.1 Signal: allow-list, the service against the fake signal-cli (link, expiry, refusal, cancel, receive, restart, clean stop, removal on the phone, unlink), QR SVG and the qrcodegen hash, envelopes, rows and Heads up, retention, the import parser (no key or number survives), `api/signal` end to end, Dockerfile and config checks.
@@ -85,6 +87,7 @@
 - `docs/push-and-alerts.md`: 0.5.1 phone notifications and urgent alerts: Home Assistant access and allowlist, deep link, settings, summary and alert texts, the light check, urgent rules, timing, rate limit, state, API.
 - `docs/know-me-profile.md`: 0.6.0 Know me 3b: the draft, the AI pass and its prompt, the memory boundary, questions, API.
 - `docs/know-me-index.md`: 0.6.0 Know me index (3a): schema, sources and allowlist additions, scan and estimates, API, and the Python interface for 3b/3c.
+- `docs/chat.md`: 0.6.0 Chat (3c): tools, prompt, local native/JSON and Claude protocols, citations, queue, settings, storage, API.
 - `docs/memory-and-dates.md`: 0.5.0 notes to Callsheet (memory file format, relevance, the notes block, API) and possible events (date rules, calendar check, the Add to calendar link).
 - `docs/chat-safety-0.5.3.md`: 0.5.3 chat safety: why (Signal rows broke the safety bar), the fixed texts old and new, the relay sentence, the channel label, the post-check changes and the offline re-score.
 - `docs/signal.md`: 0.5.1 Signal: linking, unlinking, importing a Mac export (owner how-to), packaging, the signal-cli process and allow-list, what is stored, rows, import formats, API.
