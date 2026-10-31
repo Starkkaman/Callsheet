@@ -1001,6 +1001,8 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .kn .go .hint{margin:0}
 .kn .act{font-size:var(--fs-sm);padding:8px 14px}
 .kn .act.ghost{background:transparent;color:var(--text);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.kn .act.pfchat{display:inline-flex;align-items:center;gap:8px}
+.kn .act.pfchat .ico{width:16px;height:16px;flex:none}
 .kn .stats{display:flex;flex-wrap:wrap;gap:10px 30px;margin:0 0 14px}
 .kn .stat .label{color:var(--muted);display:block}
 .kn .stat .disp{display:block;font-size:var(--fs-h2);font-variant-numeric:tabular-nums}

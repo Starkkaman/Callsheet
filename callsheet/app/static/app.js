@@ -2744,7 +2744,7 @@
      later (3b). Everything is inserted as text. */
   var KN = { st: null, est: {}, win: '90d', timer: null, seq: 0, grant: null, fresh: false, counting: null };
   var KNSTEPS = ['Sources', 'Scan', 'Check', 'Questions', 'Done'];
-  var KNICON = { gmail: 'mail', calendar: 'cal', slack: 'slack', drive: 'note', obsidian: 'note', signal: 'signal' };
+  var KNICON = { gmail: 'mail', calendar: 'cal', slack: 'slack', drive: 'drive', obsidian: 'note', signal: 'signal' };
   function stopKnowPoll() { if (KN.timer) { clearTimeout(KN.timer); KN.timer = null; } }
   function knowEntry() { return btn('act', 'Get to know me', { 'data-fk': 'kn-open' }, function () { location.hash = 'knowme'; }); }
   function knBusy(st) { var j = st && st.job; return !!(j && (j.state === 'running' || j.state === 'paused')); }
@@ -3261,6 +3261,7 @@
       h('div', { class: 'stats' }, [knStat('People', fmtNum(ppl)), knStat('Projects', fmtNum(pj)), knStat('Answers', fmtNum(v.interview.answered))]),
       h('p', { class: 'help' }, 'It is all in Memory, in your words. Briefs and drafts use it from now on.'),
       h('div', { class: 'go' }, [btn('act', 'See it in Memory (Setup)', { 'data-fk': 'pf-mem' }, function () { PF.done = false; ui.step = 5; location.hash = 'setup'; }),
+        btn('act ghost pfchat', [ico('chat'), 'Open Chat'], { 'data-fk': 'pf-chat' }, function () { PF.done = false; location.hash = 'chat'; }),  /* knowme-v2 frame 5 */
         btn('btn ghost', 'Back to the draft', null, function () { PF.done = false; location.hash = 'profile'; })])];
   }
 
