@@ -36,7 +36,9 @@ will check. The last six turns of the conversation go along (answers cut to 1,50
   replies with exactly one JSON object: `{"tool": "<name>", "args": {...}}` or `{"answer": "..."}`; Callsheet
   replies with `Result of <name>:` and the `<data>` block. One correction retry for a reply that isn't one valid
   object. Setting `tools`: `auto` (native, and switches to JSON for that server and model when the first request
-  gets HTTP 400/422/500/501 or the model writes a JSON tool call as text), `native` or `json`.
+  gets HTTP 400/422/500/501 or the model writes a JSON tool call as text), `native` or `json`. 0.6.0: the
+  switch after a refusal lasts `JSON_FALLBACK_S` (10 minutes, monotonic clock), then native tools are tried again;
+  `PATCH api/chat/settings` that changes the effective server or model forgets it at once (`Chat.forget_fallback`).
 - **Claude** (anthropic 2.3.0 `messages.create` with `tools`, `tool_result` blocks, adaptive thinking when
   on, `output_config.effort`). The last round sends `tool_choice: {"type": "none"}`. Refusal and max_tokens
   stops become plain-word errors.
@@ -55,7 +57,9 @@ the evaluation and the chat from sending to the local server at the same time. S
 
 ## Settings (`meta` key `chat`, Setup → Delivery → Chat)
 `provider` local or claude. Local: `base_url` (empty = the writer's server, model and key), `model` (picked
-from `/v1/models`), `api_key`, `thinking`, `max_tokens` 256..16384 (2048), `timeout` 30..600 s (120), `tools`.
+from `/v1/models`), `api_key`, `thinking`, `max_tokens` 256..16384 (2048), `timeout` 30..600 s (120), `tools`,
+`id_slot` 0..63 (0; sent as `id_slot` with every local chat request, so a question doesn't evict the brief writer's
+llama.cpp slot, which is the writer's own `local.id_slot`, "Server slot for briefs", not sent when empty).
 Claude: `model`, `effort` low/medium/high, `thinking`; it uses the writer's saved Anthropic key and never
 stores its own. Separate from the writer settings; validated, nothing saved on an error; the key is never
 returned (only a hint).

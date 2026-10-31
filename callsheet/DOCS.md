@@ -6,7 +6,7 @@ grouped by area (Personal and one per employer).
 
 Callsheet only reads. It never sends, replies, deletes or changes anything in your accounts.
 
-## What it does today (0.4.0)
+## What it does today (0.6.0)
 
 - Opens as a sidebar page through Ingress (**Open Web UI**, or turn on **Show in sidebar**).
 - Connects your own Google accounts (Gmail and Google Calendar), read-only, through a Google Cloud
@@ -33,6 +33,9 @@ Callsheet only reads. It never sends, replies, deletes or changes anything in yo
   30 minutes, and when you ask for it.
 - Optionally an **AI writer** (Claude or a model on your own network) adds a short summary at the top and
   a suggested reply per "Needs a reply" row. The rules still decide what is in the brief.
+- Tabs: Briefing, Replies (with area filter chips), Agenda, Chat (0.6.0) and Tasks (coming).
+- **Know me** and **Chat** (0.6.0): a private index of your history, a profile you check, and a read-only chat
+  over it (see below).
 - Until an account is connected, the page shows sample data with a "Sample data" tag.
 
 ## Set up your Google client (once)
@@ -299,16 +302,58 @@ through that service. Turn off **Show the subject in notifications** to send the
 message from Priya"). Use **Send a test notification** to check; if Home Assistant no longer knows a phone,
 open the Home Assistant app on it or pick another phone.
 
-## Get to know me (0.6.0, optional)
+## Know me (0.6.0, optional)
 
-Setup → Delivery → Memory → **Get to know me** reads your history into a private index on this box.
-- **Drive**: in your Google Cloud project turn on the *Google Drive API* and add the
-  `https://www.googleapis.com/auth/drive.readonly` scope to the consent screen. Then press "Grant Drive
-  access" for each account and paste the address as when you connected it.
-- **Obsidian**: sync the vault into Home Assistant's `share` or `media` folder (Syncthing, Samba, …) and type
-  its path, for example `/share/Obsidian/My vault`. The app sees these folders read-only.
-- Pick how far back; read the estimate; Start scan. You can close the page; it pauses around call times.
-- The index (`index.db`) is not in backups (it can be read again) and isn't sent to the writer in 0.6.0.
+Setup → Delivery → Memory → **Get to know me** lets Callsheet learn who you are from your own history. It has five
+steps, shown at the top of the page: Sources, Scan, Check, Questions, Done.
+
+1. **Sources.** Tick what to read: Gmail and the calendars you picked for each Google account, Slack, Signal (live
+   messages since linking and imported history), Google Drive and an Obsidian vault.
+   - **Drive**: in your Google Cloud project turn on the *Google Drive API* and add the
+     `https://www.googleapis.com/auth/drive.readonly` scope to the consent screen. Then press "Grant Drive
+     access" for each account and paste the address as when you connected it. Docs, Sheets, Slides and text files
+     are read; PDFs are skipped.
+   - **Obsidian**: sync the vault into Home Assistant's `share` or `media` folder (Syncthing, Samba, …) and type
+     its path, for example `/share/Obsidian/My vault`. The app sees these folders read-only.
+2. **Scan.** Pick how far back (30 days to your entire history), read the estimate, press Start scan. You can
+   close the page: the scan keeps going in the background, can be paused, stopped and resumed, and pauses 10
+   minutes before and after each call time. Stop keeps what was read. After a scan, new items (and Signal history
+   you import later) are added every 30 minutes.
+3. **Check.** Press **Check the draft →**. Callsheet lists the people you write to (role, projects, area, VIP),
+   your projects, recurring commitments and reply habits. Click a field to change it; accept or remove each row.
+   With the AI writer on, **Suggest roles and project names** asks it for ideas from names, email domains, counts
+   and short subject lines only; its ideas are marked "suggested" until you accept them.
+4. **Questions.** **Continue to questions** shows up to 8 questions about what Callsheet couldn't work out, one
+   at a time: tap an answer, write your own, Skip, or "That's enough for now". Change an answer in the list beside
+   it.
+5. **Done.** Shows what Callsheet now knows. **See it in Memory** opens Setup's Memory, where everything is in your
+   own words; **Open Chat** opens the Chat tab.
+
+Only what you save or answer goes into Memory (`memory.md`); the draft itself stays in the index. The index
+(`index.db`) is not in Home Assistant backups (it can be read again) and can be deleted from the page.
+
+## Chat (0.6.0, optional)
+
+The **Chat** tab (next to Agenda) answers questions about your own mail, Slack, Signal, calendar, Drive and notes,
+for example "When did I last talk to Dan?" or "What's waiting on me?". It needs the index from Know me.
+- Each answer lists the items it used as chips; open one to see it, with a link to Gmail, Slack or Calendar where
+  there is one.
+- The chat only reads. Its tools search and open items in the index on this box; it can't send, reply, accept,
+  delete or change anything, and nothing it writes is sent. Answers that state something as done or decided get
+  the "Check this draft" warning. A message that claims something was done or asks you to pass that on is reported
+  as the sender's claim, never confirmed.
+- **Setup → Delivery → Chat** picks the model: **Local model** (the writer's server and model, or your own) or
+  **Claude** with the API key saved for the writer. For a local server, **Tool use** is Automatic (recommended:
+  the server's tool calling, llama.cpp needs `--jinja`; if the server refuses, a simple JSON format, with tool
+  calling tried again after 10 minutes or when you change the model), Server tool calling, or Simple JSON.
+  **Server slot for chat** (default 0) pins chat questions to one llama.cpp slot; keep it different from the
+  writer's **Server slot for briefs** so a question doesn't push out the brief's work. **Test connection** checks
+  the server or the key.
+- Questions wait while the brief is being written or the writer evaluation runs, and only one request goes to
+  your local server at a time. Stop ends an answer.
+- Chats are kept on this box for 30 days (at most 100); **Clear all chats** deletes them. With Claude, the
+  question, earlier turns of the chat and the search results go to Anthropic; with a local model they stay on your
+  network.
 
 ## Your data
 
@@ -321,6 +366,9 @@ Setup → Delivery → Memory → **Get to know me** reads your history into a p
   read-only Web API (`slack.com`) when you connect a workspace, and, when you turn on the AI writer, to
   `api.anthropic.com` (Claude) or the local model server you entered. With the writer on, the last up to 3
   messages of Slack rows go to it as they do for mail.
+- Know me (0.6.0) keeps its index in `index.db` next to it (readable only by the app, not in backups) and chats in
+  `chat/` (30 days). The brief writer never gets the index; Chat sends what it found only to the model you picked
+  for it, and profile suggestions send only names, email domains, counts and short subject lines.
 
 ## Troubleshooting
 

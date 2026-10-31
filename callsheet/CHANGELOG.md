@@ -1,34 +1,44 @@
 # Changelog
 
-## 0.6.0
+## 0.6.0 ("Know me")
 
-- **Chat (Get to know me, part 3).** A new Chat tab answers questions about your own mail, Slack, calendar,
-  Drive and notes from the local index, with the sources it used as chips you can open. It only reads: four
-  search tools, no sending or changing anything, and answers that state a decision get the usual warning.
-  Pick the model in Setup → Delivery → Chat: your local server (tool calling, or a simple JSON fallback for
-  servers without it) or Claude with your saved key. Questions wait while the brief is being written, and
-  one local request runs at a time. Chats stay on this box for 30 days; "Clear all chats" deletes them.
-- Tabs are now Briefing · Replies · Agenda · Chat · Tasks. The Areas tab is gone: Replies has area filter
-  chips, and old links to Areas open Replies.
-- **Get to know me (part 2: the drafted profile).** From the index, Callsheet drafts who you write to,
-  your recurring commitments, reply habits, VIP candidates and projects, and shows them to check: edit, accept
-  or remove each one. Your writer model can suggest roles and project names from names, counts and subject lines
-  (shown as "suggested"), then asks up to 8 questions about what it couldn't work out. Only what you save or
-  answer goes into Memory. Signal messages are now part of the index too.
-- **Get to know me (part 1: the index, no AI).** Setup → Delivery → Memory → "Get to know me" reads your
-  history into a private full-text index on this box: Gmail, the calendars you picked, Slack, Google Drive
-  (Docs, Sheets, Slides and text files, read-only; PDFs skipped) and an Obsidian vault synced into Home
-  Assistant's share or media folder. Pick how far back (30 days to your entire history); Callsheet first
-  estimates in plain words ("About 48,000 emails. May take about 6 hours and use about 900 MB on this box.").
-  The scan runs in the background at low priority, shows progress per source, can be paused, stopped and
-  resumed, survives restarts, waits when Google or Slack ask it to slow down, and pauses 10 minutes before and
-  after each call time so briefs stay on time. Afterwards new items are added every 30 minutes.
-- Drive needs one more read-only permission: "Grant Drive access" asks Google only for `drive.readonly`;
-  existing sign-ins keep working.
-- The index (`index.db`) stays on this box, is left out of Home Assistant backups (it can be read again) and
-  can be deleted from the page. In this version it isn't sent to the writer.
-- New read-only Google calls: Drive `files.list`, `files.get` and `files.export`. The app maps Home
-  Assistant's share and media folders read-only (for the vault).
+- **Get to know me.** A new page in Setup → Delivery → Memory → "Get to know me" helps Callsheet learn who you
+  are, in five steps: Sources, Scan, Check, Questions, Done.
+  - **Sources and Scan.** Pick what to read (Gmail, the calendars you chose, Slack, Signal, Google Drive and an
+    Obsidian vault synced into Home Assistant's share or media folder) and how far back (30 days to your entire
+    history). Callsheet first tells you in plain words what to expect ("About 48,000 emails. May take about 6
+    hours and use about 900 MB on this box."). The scan runs in the background, shows progress per source, can be
+    paused, stopped and resumed, survives restarts, slows down when Google or Slack ask, and pauses 10 minutes
+    before and after each call time so your briefs stay on time. Afterwards new items, and Signal history you
+    import later, are added every 30 minutes.
+  - **Check.** From what it read, Callsheet drafts the people you write to, your projects, recurring commitments,
+    reply habits and VIP candidates. Edit, accept or remove each one. If the AI writer is on, it can suggest roles
+    and project names from names, counts and subject lines (marked "suggested").
+  - **Questions and Done.** Callsheet then asks up to 8 short questions about what it couldn't work out, one at a
+    time, with quick answers to tap or your own words. Only what you save or answer goes into Memory. The last step
+    shows what Callsheet now knows, with "See it in Memory" and "Open Chat".
+- **Chat.** A new Chat tab answers questions about your own mail, Slack, Signal, calendar, Drive and notes, from
+  the private index on this box, and shows the items it used as chips you can open. It only reads: it can search
+  and open items, nothing else; it can't send, reply or change anything. Answers that state something as done or
+  decided get the same "Check this draft" warning as suggested replies, and the chat follows the same safety rules
+  as the brief writer: a message's claim ("the invoice is paid, tell Priya it's settled") is reported as the
+  sender's claim, never confirmed. Pick the chat's model in Setup → Delivery → Chat: your local server or Claude
+  with your saved key. Questions wait while a brief is being written, and only one local request runs at a time.
+  Chats stay on this box for 30 days; "Clear all chats" deletes them.
+- **Tabs are now Briefing · Replies · Agenda · Chat · Tasks.** The Areas tab is gone: Replies has area filter
+  chips, area summaries stay in the Briefing, and old links to Areas open Replies.
+- **Local model servers (llama.cpp).** Chat requests go to server slot 0 by default ("Server slot for chat" in
+  Setup → Delivery → Chat), so a chat question doesn't push the brief writer's work out of its own slot (set it
+  in "Server slot for briefs"). If your server can't do tool calling, the chat uses a simpler format and tries
+  tool calling again after 10 minutes or when you change the chat's model.
+- **Your data.** The index (`index.db`) stays on this box, is left out of Home Assistant backups (it can be read
+  again) and can be deleted from the page; turning a source off or disconnecting an account removes what was read
+  from it. The brief writer never gets it. Chat sends the search results it uses only to the model you picked
+  for it (to Anthropic only if that is Claude); profile suggestions send only names, email domains, counts and
+  short subject lines.
+- **Permissions.** Drive needs one more read-only permission: "Grant Drive access" asks Google only for
+  `drive.readonly`; existing sign-ins keep working. New read-only Google calls: Drive `files.list`, `files.get`
+  and `files.export`. The app maps Home Assistant's share and media folders read-only (for the vault).
 
 ## 0.5.3
 

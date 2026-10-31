@@ -8,7 +8,11 @@ Code: `callsheet/app/know_profile.py` (named so it doesn't shadow Python's `prof
 `sources.SignalSource` reads the 0.5.1 Signal store (`signal_messages` joined to `signal_chats`, live and
 imported messages) into the index: kind `message`/`sent`, title "Signal with X" / "Signal group X", people the
 sender's name, body the text, area from `signal_meta()`, ignored chats left out. It does nothing when the store's
-tables are missing (this branch predates the 0.5.1 merge; `signal_ready` checks).
+tables are missing or empty (`signal_ready`). Item ids are `<chat>:<sender>:<ts>` from the store's salted hashes, so
+no number or uuid reaches the index. Scans filter by message time (the window); the 30-minute refresh also takes
+messages whose `received_at` is after its last read, so history imported after a scan is indexed too. Messages
+deleted from the store (ignored chats, deleted imports, unlinking, the 30-day limit) leave the index at the end of a
+pass (`delete_missing`). Tested against the real store in `tests/test_release_060.py`.
 
 ## The draft (deterministic, no AI)
 `build_draft` reads `Index.rows` (metadata only, never bodies) for the last year (calendar: 120 days back, 60 ahead):
