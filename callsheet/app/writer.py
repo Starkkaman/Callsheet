@@ -20,6 +20,7 @@ import html.parser
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1031,21 +1032,27 @@ def _log_answer(log, res, wall):
     log("Callsheet writer: local answer: " + ", ".join(parts) + f", {wall:.1f}s")
 
 
+# 0.6.0 chat: one request at a time to the local model server. Every local POST (brief writer, evaluation, chat)
+# goes through _post, so the brief and a chat question never hit the server at the same moment.
+LOCAL_LOCK = threading.Lock()
+
+
 def _post(base, key, body, opts, log, clock):
-    """POST /chat/completions with one retry, 10 s later, while the server is loading the model."""
-    t0 = clock()
-    try:
+    """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK."""
+    with LOCAL_LOCK:
+        t0 = clock()
         try:
-            res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
-        except _Loading:
+            try:
+                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
+            except _Loading:
+                if log:
+                    log(f"Callsheet writer: the local model server was loading the model; trying again in {LOAD_WAIT} s")
+                _sleep(LOAD_WAIT)
+                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
+        except WriterError:
             if log:
-                log(f"Callsheet writer: the local model server was loading the model; trying again in {LOAD_WAIT} s")
-            _sleep(LOAD_WAIT)
-            res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
-    except WriterError:
-        if log:
-            log(f"Callsheet writer: local request failed, {clock() - t0:.1f}s")
-        raise
+                log(f"Callsheet writer: local request failed, {clock() - t0:.1f}s")
+            raise
     _log_answer(log, res, clock() - t0)
     return res
 
