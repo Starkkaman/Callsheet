@@ -821,13 +821,18 @@ class SignalSource(Source):
                        ctx.store.signal_meta().get("area_id") or "personal", self.unit)]
 
     @staticmethod
-    def _where(ctx, since, until):
+    def _where(ctx, since, until, added=False):
+        """added: the 30-minute refresh, which reads what reached the store since its last read: live messages
+        (by time) and history imported meanwhile, whose messages are older than the last read (by received_at)."""
         ign = _signal_ignored(ctx.store)
         where, args = ["1=1"], []
         if ign:
             where.append("m.chat NOT IN (" + ",".join("?" * len(ign)) + ")")
             args += ign
-        if since:
+        if since and added:
+            where.append("(m.ts>=? OR m.received_at>=?)")
+            args += [float(since), float(since)]
+        elif since:
             where.append("m.ts>=?")
             args.append(float(since))
         if until:
@@ -842,7 +847,8 @@ class SignalSource(Source):
 
     def step(self, ctx, tgt, since, until, cursor):
         last = int((cursor or {}).get("after") or 0)
-        w, args = self._where(ctx, since, until)
+        # a refresh target carries its own "since" (scan._new_refresh); a scan's targets use the window's
+        w, args = self._where(ctx, since, until, added="since" in tgt)
         with ctx.store.lock:
             rows = ctx.store.db.execute(
                 "SELECT m.id, m.chat, m.sender, m.sender_name, m.ts, m.text, m.outgoing, c.kind, c.title "
