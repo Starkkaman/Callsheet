@@ -322,6 +322,10 @@ class _Loading(WriterError):
     """The local server is still loading the model (HTTP 500/503 saying so, or a reset connection)."""
 
 
+class LocalTimeout(WriterError):
+    """0.6.1: the local model didn't answer within the timeout (the preset fallback says so)."""
+
+
 class Refused(WriterError):
     """Claude declined (stop_reason "refusal"). .category: stop_details.category, if any."""
 
@@ -1069,7 +1073,7 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:  # RemoteDisconnected is a reset
         reason = getattr(e, "reason", e)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason):
-            raise WriterError("The local model didn't answer in time.") from None
+            raise LocalTimeout("The local model didn't answer in time.") from None
         if isinstance(e, ConnectionResetError) or isinstance(reason, ConnectionResetError):
             raise _Loading("The local model server closed the connection.") from None
         raise WriterError("Couldn't reach the local model. Check the server address.") from None
@@ -1090,6 +1094,10 @@ def local_body(model, payload_text, ids, opts, ask=None):
                          {"role": "user", "content": payload_text}]}
     if opts["thinking"]:
         body["reasoning_budget_tokens"] = opts["reasoning_budget"]
+        if opts.get("effort"):  # 0.6.1 presets: only when set, so the 0.6.0 body is unchanged without it
+            body["reasoning_effort"] = opts["effort"]
+    if opts.get("kwargs"):  # 0.6.1 presets: extra chat-template options; the Thinking switch always wins
+        body["chat_template_kwargs"] = dict(opts["kwargs"], enable_thinking=bool(opts["thinking"]))
     return with_slot(body, opts)
 
 
@@ -1166,12 +1174,18 @@ def local_write(base, model, key, payload_text, ids, opts=None, log=None, clock=
     opts = opts or dict(LOCAL_DEFAULTS)
     body = local_body(model, payload_text, ids, opts, ask)
     tin = tout = 0
+    t0, server_ms = clock(), 0.0
     for attempt in range(2):
         res = _post(base, key, body, opts, log, clock)
         usage = res.get("usage") if isinstance(res, dict) else None
         if isinstance(usage, dict):
             tin += _num(usage.get("prompt_tokens")) or 0
             tout += _num(usage.get("completion_tokens")) or 0
+        timings = res.get("timings") if isinstance(res, dict) and isinstance(res.get("timings"), dict) else {}
+        for k in ("prompt_ms", "predicted_ms"):  # llama.cpp: the server's own work, for the swap estimate (0.6.1)
+            v = timings.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+                server_ms += v
         try:
             choice = res["choices"][0]
             # Only the answer: thinking models (llama.cpp) put their reasoning in reasoning_content.
@@ -1196,9 +1210,24 @@ def local_write(base, model, key, payload_text, ids, opts=None, log=None, clock=
             if attempt == 0:
                 continue
             raise WriterError("The local model didn't send usable JSON, twice.") from None
-        result.update(by="Local · " + model[:60], model=model, input_tokens=tin, output_tokens=tout)
+        result.update(by="Local · " + model[:60], model=model, input_tokens=tin, output_tokens=tout,
+                      wall_s=round(clock() - t0, 1), server_s=round(server_ms / 1000, 1) if server_ms else None)
         return result
     raise WriterError("The local model didn't send usable JSON, twice.")  # not reached
+
+
+def local_models(base, key):
+    """0.6.1: the model ids the local server lists (GET /models), for checking a preset's model. Raises WriterError."""
+    if not base:
+        raise WriterError("Add the local model's server address first.")
+    res = _local("GET", base, "/models", key, timeout=LOCAL_TEST_TIMEOUT)
+    items = res.get("data") if isinstance(res, dict) else None
+    if not isinstance(items, list):
+        items = res.get("models") if isinstance(res, dict) else None
+    if not isinstance(items, list):
+        raise WriterError("The server answered, but not like an OpenAI-compatible server.")
+    names = [str(m.get("id") or m.get("name") or "")[:120] for m in items if isinstance(m, dict)]
+    return list(dict.fromkeys(n for n in names if n and not re.search(r"[\x00-\x1f\x7f]", n)))
 
 
 def local_test(base, key):

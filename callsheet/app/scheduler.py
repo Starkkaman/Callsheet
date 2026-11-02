@@ -2,6 +2,8 @@
 (check-ins skipped on days off when set), plus once at start-up if the last sync is older than 30 min.
 0.5.1: after a scheduled brief the notifier sends the phone summary; between call times it runs the urgent light
 check when push.check_due says so (every ~10 min, never in quiet hours, on days off or near a call time).
+0.6.1: a scheduled sync passes its call time's id (morning, midday, afternoon) so the writer uses that call's
+preset; the start-up catch-up sync is a Refresh. The urgent light check never uses the writer.
 """
 import datetime as dt
 import sys
@@ -47,16 +49,20 @@ class Scheduler:
 
     def due(self, last_check, now):
         """True when an enabled call time falls in (last_check, now]."""
+        return self.due_call(last_check, now) is not None
+
+    def due_call(self, last_check, now):
+        """The id of the enabled call time in (last_check, now] (morning, midday or afternoon), else None."""
         settings = self.store.settings()
         tz = rules.tzinfo(settings)
-        nxt, _ = rules.next_call(settings, dt.datetime.fromtimestamp(last_check, tz))
-        return nxt is not None and nxt.timestamp() <= now
+        nxt, call = rules.next_call(settings, dt.datetime.fromtimestamp(last_check, tz))
+        return call["id"] if nxt is not None and nxt.timestamp() <= now else None
 
-    def _sync(self, scheduled=False):
+    def _sync(self, scheduled=False, kind=None):
         if not self.store.has_sources():
             return
         try:
-            self.syncer.run_now()
+            self.syncer.run_now(kind=kind)
         except Exception as e:  # keep the scheduler alive; the message has no secrets (type only)
             sys.stderr.write(f"Callsheet sync failed: {type(e).__name__}\n")
         if scheduled and self.notifier:
@@ -80,8 +86,9 @@ class Scheduler:
         last = self.clock()
         while not self.stop_event.wait(self.tick):
             now = self.clock()
-            if self.due(last, now):
-                self._sync(scheduled=True)
+            kind = self.due_call(last, now)
+            if kind is not None:
+                self._sync(scheduled=True, kind=kind)
             else:
                 self._urgent(now)
             last = now

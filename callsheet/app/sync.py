@@ -4,6 +4,11 @@ rules, cache the brief and record last_sync. One account failing never stops the
 When the AI writer is on, it runs after the rules brief is cached: a summary and suggested replies are
 added, or Heads up says why the writer didn't run. A writer failure never breaks the brief.
 
+0.6.1 presets per call time: the call kind (morning, midday, afternoon, refresh) picks the local writer's preset
+(presets.py). While the writer runs, `Syncer.writing` is set and api/brief shows "Writing the summary…" over the
+cached rules brief. Another preset than Fast falls back once to Fast when it fails or times out (Heads up says so;
+never to the cloud), and afterwards one tiny request loads the Fast model again (when reload_fast is on).
+
 Logs one line per sync (and one per writer run) with counts only: no subjects, names, addresses,
 bodies or keys.
 """
@@ -18,6 +23,7 @@ import dates
 import facts
 import google
 import memory
+import presets
 import rules
 import slack
 import writer
@@ -229,6 +235,10 @@ class _Stop(Exception):
     pass
 
 
+class _NoCloud(Exception):
+    """0.6.1: another preset and its Fast fallback both failed: no Claude fallback for this brief."""
+
+
 class Syncer:
     def __init__(self, store, clock=time.time, log=_stderr, sleep=time.sleep):
         self.store = store
@@ -237,17 +247,47 @@ class Syncer:
         self.sleep = sleep  # Slack rate-limit waits (tests replace it)
         self.memory = memory.Memory(store.dir)  # the owner's notes (0.5.0), shared with api.App
         self.lock = threading.Lock()
+        self.writing = None    # 0.6.1: {written_at, preset, kind, since} while the writer runs for the cached brief
+        self.last_model = None  # 0.6.1: the model of Callsheet's last brief request (None: not known)
+        self.monotonic = time.monotonic  # 0.6.1: request and swap timing (tests replace it)
 
-    def run_now(self, wait=70):
-        """Runs a sync and returns last_sync. If one is already running, waits for it and returns its result."""
+    def run_now(self, wait=70, kind=None, background=False):
+        """Runs a sync and returns last_sync. If one is already running, waits for it and returns its result;
+        while a writer is busy with the cached brief (0.6.1) it returns at once (the page shows "Writing the
+        summary…"). kind: the call kind for the writer's preset (None: a Refresh). background: return as soon
+        as the rules brief is cached and let the writer finish in its own thread (the lock is held until then)."""
+        if self.writing is not None:
+            return self.store.last_sync()
         if self.lock.acquire(blocking=False):
+            job = None
             try:
-                return self._run()
+                last, job = self._run(kind)
+            except BaseException:
+                self.writing = None
+                raise
             finally:
-                self.lock.release()
+                if job is None:
+                    self.lock.release()
+            if job is None:
+                return last
+            if background:
+                threading.Thread(target=self._finish, args=(job,), name="callsheet-writer", daemon=True).start()
+            else:
+                self._finish(job)
+            return last
         if self.lock.acquire(timeout=wait):
             self.lock.release()
         return self.store.last_sync()
+
+    def _finish(self, job):
+        """Runs the writer job (holding self.lock, taken by run_now) and releases the lock."""
+        try:
+            job()
+        except Exception as e:  # noqa: BLE001 (type only, no secrets)
+            self.log(f"Callsheet writer: failed unexpectedly ({type(e).__name__})")
+        finally:
+            self.writing = None
+            self.lock.release()
 
     # --- tokens -----------------------------------------------------------
     def _token(self, acc, client, force=False):
@@ -559,7 +599,8 @@ class Syncer:
             briefs = [brief["written_at"]]
         self.store.set_seen_day({"date": brief["date"], "keys": keys, "briefs": briefs})
 
-    def _run(self):
+    def _run(self, kind=None):
+        """Reads and caches the rules brief. Returns (last_sync, the writer job or None)."""
         r = self._read()
         t0, brief, errors, n, schedule, replies = r["t0"], r["brief"], r["errors"], r["n"], r["schedule"], \
             r["brief"]["replies"]
@@ -567,16 +608,24 @@ class Syncer:
         self._mark_new(brief)
         self.store.set_brief_refs({rid: {k: v for k, v in ref.items() if k not in ("messages", "facts")}
                                    for rid, ref in r["refs"].items()})
-        self.store.set_cached_brief(brief)
+        wcfg = self.store.writer_config()
+        job = None
+        if wcfg["provider"] != "off":
+            kind = kind if kind in presets.KIND_IDS else "refresh"
+            preset = presets.for_kind(wcfg, kind) if wcfg["provider"] == "local" else None
+            self.writing = {"written_at": written, "kind": kind, "preset": preset["name"] if preset else None,
+                            "since": dt.datetime.fromtimestamp(self.clock(), r["tz"]).isoformat(timespec="seconds")}
+
+            def job():
+                self._write(wcfg, brief, r["refs"], r["events"], r["areas"], r["settings"], r["tz"], r["day"],
+                            r["client"], kind)
+        self.store.set_cached_brief(brief)  # the rules brief first: the page shows it while the writer runs
         last = {"at": written, "ok": not errors, "errors": errors}
         self.store.set_last_sync(last)
         self.log(f"Callsheet sync: {n['accounts']} accounts ({n['ok']} ok, {n['failed']} failed), "
                  f"{n['calendars']} calendars, {n['events']} events, {n['threads']} threads, {n['slack']} Slack, "
                  f"{len(schedule)} on schedule, {len(replies)} need a reply, {self.clock() - t0:.1f}s")
-        wcfg = self.store.writer_config()
-        if wcfg["provider"] != "off":
-            self._write(wcfg, brief, r["refs"], r["events"], r["areas"], r["settings"], r["tz"], r["day"], r["client"])
-        return last
+        return last, job
 
     def writer_data(self, wcfg):
         """For the owner-run writer evaluation (evaluate.py): the writer input a sync would build right now
@@ -683,20 +732,68 @@ class Syncer:
         m_events = [{"id": e["id"], "title": e.get("title") or "", "area": name.get(e.get("area"), "")} for e in sched]
         return memory.relevant(entries, m_rows, m_events)
 
-    def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client):
+    def _local_preset(self, wcfg, preset, data, ids, ask, kind):
+        """One local writer request with a preset's options; logs the preset, whether the model changed since
+        Callsheet's last brief request and, with llama.cpp timings, the wait before the server started (the
+        model swap): counts only."""
+        loc = wcfg["local"]
+        opts = presets.options(loc, preset)
+        before, m0 = self.last_model, self.monotonic()
+        self.last_model = None  # not known while the request runs (or after it fails)
+        payload = writer.fit_local(data, ids, opts, self.log, ask=ask)
+        try:
+            result = writer.local_write(loc["base_url"], preset["model"], loc["api_key"], payload, ids,
+                                        opts=opts, log=self.log, ask=ask, clock=self.monotonic)
+        finally:
+            change = "unknown" if before is None else ("yes" if before != preset["model"] else "no")
+            self.log(f"Callsheet writer: preset {preset['id']} for {kind or 'refresh'}, model change {change}, "
+                     f"{self.monotonic() - m0:.1f}s")
+        self.last_model = preset["model"]
+        if result.get("server_s") is not None and result.get("wall_s") is not None:
+            self.log(f"Callsheet writer: swap and queue about {max(0.0, result['wall_s'] - result['server_s']):.1f}s "
+                     f"before the server worked {result['server_s']:.1f}s")
+        return result
+
+    def _reload_fast(self, wcfg, fast):
+        """After another preset ran: one tiny request (max_tokens 8) so the server holds the Fast model again."""
+        loc, m0 = wcfg["local"], self.monotonic()
+        opts = presets.options(loc, fast)
+        try:
+            writer._post(loc["base_url"], loc["api_key"], presets.reload_body(fast["model"], opts),  # noqa: SLF001
+                         {"timeout": opts["timeout"]}, None, self.monotonic)
+            self.last_model = fast["model"]
+            self.log(f"Callsheet writer: fast model loaded again, {self.monotonic() - m0:.1f}s")
+        except writer.WriterError:
+            self.last_model = None
+            self.log(f"Callsheet writer: loading the fast model again failed, {self.monotonic() - m0:.1f}s")
+
+    def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client, kind=None):
         t0 = self.clock()
         provider, used, note = wcfg["provider"], wcfg["provider"], ""
-        result, error, ids = None, None, set()
+        result, error, ids, fell_back = None, None, set(), None
+        preset = fast = None
         try:
             data, ids, ask = self._writer_input(wcfg, brief, refs, events, areas, settings, tz, day, client)
             payload = writer.build_payload(data)
             if provider == "local":
-                loc = wcfg["local"]
-                opts = writer.local_options(loc)
+                preset = presets.for_kind(wcfg, kind)
+                fast = presets.fast(wcfg["local"])
                 try:
-                    local_payload = writer.fit_local(data, ids, opts, self.log, ask=ask)
-                    result = writer.local_write(loc["base_url"], loc["model"], loc["api_key"], local_payload, ids,
-                                                opts=opts, log=self.log, ask=ask)
+                    try:
+                        result = self._local_preset(wcfg, preset, data, ids, ask, kind)
+                    except writer.WriterError as e:
+                        if preset["id"] == presets.FAST:
+                            raise
+                        # 0.6.1: another preset failed or timed out: once to Fast for this brief, never to the cloud
+                        note = f"preset {preset['id']} failed, fell back to fast"
+                        try:
+                            result = self._local_preset(wcfg, fast, data, ids, ask, kind)
+                        except writer.WriterError as e2:
+                            raise _NoCloud(f"{e} The fast model didn't run either: {e2}") from None
+                        fell_back = presets.FELL_BACK_TIMEOUT if isinstance(e, writer.LocalTimeout) \
+                            else presets.FELL_BACK
+                except _NoCloud as e:
+                    raise writer.WriterError(str(e)) from None
                 except writer.WriterError as e:
                     if not (wcfg["fallback_to_claude"] and wcfg["claude"]["api_key"]):
                         raise
@@ -736,10 +833,13 @@ class Syncer:
                 note = (note + "; " if note else "") + f"{n} suggestion{'s' if n != 1 else ''} flagged"
             if result.get("beta") is False:
                 note = (note + "; " if note else "") + "beta not accepted, sent without fallbacks"
+            if fell_back:
+                brief["heads_up"].append(fell_back)
         else:
             brief["heads_up"].append(f"The AI writer didn't run: {error}")
         self._apply_done(brief, refs, tz)  # rows marked done (or undone) while the writer ran
         self.store.set_cached_brief(brief)
+        self.writing = None
         self.store.set_last_writer({
             "at": at, "ok": bool(result), "by": result["by"] if result else None,
             "input_tokens": result["input_tokens"] if result else 0,
@@ -751,6 +851,10 @@ class Syncer:
                     f"{len(result['replies'])} of {len(ids)} suggestions, {result.get('empty', 0)} empty"
                     if result else "")
                  + (f", {note}" if note else "") + f", {self.clock() - t0:.1f}s")
+        # 0.6.1: after another preset ran (and Fast didn't already run as its fallback), load Fast again
+        if (preset and fast and preset["id"] != presets.FAST and not fell_back and wcfg.get("reload_fast", True)
+                and fast["model"] and fast["model"] != preset["model"] and wcfg["local"].get("base_url")):
+            self._reload_fast(wcfg, fast)
 
     def _claude(self, wcfg, payload, ids, ask=None):
         return writer.claude_write(wcfg["claude"]["api_key"], wcfg["claude"]["model"], payload, ids, ask=ask)

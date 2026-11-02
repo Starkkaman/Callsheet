@@ -404,6 +404,9 @@
     var text = sum ? [h('p', { class: 'daytext' + (U.more ? ' all' : ''), id: 'bv-daytext' }, sum.text), checkLabel('p', sum.check === true),
       sum.text.length > 260 ? h('button', { type: 'button', class: 'tbtn', 'data-more': '1', 'aria-expanded': String(U.more), 'aria-controls': 'bv-daytext' }, U.more ? 'Less' : 'More') : null]
       : h('h2', { class: 'headline' }, plural(evs.length, 'event', 'events') + ' today, ' + plural(nRep, 'reply', 'replies') + ' waiting.');
+    /* 0.6.1: the writer is still working on this brief: a quiet line instead of the summary (the page asks again) */
+    if (B.writing && !sum) text = [text, h('p', { class: 'writing muted', role: 'status' }, [B.writing.text || 'Writing the summary…',
+      B.writing.since ? ' Started ' + B.writing.since + '.' : ''])];
     var topEl = top.length ? [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
       var isEv = t.kind === 'event', gone = !isEv && !replyById(t.ref), dn = gone && doneIds.indexOf(t.ref) >= 0;
       var kids = [h('span', { class: 'ri' }, ico(isEv ? 'cal' : 'mail')), h('span', { class: 'tt' }, [t.text, checkLabel('span', t.check === true)])];
@@ -727,7 +730,21 @@
   }
 
   /* ----- the whole view ----- */
-  function render(d) { setBrief(d); renderBrief(); }
+  function render(d) { setBrief(d); renderBrief(); pollWriting(); }
+  /* 0.6.1: while api/brief says "writing", ask again every poll_s seconds; render only when the writer is done */
+  var writePoll = null;
+  function pollWriting() {
+    if (writePoll) { clearTimeout(writePoll); writePoll = null; }
+    if (!B || !B.writing || ui.view !== 'brief') return;
+    writePoll = setTimeout(function () {
+      writePoll = null;
+      if (ui.view !== 'brief') return;
+      api('GET', 'api/brief').then(function (d) {
+        if (ui.view !== 'brief') return;
+        if (d && d.writing) { B.writing = d.writing; pollWriting(); } else render(d);
+      }, function () { pollWriting(); });
+    }, Math.max(5, Number(B.writing.poll_s) || 10) * 1000);
+  }
   function setBrief(d) {
     B = d || {};
     /* the sample brief has no row ids: give it local ones (nothing is saved for the sample) */
@@ -1938,7 +1955,8 @@
       h('div', { class: 'swrow' }, [th, h('span', { 'aria-hidden': 'true' }, 'Thinking')]), thErr,
       h('p', { class: 'note' }, 'Slower. Off is recommended for this model.'),
       adv, advP, advErr,
-      h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.')]);
+      h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.'),
+      presetsBlock(w)]);  /* 0.6.1 */
 
     var fbErr = errBox(), sgErr = errBox();
     var fb = sw(w.fallback_to_claude, 'If the local model fails, use Claude instead', function () {
@@ -1957,6 +1975,143 @@
       h('div', { class: 'swrow' }, [sg, h('span', { 'aria-hidden': 'true' }, 'Suggest replies')]), sgErr,
       h('p', { class: 'note' }, 'Reads the last few messages of up to 8 threads that need a reply. Areas can opt out in step 2 (AI writer).'),
       h('p', { class: 'syncst' + (lw.at && !lw.ok ? ' bad' : ''), role: 'status' }, lastWriterLine())]);
+  }
+  /* 0.6.1 writer presets per call time (local model only). Fast = the local settings above. The table maps each
+     call kind to a preset (PATCH api/writer call_presets); presets are added with the form or the built-in
+     suggestion (POST api/writer/presets, the model id is checked against the server's /v1/models). */
+  var PR_EFFORTS = [['', 'Server default'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
+  function presetLine(p) {
+    return [p.model || 'no model yet', p.thinking ? 'thinking' + (p.effort ? ' ' + p.effort : '') + ', budget ' + fmtNum(p.reasoning_budget) : 'no thinking',
+      fmtNum(p.max_tokens) + ' tokens', p.timeout + ' s'].join(' · ');
+  }
+  function presetModels(focusSel) {
+    if (ui.presetModels && ui.presetModels.busy) return;
+    ui.presetModels = { busy: true, models: [], error: null };
+    api('GET', 'api/writer/models').then(function (m) { ui.presetModels = { models: (m && m.models) || [], error: m && m.error }; },
+      function (e) { ui.presetModels = { models: [], error: e && e.message ? e.message : 'Couldn’t load the model list.' }; })
+      .then(function () { if (ui.view === 'setup' && ui.presetEdit) renderSetup(focusSel || null); });
+  }
+  function presetEdit(p, draft) {
+    ui.presetEdit = { id: p ? p.id : null, err: '', draft: draft || (p ? JSON.parse(JSON.stringify(p)) : {
+      name: '', model: '', thinking: false, effort: null, kwargs: {}, reasoning_budget: null, max_tokens: null, timeout: null, id_slot: null }) };
+    if (!ui.presetModels) presetModels('#pr-name');
+    renderSetup('#pr-name');
+  }
+  function presetForm(patchDone) {
+    var e = ui.presetEdit, d = e.draft, err = errBox(), m = ui.presetModels || {};
+    if (e.err) err.textContent = e.err;
+    var fast = (writerOf().presets || [])[0] || {};
+    function field(id, label, ctl, note) {
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), ctl, note ? h('p', { class: 'note' }, note) : null]);
+    }
+    function num(id, key, label, min, max, note) {
+      var inp = on(h('input', { class: 'inp', type: 'number', id: id, min: String(min), max: String(max), step: '1', inputmode: 'numeric',
+        value: d[key] != null ? String(d[key]) : '', placeholder: fast[key] != null ? String(fast[key]) : '', 'data-fk': id }), 'input', function () {
+        var v = inp.value.trim(); d[key] = v === '' ? null : Number(v);
+      });
+      return field(id, label, inp, note);
+    }
+    var name = on(h('input', { class: 'inp', type: 'text', id: 'pr-name', value: d.name || '', maxlength: '40', autocomplete: 'off', 'data-fk': 'pr-name' }), 'input', function () { d.name = name.value; });
+    var list = h('datalist', { id: 'pr-models' }, (m.models || []).map(function (x) { return h('option', { value: x }); }));
+    var model = on(h('input', { class: 'inp', type: 'text', id: 'pr-model', list: 'pr-models', value: d.model || '', maxlength: '120', autocomplete: 'off', spellcheck: 'false', 'data-fk': 'pr-model' }), 'input', function () { d.model = model.value; });
+    var mNote = m.busy ? 'Loading the server’s models…' : m.error ? m.error : (m.models || []).length ? 'Pick one the server lists, or type its id.' : null;
+    var think = sw(!!d.thinking, 'Thinking', function () { d.thinking = !d.thinking; renderSetup('[data-fk="pr-think"]'); });
+    think.setAttribute('data-fk', 'pr-think');
+    var effort = on(h('select', { class: 'inp', id: 'pr-effort', 'data-fk': 'pr-effort' }, PR_EFFORTS.map(function (x) {
+      return h('option', { value: x[0], selected: (d.effort || '') === x[0] }, x[1]);
+    })), 'change', function () { d.effort = effort.value || null; });
+    var kw = on(h('input', { class: 'inp', type: 'text', id: 'pr-kwargs', autocomplete: 'off', spellcheck: 'false', 'data-fk': 'pr-kwargs',
+      value: d.kwargs && Object.keys(d.kwargs).length ? JSON.stringify(d.kwargs) : '', placeholder: '{"name": value}' }), 'input', function () { d.kwText = kw.value; });
+    var save = btn('btn primary', e.id ? 'Save preset' : 'Add preset', { 'data-fk': 'pr-save' }, function () {
+      var body = { model: (d.model || '').trim(), thinking: !!d.thinking, effort: d.thinking ? (d.effort || null) : null };
+      if (e.id !== 'fast') body.name = (d.name || '').trim();
+      ['reasoning_budget', 'max_tokens', 'timeout'].forEach(function (k) { if (d[k] != null) body[k] = d[k]; });
+      if (d.id_slot != null || e.id) body.id_slot = d.id_slot != null ? d.id_slot : null;  /* new: empty = Fast's slot */
+      var t = d.kwText != null ? d.kwText.trim() : null;
+      if (t != null) {
+        try { body.kwargs = t ? JSON.parse(t) : {}; } catch (x) { err.textContent = 'Template options must be JSON, like {"name": true}.'; return; }
+      }
+      run([save], err, function () {
+        return e.id ? api('PATCH', 'api/writer/presets/' + encodeURIComponent(e.id), body) : api('POST', 'api/writer/presets', body);
+      }, function (r) { ui.presetEdit = null; patchDone(r, 'pr-add'); });
+    });
+    var cancel = btn('btn', 'Cancel', { 'data-fk': 'pr-cancel' }, function () { ui.presetEdit = null; renderSetup('[data-fk="pr-add"]'); });
+    return h('div', { class: 'wpanel prform', role: 'group', 'aria-labelledby': 'pr-h' }, [
+      h('h3', { class: 'label wh', id: 'pr-h' }, e.id ? 'Edit ' + (d.name || 'preset') : 'New preset'),
+      h('div', { class: 'lm' }, [
+        e.id === 'fast' ? null : field('pr-name', 'Name', name),
+        field('pr-model', 'Model id', h('span', null, [model, list]), mNote),
+        h('div', { class: 'field' }, [h('span', { class: 'label' }, 'Thinking'),
+          h('div', { class: 'swrow evsw' }, [think, h('span', { 'aria-hidden': 'true' }, d.thinking ? 'On' : 'Off')])]),
+        d.thinking ? field('pr-effort', 'Effort', effort) : null,
+        d.thinking ? num('pr-budget', 'reasoning_budget', 'Thinking budget (tokens)', 256, 32768) : null,
+        num('pr-max', 'max_tokens', 'Max tokens for the answer', 512, 32768, d.thinking ? 'The thinking budget is added on top.' : null),
+        num('pr-time', 'timeout', 'Timeout (seconds)', 30, 1800, d.thinking ? 'A thinking model can take minutes: 900 s is safe.' : null),
+        num('pr-slot', 'id_slot', 'Server slot', 0, 63, e.id ? 'Optional. Empty: no slot.' : 'Optional. Empty: the same slot as Fast.'),
+        field('pr-kwargs', 'Template options (optional)', kw, 'Extra chat-template options as JSON. Thinking is set by the switch.')]),
+      h('div', { class: 'btns' }, [save, cancel, btn('tbtn', 'Reload the model list', { 'data-fk': 'pr-reload' }, function () { ui.presetModels = null; presetModels('[data-fk="pr-reload"]'); renderSetup('[data-fk="pr-reload"]'); })]),
+      err]);
+  }
+  function presetsBlock(w) {
+    var err = errBox(), ps = w.presets || [], map = w.call_presets || {}, kinds = w.call_kinds || [];
+    var note = ui.presetNote ? h('p', { class: 'note warn', role: 'status' }, ui.presetNote) : null;
+    function done(r, focusKey) {
+      S.writer = r || S.writer;
+      ui.presetNote = r && r.model_check ? r.model_check : null;
+      renderSetup('[data-fk="' + cssq(focusKey) + '"]');
+    }
+    var times = {};
+    ((S.settings && S.settings.call_times) || []).forEach(function (c) { times[c.id] = c; });
+    var rows = kinds.map(function (k) {
+      var c = times[k.id], sel = on(h('select', { class: 'inp', id: 'pr-map-' + k.id, 'data-fk': 'pr-map:' + k.id }, ps.map(function (p) {
+        return h('option', { value: p.id, selected: (map[k.id] || 'fast') === p.id }, p.name);
+      })), 'change', function () {
+        var body = { call_presets: {} }; body.call_presets[k.id] = sel.value;
+        run([sel], err, function () { return api('PATCH', 'api/writer', body); }, function (r) { done(r, 'pr-map:' + k.id); });
+      });
+      var when = k.id === 'refresh' ? 'When you press Refresh' : c ? (c.enabled ? fmtWhen(c.time) : 'Off') : '';
+      return h('tr', null, [h('th', { scope: 'row' }, h('label', { for: 'pr-map-' + k.id }, k.label)), h('td', { class: 'muted' }, when), h('td', null, sel)]);
+    });
+    rows.push(h('tr', null, [h('th', { scope: 'row' }, 'Urgent check'), h('td', { class: 'muted' }, 'Between call times'), h('td', { class: 'muted' }, 'Never uses the writer')]));
+    var list = h('ul', { class: 'review prlist' }, ps.map(function (p) {
+      var used = kinds.filter(function (k) { return (map[k.id] || 'fast') === p.id; }).map(function (k) { return k.label; });
+      var acts = p.builtin ? [h('span', { class: 'muted' }, 'Your settings above')] : [
+        btn('tbtn', 'Edit', { 'aria-label': 'Edit ' + p.name, 'data-fk': 'pr-ed:' + p.id }, function () { presetEdit(p); }),
+        (function () {
+          var rm = btn('tbtn', 'Delete', { 'aria-label': 'Delete ' + p.name, 'data-fk': 'pr-rm:' + p.id }, function () {
+            run([rm], err, function () { return api('DELETE', 'api/writer/presets/' + encodeURIComponent(p.id)); }, function (r) { done(r, 'pr-add'); });
+          });
+          return rm;
+        })()];
+      return h('li', null, [h('span', { class: 'nm' }, p.name), h('span', { class: 'sum' }, [presetLine(p), used.length ? h('span', { class: 'muted' }, ' · ' + used.join(', ')) : null]),
+        h('span', { class: 'btns' }, acts)]);
+    }));
+    var sug = w.preset_suggestion, full = ps.length - 1 >= (w.preset_max || 4);
+    var hasSug = sug && ps.some(function (p) { return p.name === sug.name; });
+    var addSug = sug && !hasSug && !full ? btn('btn', 'Add ' + sug.label, { 'data-fk': 'pr-sug' }, function () {
+      run([addSug], err, function () { return api('POST', 'api/writer/presets', { suggestion: 'careful' }); }, function (r) { done(r, 'pr-sug'); })
+        .then(function () {
+          if (err.textContent && /doesn.t list/.test(err.textContent)) {  /* not on this server: open it in the form to fix the model id */
+            var msg = err.textContent, dr = {}; Object.keys(sug).forEach(function (k) { if (k !== 'label') dr[k] = sug[k]; });
+            presetEdit(null, dr); ui.presetEdit.err = msg; renderSetup('#pr-model');
+          }
+        });
+    }) : null;
+    var add = full ? null : btn('btn', 'New preset', { 'data-fk': 'pr-add' }, function () { presetEdit(null); });
+    var rl = sw(w.reload_fast !== false, 'After a careful run, load the Fast model again', function () {
+      run([rl], err, function () { return api('PATCH', 'api/writer', { reload_fast: !(writerOf().reload_fast !== false) }); }, function (r) { done(r, 'pr-reload-sw'); });
+    });
+    rl.setAttribute('data-fk', 'pr-reload-sw');
+    return h('div', { class: 'prs', role: 'group', 'aria-labelledby': 'pr-th' }, [
+      h('h3', { class: 'label wh', id: 'pr-th' }, 'Presets per call time'),
+      h('p', { class: 'note' }, 'Each call time can use its own preset. Fast is the model and settings above. A slower, careful preset suits the morning brief, written before you’re up.'),
+      h('div', { class: 'prtbl' }, h('table', null, [h('thead', null, h('tr', null, [h('th', { scope: 'col' }, 'Call time'), h('th', { scope: 'col' }, 'When'), h('th', { scope: 'col' }, 'Preset')])),
+        h('tbody', null, rows)])),
+      list,
+      ui.presetEdit ? presetForm(done) : h('div', { class: 'btns' }, [addSug, add]),
+      note, err,
+      h('div', { class: 'swrow' }, [rl, h('span', { 'aria-hidden': 'true' }, 'After a careful run, load the Fast model again')]),
+      h('p', { class: 'note' }, 'One tiny request, so check-ins and Refresh start quickly. If a careful run fails or takes too long, the fast model writes the brief instead, never Claude.')]);
   }
   function testWriter(provider, b, res, err) {
     res.textContent = 'Testing…';

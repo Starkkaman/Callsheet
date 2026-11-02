@@ -13,6 +13,7 @@ import time
 import dates
 import evaluate
 import memory
+import presets
 import writer
 
 import google
@@ -35,7 +36,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 
 
 class MethodNotAllowed(Exception):
@@ -100,6 +101,10 @@ class App:
             ("POST", r"writer/profiles", self.add_profile),
             ("PATCH", r"writer/profiles/([\w-]+)", self.patch_profile),
             ("DELETE", r"writer/profiles/([\w-]+)", self.delete_profile),
+            ("GET", r"writer/models", self.writer_models),            # 0.6.1 presets
+            ("POST", r"writer/presets", self.add_preset),
+            ("PATCH", rf"writer/presets/({presets.PRESET_ID})", self.patch_preset),
+            ("DELETE", rf"writer/presets/({presets.PRESET_ID})", self.delete_preset),
             ("GET", r"slack/manifest", self.slack_manifest),
             ("POST", r"slack/connect", self.slack_connect),
             ("GET", r"slack/([\w-]+)/channels", self.slack_channels),
@@ -177,7 +182,21 @@ class App:
                                     self.store.has_sources(), now,
                                     writer_on=self.store.writer_config()["provider"] != "off")
         self._brief_050(brief, cache, s)
+        self._brief_writing(brief, cache, s, now)
         return brief
+
+    def _brief_writing(self, brief, cache, settings, now):
+        """0.6.1: while the writer works on the cached brief, "writing" tells the page to show "Writing the
+        summary…" and to ask again (the rules brief is already there)."""
+        w = self.syncer.writing
+        if not (w and cache and cache.get("written_at") == w.get("written_at")) \
+                or self.store.writer_config()["provider"] == "off":
+            return
+        try:
+            since = rules.clock(dt.datetime.fromisoformat(w["since"]).astimezone(now.tzinfo), rules.time_format(settings))
+        except (KeyError, TypeError, ValueError):
+            since = None
+        brief["writing"] = {"text": presets.WRITING, "since": since, "preset": w.get("preset"), "poll_s": 10}
 
     # --- 0.5.0: possible events and notes on the brief, memory (memory.py) -------------------------------------
     def _brief_050(self, brief, cache, settings):
@@ -411,7 +430,9 @@ class App:
             raise InputError("Connect a Google account or a Slack workspace, or link Signal, first.")
         if self.evaluator.job is not None:  # the live writer would swap the local model mid-evaluation
             raise Conflict("An evaluation is running. Try again when it's finished.")
-        return self.syncer.run_now()
+        # 0.6.1: with another preset than Fast for Refresh, the page gets the rules brief at once and the writer
+        # finishes in the background ("Writing the summary…")
+        return self.syncer.run_now(kind="refresh", background=presets.is_slow(self.store.writer_config(), "refresh"))
 
     # --- AI writer --------------------------------------------------------
     def get_writer(self, _body=None):
@@ -429,6 +450,51 @@ class App:
 
     def delete_profile(self, _body, prof_id):
         return self.store.delete_profile(prof_id)
+
+    # --- 0.6.1 writer presets -----------------------------------------------
+    def writer_models(self, _body=None):
+        """The local server's model ids for the preset form; a server that can't be reached is a sentence."""
+        loc = self.store.writer_config()["local"]
+        try:
+            return {"models": writer.local_models(loc["base_url"], loc["api_key"]), "error": None}
+        except writer.WriterError as e:
+            return {"models": [], "error": str(e)}
+
+    def _check_preset_model(self, model):
+        """A preset's model id must be one the local server lists (GET /models). When the server can't be
+        reached the preset is still saved, with a sentence saying it wasn't checked."""
+        if not isinstance(model, str) or not model.strip():
+            return None  # store.py says what's wrong
+        loc = self.store.writer_config()["local"]
+        try:
+            ids = writer.local_models(loc["base_url"], loc["api_key"])
+        except writer.WriterError as e:
+            return f"Couldn't check the model on the server: {e}"
+        if ids and model.strip() not in ids:
+            shown = ", ".join(ids[:5]) + (f" and {len(ids) - 5} more" if len(ids) > 5 else "")
+            raise InputError(f"The server doesn't list {model.strip()[:120]}. Its models: {shown}.")
+        if not ids:
+            return "Couldn't check the model: the server lists no models."
+        return None
+
+    def add_preset(self, body):
+        b = dict(_obj(body))
+        if "suggestion" in b:  # the built-in suggestion, one click (the model id can be sent edited)
+            if b.pop("suggestion") != "careful":
+                raise InputError("The only suggestion is careful.")
+            b = dict({k: v for k, v in presets.SUGGESTION.items() if k != "label"}, **b)
+        check = self._check_preset_model(b.get("model"))
+        p = self.store.add_preset(b)
+        return dict(self.store.writer_public(), preset_id=p["id"], model_check=check)
+
+    def patch_preset(self, body, pid):
+        b = _obj(body)
+        check = self._check_preset_model(b["model"]) if "model" in b else None
+        self.store.update_preset(pid, b)
+        return dict(self.store.writer_public(), preset_id=pid, model_check=check)
+
+    def delete_preset(self, _body, pid):
+        return self.store.delete_preset(pid)
 
     # --- Slack (read-only) ------------------------------------------------
     def slack_manifest(self, _body=None):

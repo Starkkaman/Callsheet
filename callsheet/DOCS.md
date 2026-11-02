@@ -238,6 +238,18 @@ a minute while the model loads; if the server says it is still loading, Callshee
 seconds later. With **If the local model fails, use Claude instead** on (off by default), a failed local
 run is sent to Claude if a Claude key is saved; off keeps your data on your network.
 
+**Presets per call time (0.6.1).** Below the local model's settings, a table maps the Morning brief, the Midday
+and Afternoon check-ins and Refresh (also the catch-up sync when the app starts) to a preset. **Fast** is the
+model and settings above; every call time uses it until you pick another preset. **New preset** adds your own
+(name, model id as the server lists it, thinking, effort, thinking budget, max tokens, timeout, server slot and
+optional template options as JSON); **Add Careful (Swift, thinking)** adds the suggested slow, careful preset in
+one click. A model id the server doesn't list is refused; if the server can't be reached, the preset is saved
+with a note. While a slow preset writes, the brief from the rules is already there with "Writing the summary…";
+the page updates itself when the summary arrives. If the slow preset fails or times out, Fast writes that brief
+(Heads up says so), never Claude. **After a careful run, load the Fast model again** (on by default) sends one
+tiny request so the server holds the Fast model for the check-ins. Presets apply to the local model only; the
+urgent check between call times never uses the writer.
+
 ### Writer evaluation (optional, for comparing writer setups)
 
 Off by default. Under Setup, Delivery, Local model, open **Advanced** and turn on **Show the evaluation

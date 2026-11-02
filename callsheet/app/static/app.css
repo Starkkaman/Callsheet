@@ -1184,3 +1184,27 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .bv .compose{padding:8px 12px 10px}
   .bv .inrow .act{padding:0 12px}
 }
+
+/* ===== 0.6.1: writer presets per call time (Setup → Delivery → Writer) and the "Writing the summary…" line ===== */
+.prs{margin:26px 0 0;padding-top:14px;border-top:var(--rule-w) solid var(--rule);max-width:900px}
+.prs>.note{margin:4px 0 10px}
+.prtbl{overflow-x:auto;margin-bottom:14px}
+.prtbl th[scope=row]{border-bottom-width:var(--rule-w);vertical-align:middle;padding-bottom:7px;min-width:140px;font-size:var(--fs-md);letter-spacing:normal;text-transform:none;font-weight:inherit;color:var(--text)}
+.prtbl td{vertical-align:middle;overflow-wrap:anywhere}
+.prtbl .inp{max-width:260px;padding:6px 32px 6px 10px;font-size:var(--fs-md)}
+.prlist li{grid-template-columns:150px 1fr auto}
+.prlist .sum{font-size:var(--fs-sm);overflow-wrap:anywhere}
+.prlist .btns{display:flex;gap:4px 12px;flex-wrap:wrap;justify-content:flex-end;margin:0}
+.prs>.btns{margin:12px 0 4px}
+.prform{margin:14px 0 4px}
+.prform .evsw{margin:2px 0 0}
+.prform .btns{margin-top:4px}
+.prs .note.warn{color:var(--alert)}
+.bv .writing{font-size:var(--fs-md);margin:4px 0 10px;max-width:760px}
+@media (max-width:700px){
+  .prlist li{grid-template-columns:1fr auto}
+  .prlist .sum{grid-column:1/-1;grid-row:2}
+  .prlist .btns{grid-column:2;grid-row:1}
+  .prtbl th[scope=row]{min-width:0}
+  .prtbl .inp{max-width:none}
+}

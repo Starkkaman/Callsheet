@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1
+
+- **Writer presets per call time.** Setup → Delivery → Writer → Local model has a new **Presets per call time**
+  table: the Morning brief, the Midday and Afternoon check-ins and Refresh can each use their own preset (model,
+  thinking, effort, extra template options, thinking budget, max tokens, timeout, server slot). Nothing changes
+  until you choose: your current local settings are the built-in **Fast** preset, and every call time uses it.
+  The urgent check between call times never uses the writer.
+- **Careful suggestion.** "Add Careful (Swift, thinking)" adds a slower, better preset with one click
+  (`Swift-1.5-Qwen3.8-27B-Q3_K_M`, thinking on with a 2,048-token budget, 900-second timeout). The model id is
+  checked against the list your server reports (`/v1/models`); if your server names it differently, the form
+  opens so you can fix it.
+- **Writing the summary….** The brief from the rules is shown at once; while the writer is still working the
+  Briefing says "Writing the summary…" and the page checks again every 10 seconds. A Refresh mapped to a slow
+  preset returns at once and the summary follows.
+- **Fallback and reload.** If a careful run fails or doesn't answer in time, the fast model writes that brief
+  instead, once, and Heads up says so ("Written by the fast model: the careful one didn't answer in time.");
+  it never falls back to Claude. Afterwards one tiny request (8 tokens) loads the Fast model again so check-ins
+  and Refresh start quickly (**After a careful run, load the Fast model again**, on by default).
+- The app log has one line per writer request with the preset, whether the model changed and the time, plus the
+  time spent waiting for the server (the model swap): counts only. The 0.5.3 safety post-check runs on every
+  writer answer, and the writer's fixed texts are unchanged. The writer evaluation is unchanged.
+
 ## 0.6.0 ("Know me")
 
 - **Get to know me.** A new page in Setup → Delivery → Memory → "Get to know me" helps Callsheet learn who you

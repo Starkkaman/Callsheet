@@ -394,7 +394,7 @@ class FakeSyncer:
     def __init__(self):
         self.runs = 0
 
-    def run_now(self):
+    def run_now(self, kind=None):
         self.runs += 1
 
 

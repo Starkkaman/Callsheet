@@ -20,6 +20,7 @@ import zoneinfo
 
 import evaluate
 import push
+import presets
 import writer
 
 SCHEMA_VERSION = 1
@@ -146,7 +147,12 @@ LOCAL_NUMBER_NAMES = {"reasoning_budget": "The thinking budget", "max_tokens": "
 def default_writer():
     return {"provider": "off",
             "claude": {"api_key": None, "model": writer.DEFAULT_MODEL},
-            "local": dict({"base_url": "", "model": "", "api_key": None}, **writer.LOCAL_DEFAULTS),
+            # 0.6.1: writer.local is also the built-in "Fast" preset (effort and kwargs only used when set)
+            "local": dict({"base_url": "", "model": "", "api_key": None}, **writer.LOCAL_DEFAULTS,
+                          effort=None, kwargs={}),
+            # 0.6.1 presets per call time: the owner's own presets, call kind -> preset id (all Fast by default),
+            # and whether to load the Fast model again after another preset ran
+            "presets": [], "call_presets": presets.default_mapping(), "reload_fast": True,
             "fallback_to_claude": False, "suggest_replies": True,
             # the owner's writing-instruction profiles (the built-in "default" is never stored) and the one in use
             "prompt_profiles": [], "active_profile": "default",
@@ -601,7 +607,13 @@ class Store:
                 "prompt_max": writer.PROMPT_MAX, "profile_max": MAX_PROFILES,
                 # read-only: the exact fixed texts compose_system adds to every profile: after_drafts right after
                 # the "Suggested replies" text, then the examples, then the safety block (+ JSON instructions)
-                "fixed": {"after_drafts": writer.AFTER_DRAFTS, "safety": writer.SAFETY, "examples": writer.EXAMPLES}}
+                "fixed": {"after_drafts": writer.AFTER_DRAFTS, "safety": writer.SAFETY, "examples": writer.EXAMPLES},
+                # 0.6.1 presets per call time (local writer only)
+                "presets": presets.all_presets(w), "call_presets": presets.mapping(w),
+                "reload_fast": w["reload_fast"] is not False,
+                "call_kinds": [{"id": k, "label": label} for k, label in presets.CALL_KINDS],
+                "preset_suggestion": dict(presets.SUGGESTION), "preset_max": presets.MAX_PRESETS,
+                "urgent_note": presets.URGENT_NOTE}
 
     @staticmethod
     def _check_key(val, what):
@@ -687,6 +699,16 @@ class Store:
                     if not isinstance(val, str) or not any(x["id"] == val for x in self._profiles(w)):
                         raise InputError("That writing profile doesn't exist.")
                     w["active_profile"] = val
+                elif key == "call_presets":  # 0.6.1
+                    try:
+                        m = presets.check_mapping(val, {p["id"] for p in presets.all_presets(w)})
+                    except presets.Invalid as e:
+                        raise InputError(str(e)) from None
+                    w["call_presets"] = dict(presets.mapping(w), **m)
+                elif key == "reload_fast":  # 0.6.1
+                    if not isinstance(val, bool):
+                        raise InputError("reload_fast must be true or false.")
+                    w["reload_fast"] = val
                 elif key in ("fallback_to_claude", "suggest_replies"):
                     if not isinstance(val, bool):
                         raise InputError(f"{key} must be true or false.")
@@ -694,6 +716,77 @@ class Store:
                 else:
                     raise InputError(f"The writer can't change {str(key)[:40]}.")
             w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return self.writer_public()
+
+    # --- 0.6.1 writer presets ---------------------------------------------
+    def _preset_public(self, w, pid):
+        return next(p for p in presets.all_presets(w) if p["id"] == pid)
+
+    def add_preset(self, body):
+        """A new preset of the owner's (body: name and the preset fields; missing fields copy Fast's). The model
+        id is checked against the server's list by the caller (api.py) first. Returns the preset."""
+        if not isinstance(body, dict):
+            raise InputError("Send the preset as a JSON object.")
+        with self.lock:
+            w = self.writer_config()
+            own = presets.stored(w)
+            if len(own) >= presets.MAX_PRESETS:
+                raise InputError(f"There can be at most {presets.MAX_PRESETS} presets besides Fast. Delete one first.")
+            try:
+                name = presets.check_name(body.get("name"), own)
+                p = {k: v for k, v in presets.fast(w["local"]).items() if k in presets.FIELDS}
+                p.update(model="", effort=None, kwargs={})
+                presets.check_fields(body, p)
+                if not p["model"]:
+                    raise presets.Invalid("Add the model id the server lists for this preset.")
+            except presets.Invalid as e:
+                raise InputError(str(e)) from None
+            p = dict(p, id=new_id("pre"), name=name)
+            w["presets"] = own + [p]
+            w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return self._preset_public(w, p["id"])
+
+    def update_preset(self, pid, patch):
+        """Change a preset. Fast's fields are the local writer's settings (its name is fixed)."""
+        if not isinstance(patch, dict):
+            raise InputError("Send the change as a JSON object.")
+        with self.lock:
+            w = self.writer_config()
+            try:
+                if pid == presets.FAST:
+                    if "name" in patch:
+                        raise presets.Invalid("The Fast preset's name can't be changed.")
+                    p = {k: w["local"].get(k) for k in presets.FIELDS}
+                    presets.check_fields(patch, p)
+                    w["local"].update({k: p[k] for k in presets.FIELDS})
+                else:
+                    own = presets.stored(w)
+                    p = next((x for x in own if x["id"] == pid), None)
+                    if p is None:
+                        raise NotFound("That preset doesn't exist.")
+                    if "name" in patch:
+                        p["name"] = presets.check_name(patch["name"], [x for x in own if x["id"] != pid])
+                    presets.check_fields(patch, p)
+                    w["presets"] = own
+            except presets.Invalid as e:
+                raise InputError(str(e)) from None
+            w["configured_by_owner"] = True
+            self._set_meta("writer", w)
+        return self._preset_public(w, pid)
+
+    def delete_preset(self, pid):
+        with self.lock:
+            w = self.writer_config()
+            if pid == presets.FAST:
+                raise InputError("The Fast preset can't be deleted.")
+            if not any(x["id"] == pid for x in presets.stored(w)):
+                raise NotFound("That preset doesn't exist.")
+            used = presets.in_use(w, pid)
+            if used:
+                raise InputError(f"This preset is used for {', '.join(used)}. Pick another preset there first.")
+            w["presets"] = [x for x in presets.stored(w) if x["id"] != pid]
             self._set_meta("writer", w)
         return self.writer_public()
 
