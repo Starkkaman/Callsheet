@@ -125,6 +125,21 @@ def default_settings():
     }
 
 
+def with_days(call, settings):
+    """0.6.2: the call time with its own weekdays ("days"). Settings from before 0.6.2 have none; they get what the
+    scheduler did until then: the morning brief every day, the check-ins on workdays when skip_checkins_days_off is
+    set, else every day. The next settings save stores them, so changing workdays later doesn't move them."""
+    c = dict(call)
+    days = c.get("days")
+    if isinstance(days, list) and days and all(d in WEEKDAYS for d in days):
+        c["days"] = [d for d in WEEKDAYS if d in days]
+    elif c.get("id") != "morning" and settings.get("skip_checkins_days_off"):
+        c["days"] = [d for d in WEEKDAYS if d in (settings.get("workdays") or [])]
+    else:
+        c["days"] = list(WEEKDAYS)
+    return c
+
+
 def new_id(prefix):
     return prefix + "_" + secrets.token_hex(4)
 
@@ -227,6 +242,7 @@ class Store:
         s = default_settings()
         saved = self._get_meta("settings", {})
         s.update({k: v for k, v in saved.items() if k in s})
+        s["call_times"] = [with_days(c, s) for c in s["call_times"]]
         return s
 
     def update_settings(self, patch):
@@ -306,6 +322,14 @@ class Store:
                 if not isinstance(item["label"], str) or not item["label"].strip() or len(item["label"]) > 40:
                     raise InputError("A call time label must be 1 to 40 characters.")
                 c["label"] = item["label"].strip()
+            if "days" in item:  # 0.6.2: at least one day; to stop a call time, turn it off ("enabled")
+                days = item["days"]
+                if not isinstance(days, list) or any(d not in WEEKDAYS for d in days):
+                    raise InputError("Days must be a list of mon, tue, wed, thu, fri, sat, sun.")
+                if not days:
+                    raise InputError(f"Pick at least one day for the {c.get('label') or c['id']}. To stop it, "
+                                     "turn it off.")
+                c["days"] = [d for d in WEEKDAYS if d in days]
         return [by_id[k] for k in ("morning", "midday", "afternoon")]
 
     def setup_done(self):

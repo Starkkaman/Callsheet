@@ -111,7 +111,8 @@ class StateAndSettingsTest(Base):
                                                "look": "easy", "mode": "dark", "name": "Sam", "setup_done": True})
         self.assertEqual(s["workdays"], ["mon", "fri"])
         self.assertEqual(s["call_times"][1], {"id": "midday", "label": "Midday check-in", "time": "13:15",
-                                              "enabled": False})
+                                              "enabled": False,
+                                              "days": ["mon", "tue", "wed", "thu", "fri"]})  # 0.6.2: before the patch
         st = self.ok("GET", "/api/state")
         self.assertEqual(st["settings"]["timezone"], "Europe/Amsterdam")
         self.assertIs(st["setup_done"], True)

@@ -45,7 +45,7 @@ plain rules build the brief.
   fixed (true for Personal), accounts: [{id, email, status: "connected|needs_reconnect|error", error, services:
   {calendar, mail}, calendars: [{id, summary, primary, selected}]}]}], vips: [{id, name, email, area_id}],
   settings: {name, timezone, workdays: ["mon",…], reply_age_days, call_times: [{id: "morning|midday|afternoon",
-  label, time "HH:MM", enabled}], skip_checkins_days_off, look, mode}, last_sync: {at, ok, errors: [plain strings]},
+  label, time "HH:MM", enabled, days: ["mon",…] (0.6.2)}], skip_checkins_days_off, look, mode}, last_sync: {at, ok, errors: [plain strings]},
   setup_done}`
 - `POST api/google-client {client_id, client_secret}` / `DELETE api/google-client`
 - `POST api/areas {name, colour}` → area; `PATCH api/areas/<id> {name?, colour?, reads?}`; `DELETE api/areas/<id>`
@@ -57,8 +57,15 @@ plain rules build the brief.
 - `POST api/sync` → runs a sync now (blocking, max ~60 s), returns `last_sync`.
 
 ## Sync and rules (rules only, no AI)
-- Scheduler thread: runs a sync at each enabled call time in the configured timezone (skip check-ins on days off
-  when set), plus once at start-up if the last sync is older than 30 min. Brief cached in the DB.
+- Scheduler thread: runs a sync at each enabled call time in the configured timezone, on that call time's own
+  `days` (0.6.2; before, check-ins were skipped on days off when set), plus once at start-up if the last sync is
+  older than 30 min. Manual Refresh always works.
+- 0.6.2 days per call time: each call time has `days` (at least one; to stop a call time, turn it off with
+  `enabled`: an empty list is refused, so there is one way to say "off"). Settings saved before 0.6.2 get the days
+  the scheduler used then: the morning brief every day; the check-ins on `workdays` when `skip_checkins_days_off`
+  is on, else every day (`store.with_days`). The next settings save stores them, so a later workdays change doesn't
+  move them. `skip_checkins_days_off` and `workdays` now only steer the urgent light check (Setup: "No urgent
+  checks on days off"; see push-and-alerts.md). Brief cached in the DB.
 - Calendar: for each selected calendar of accounts whose area reads calendar: `events.list` today 00:00–24:00 local,
   singleEvents=true, orderBy=startTime. Skip cancelled, transparent ("free") and declined events.
   Schedule rows: time, title, area, note (location or first line of description, ≤80 chars), flags:

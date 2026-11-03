@@ -3,6 +3,7 @@ OpenAI-compatible local model server. Both record every request. Never contacts 
 import http.server
 import json
 import threading
+import time
 import urllib.parse
 
 
@@ -40,7 +41,10 @@ class _Fake:
                 for k, v in (extra or {}).items():
                     self.send_header(k, v)
                 self.end_headers()
-                self.wfile.write(out)
+                try:
+                    self.wfile.write(out)
+                except (BrokenPipeError, ConnectionResetError):  # 0.6.2: the client timed out (a slow .delay)
+                    self.close_connection = True
 
             do_GET = do_POST = _any
 
@@ -109,7 +113,7 @@ class FakeLocal(_Fake):
     .reject_tools: HTTP 400 for requests with `tools`. .status: error status for every request. Like llama.cpp with a thinking model,
     every answer also carries message.reasoning_content (.reasoning); .finish: finish_reason; .timings: llama.cpp
     timings. .loading: the next N chat requests get HTTP 500 "Loading model"; .resets: the next N chat requests
-    get the connection dropped."""
+    get the connection dropped. .delay (0.6.2): seconds before a chat answer starts (a busy server's slow first byte)."""
 
     def __init__(self):
         self.contents = ['{"summary": "Local summary.", "replies": {}}']
@@ -122,6 +126,7 @@ class FakeLocal(_Fake):
         self.resets = 0
         self.messages = []        # 0.6.0 chat: queue of whole message dicts (e.g. with tool_calls), used first
         self.reject_tools = False  # 0.6.0 chat: HTTP 400 for any request that carries `tools`
+        self.delay = 0.0           # 0.6.2: wait this long before answering a chat request
         super().__init__()
 
     @property
@@ -137,6 +142,8 @@ class FakeLocal(_Fake):
         if req["method"] == "GET" and req["path"] == "/v1/models":
             return 200, {"object": "list", "data": [{"id": m, "object": "model"} for m in self.models]}, None
         if req["method"] == "POST" and req["path"] == "/v1/chat/completions":
+            if self.delay:
+                time.sleep(self.delay)
             if self.resets:
                 self.resets -= 1
                 return None, None, None

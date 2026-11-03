@@ -467,6 +467,8 @@ td.x{width:1%;text-align:right;white-space:nowrap}
 .tb .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .tb .inp{max-width:140px;padding:4px 8px}
 .tb.off .disp{text-decoration:line-through;text-decoration-thickness:4px}
+.tb .ctdays{display:flex;flex-wrap:wrap;gap:4px}  /* 0.6.2: each call time's days */
+.tb .ctdays .chip{padding:4px 6px}
 .tb.lead .sw[aria-pressed=true]{background:var(--on-callbox);color:var(--callbox)}
 .tb.lead .err{color:inherit}
 .swrow{display:flex;gap:14px;align-items:center;margin:18px 0 6px;flex-wrap:wrap;font-size:var(--fs-md)}
@@ -1141,6 +1143,7 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .bv .ma>.label .by{text-transform:none;letter-spacing:0;font-weight:400}
 .bv .ma p{margin:0 0 6px;overflow-wrap:anywhere;white-space:pre-line}
 .bv .ma .sugwarn{margin:0 0 8px}
+.bv .ma .cretry{margin:2px 0 6px}  /* 0.6.2: Try again after a busy server */
 .bv .cintro{color:var(--muted);max-width:560px}
 .bv .cintro p{margin:0 0 8px}
 .bv .from{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px}
