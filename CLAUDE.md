@@ -9,7 +9,8 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   through Home Assistant's notify service: sender name and subject, never message text.)
 - **No external requests at runtime.** The page and server must work offline: fonts and assets are
   bundled, no CDNs, no analytics. Outbound traffic from the server goes only to Google (the user's own
-  accounts, read-only: Gmail, Calendar and, from 0.6.0, Drive `GET files`/`files/<id>`/`files/<id>/export`
+  accounts, read-only: Gmail (0.8.0: also `GET users/me/messages/<id>/attachments/<aid>` for calendar files up to
+  256 KB), Calendar (0.8.0: also events.list by `iCalUID`) and, from 0.6.0, Drive `GET files`/`files/<id>`/`files/<id>/export`
   with `drive.readonly`, all behind the allowlist in `google.py`), Slack's read-only Web API (`slack.com`),
   `api.anthropic.com` (Claude writer, through the SDK), the owner's configured local model URL,
   and (0.5.1, phone notifications only) the Supervisor's Core API proxy

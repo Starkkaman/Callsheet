@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 ("See everything")
+
+Rules only: nothing new goes to the AI writer, and nothing is answered, booked or sent for you.
+
+- **Invites found in email**: calendar files (.ics, text/calendar) in invite mail from Google, Outlook, Zoom and
+  Teams are read, so an invite that only reached a mailbox whose calendar Callsheet doesn't read still shows, marked
+  "Unverified invite · from email". It never counts as booked and never shows as a clash. "Answer in Gmail" opens
+  the mail; when Gmail's sender check failed it says "Sender not verified" and there is no answer button.
+  Cancellations and updates follow SEQUENCE; an email can never cancel or move an event your calendar shows.
+- **Invites not answered** on your calendars (next 60 days), with "Answer in Google Calendar".
+- **Calendar not read**: a warning when an account's mail is read but its calendar isn't.
+- **Security heads-ups**: sign-in, verification code, password and payment alerts always show. Look-alike
+  addresses are marked "Not from <company>", never as the real one; a stranger using a VIP's name isn't a VIP.
+- **Sorted for you**: counts (Promos, Updates, No reply needed) with the full lists; nothing is hidden.
+- **Coming up** (60 days): travel, big events, deadlines, renewals, birthdays and invites, with Got it, Remind me
+  a week before and Not big. **What changed** since your last brief: new, moved and cancelled events.
+- Calendar files are read up to 256 KB; links inside them are shown as plain text.
+
 ## 0.7.2 ("Jam looks")
 
 - **Nine new looks**, the same ones as JamDash: Depth, Braun, NERV, LCARS, Olympia, Transit, Grid, New Wave and
