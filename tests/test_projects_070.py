@@ -687,9 +687,12 @@ class ChatScopeTest(Base):
         conv = c.view(conv["id"])
         self.assertEqual(conv["scope"]["project"], venue["id"])
         bodies = [r["body"] for r in loc.chats()]
-        self.assertIn(chat.CHAT_SCOPE, bodies[0]["messages"][0]["content"])
+        self.assertIn(chat.CHAT_SCOPE_RULE, bodies[0]["messages"][0]["content"])
         self.assertTrue(bodies[0]["messages"][0]["content"].rstrip().endswith(chat.CHAT_SAFETY.rstrip()))
-        self.assertNotIn(venue["name"], bodies[0]["messages"][0]["content"])  # no project data in the prompt
+        # 0.7.1: the prompt names the project (owner-accepted name and status, escaped and clipped)
+        self.assertIn(chat.scope_line(conv["scope"]), bodies[0]["messages"][0]["content"])
+        self.assertIn(chat.CHAT_SCOPE_NUDGE, bodies[0]["messages"][0]["content"])
+        self.assertTrue(conv["scope"]["status"])
         tool_result = json.dumps(bodies[1]["messages"])
         self.assertNotIn("Can you send the signed form", tool_result)  # t4 is outside the project
         self.assertEqual(sorted(chat.Tools.ALLOWED), ["get_item", "list_events", "search", "stats"])

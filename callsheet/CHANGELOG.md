@@ -15,6 +15,10 @@
 - **Keys** on Top of the day and Replies: J/K move, Enter opens, D done, C copy the draft, O open in Gmail or Slack,
   N note, Esc close, ? shows them all. Keys never fire while you're typing. Nothing is ever sent.
 - **Phone header**: Refresh, Setup and Look now have labels under their icons, with bigger touch targets.
+- **Ask about this project** now tells the model which project the chat is about (its name and status) and to
+  search the project's items before answering, so "What should I do next?" no longer asks "which project?". The
+  name is passed as data (one line, clipped, quotes and angle brackets escaped); chats outside a project are
+  unchanged.
 
 ## 0.7.0 ("Projects")
 

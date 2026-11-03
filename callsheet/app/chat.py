@@ -348,17 +348,42 @@ def context_line(now, tz, areas, fmt):
             + (", ".join(a["name"] for a in areas) or "none") + ".")
 
 
-CHAT_SCOPE = ("This chat is about one of the owner's projects. The tools only return the items Callsheet linked "
-              "to that project (search, list_events and get_item are filtered to them). If they don't have the "
-              "answer, say so plainly instead of guessing.")
+CHAT_SCOPE_RULE = ("The tools only return the items Callsheet linked to that project (search, list_events and "
+                   "get_item are filtered to them). If they don't have the answer, say so plainly instead of guessing.")
+CHAT_SCOPE = "This chat is about one of the owner's projects. " + CHAT_SCOPE_RULE
+# 0.7.1: the scoped chat names its project (the owner-accepted name and status, clipped and escaped: data, not
+# instructions) and nudges the model to search before answering (a fixed sentence)
+CHAT_SCOPE_NAMED = 'This chat is about the project "{name}"{status}: search only finds its linked items.'
+CHAT_SCOPE_STATUS = " (status: {status})"
+CHAT_SCOPE_NUDGE = "For questions about this project, search its items before answering."
+
+
+def _prompt_text(text, n):
+    """Owner-visible data in a prompt sentence: one line, clipped, no quotes or angle brackets to break out of the
+    quoted name or fake a <data> block."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or ""))
+    return _clip(text, n).replace('"', "'").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+def scope_line(project):
+    """The 0.7.1 named scope sentence, or None when there's no usable name (old chats, bare Tools)."""
+    project = project if isinstance(project, dict) else {}
+    name = _prompt_text(project.get("name"), 60)
+    if not name:
+        return None
+    status = _prompt_text(project.get("status"), 20)
+    return CHAT_SCOPE_NAMED.format(name=name, status=CHAT_SCOPE_STATUS.format(status=status) if status else "")
 
 
 def system_prompt(now, tz, areas, fmt, mode="native", sources=SOURCES, scoped=False):
-    """Intro, style, today's context, (the 0.7.0 project scope sentence, fixed, no project data), (the JSON
-    protocol), then the fixed rules, always last."""
+    """Intro, style, today's context, (the project scope: 0.7.1 named sentence if `scoped` is a {name, status}
+    dict, else the 0.7.0 fixed sentence; the 0.7.1 search nudge), (the JSON protocol), then the fixed rules, always
+    last. An unscoped prompt is unchanged."""
     parts = [CHAT_INTRO, CHAT_STYLE, context_line(now, tz, areas, fmt)]
     if scoped:
-        parts.append(CHAT_SCOPE)
+        named = scope_line(scoped) if isinstance(scoped, dict) else None
+        parts.append(named + " " + CHAT_SCOPE_RULE if named else CHAT_SCOPE)
+        parts.append(CHAT_SCOPE_NUDGE)
     if mode == "json":
         parts.append(json_protocol(sources))
     parts.append(CHAT_SAFETY)
@@ -425,8 +450,9 @@ class Tools:
 
     ALLOWED = {"search": "_search", "get_item": "_get_item", "list_events": "_list_events", "stats": "_stats"}
 
-    def __init__(self, index, tz, areas, fmt="12h", clock=time.time, scope=None):
+    def __init__(self, index, tz, areas, fmt="12h", clock=time.time, scope=None, project=None):
         self.index, self.tz, self.fmt, self.clock = index, tz, fmt, clock
+        self.project = project if isinstance(project, dict) else None   # 0.7.1: {name, status} for the prompt
         # 0.7.0: a project's chat. None = the whole index; a set of item ids = only those (a filter on these same
         # read-only tools, not a new tool)
         self.scope = None if scope is None else {int(i) for i in scope}
@@ -434,6 +460,10 @@ class Tools:
         self.seen = {}
         self.flagged = set()   # 0.6.0: ids of returned items that hold a planted instruction (inject.py)
         self.calls = 0
+
+    def scoped(self):
+        """What system_prompt takes: False (whole index), the {name, status} of the project, or True (no name)."""
+        return False if self.scope is None else (self.project or True)
 
     def sources(self):
         extra = []
@@ -906,6 +936,7 @@ class Chat:
                 conv = {"id": _now_id(), "title": _clip(text, 80), "created_at": now, "messages": []}
                 if scope is not None:
                     conv["scope"] = {"project": scope["project"], "name": _clip(scope["name"], 60),
+                                     "status": _clip(scope.get("status"), 20),
                                      "ids": [int(i) for i in scope["ids"]][:500]}
             conv["messages"].append({"role": "user", "text": text, "at": now})
             conv["updated_at"] = now
@@ -1030,7 +1061,8 @@ class Chat:
             now = dt.datetime.fromtimestamp(self.clock(), tz)
             sc = conv.get("scope") if isinstance(conv.get("scope"), dict) else None
             tools = Tools(self.index, tz, self.store.areas(), fmt, clock=self.clock,
-                          scope=sc.get("ids") or [] if sc else None)
+                          scope=sc.get("ids") or [] if sc else None,
+                          project={"name": sc.get("name"), "status": sc.get("status")} if sc else None)
             question, history = conv["messages"][-1]["text"], self._history(conv)
             if provider == "claude":
                 raw, by = self._claude(job, t0, s["claude"], now, tz, fmt, tools, question, history, stats), \
@@ -1123,7 +1155,7 @@ class Chat:
         log = (lambda line: self.log(line.replace("Callsheet writer:", "Callsheet chat:", 1))) if self.log else None
 
         def start(m):
-            msgs = [{"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, m, sources, tools.scope is not None)}]
+            msgs = [{"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, m, sources, tools.scoped())}]
             for q, a in history:
                 msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
             return msgs + [{"role": "user", "content": question}]
@@ -1180,7 +1212,7 @@ class Chat:
                     if act and act[0] == "tool":  # a tool call written as text: carry on with the JSON protocol
                         mode = "json"
                         msgs[0] = {"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, mode,
-                                                                              sources, tools.scope is not None)}
+                                                                              sources, tools.scoped())}
                         final = self._json_round(job, tools, msgs, act, stats, final)
                         continue
                     if content.strip():
@@ -1273,7 +1305,7 @@ class Chat:
             msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         msgs.append({"role": "user", "content": question})
         kw = dict(model=cfg["model"], max_tokens=CLAUDE_MAX_TOKENS[1 if cfg["thinking"] else 0],
-                  system=system_prompt(now, tz, self.store.areas(), fmt, "native", sources, tools.scope is not None),
+                  system=system_prompt(now, tz, self.store.areas(), fmt, "native", sources, tools.scoped()),
                   tools=claude_tools(sources), output_config={"effort": cfg["effort"]},
                   thinking={"type": "adaptive"} if cfg["thinking"] else {"type": "disabled"})
         final = False

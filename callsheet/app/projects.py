@@ -944,10 +944,11 @@ class Projects:
         return self.view()
 
     def scope(self, pid):
-        """The chat scope of one project: its name and its linked index ids (the filter for the existing tools)."""
+        """The chat scope of one project: its name, status (0.7.1, for the prompt's scope sentence) and its linked
+        index ids (the filter for the existing tools)."""
         p = self._get(pid)
         d = json.loads(p["draft"] or "{}")
-        return {"project": p["id"], "name": p["name"], "ids": [int(i) for i in (d.get("sources") or [])][-MAX_SOURCES:]}
+        return {"project": p["id"], "name": p["name"], "status": STATUS_NAMES.get(p["status"], ""), "ids": [int(i) for i in (d.get("sources") or [])][-MAX_SOURCES:]}
 
     # slipped ---------------------------------------------------------------------------------------------------------
     def _marks(self):

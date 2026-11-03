@@ -65,8 +65,13 @@ requests are indexed with source `github`. Unfollowing a repo or forgetting the 
 ## Ask about this project
 Chat with `project_id` (new chats only) stores a scope `{project, name, ids}` on the conversation. The scope is an
 id filter on the existing `search`, `get_item` and `list_events` tools (no new tool); `get_item` outside it says
-"Item N isn't part of this project." The system prompt adds one fixed sentence (no project data) before the
-safety text, which stays last.
+"Item N isn't part of this project." The system prompt adds a scope sentence before the safety text, which stays
+last. Since 0.7.1 the scope also stores the project's status name, and the sentence names the project:
+`This chat is about the project "<name>" (status: <status>): search only finds its linked items.` followed by the
+fixed filter rule. Name and status are owner-accepted data, treated as data: one line, clipped (60 / 20
+characters), `"` turned into `'` and `<` `>` escaped as `\u003c` `\u003e`. Chats without a name keep the 0.7.0 fixed
+sentence. A fixed nudge follows in every scoped chat: "For questions about this project, search its items before
+answering." The unscoped prompt is unchanged byte for byte.
 
 ## API
 `GET/POST api/projects`, `POST api/projects/build`, `POST api/projects/suggest`, `GET/PATCH api/projects/settings`,
