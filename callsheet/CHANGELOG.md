@@ -56,6 +56,20 @@
 - **GitHub (optional, read-only)**: a fine-grained read-only token and the repos you pick; commits, issues and
   pull requests go into the index. Only `GET` requests to five GitHub API paths are allowed; nothing is written.
 
+## 0.6.3
+
+- **The scheduler says where it stands.** At start-up and after each scheduled brief, the app log now says when the
+  next brief runs, in your time zone, for example "Callsheet scheduler: next brief morning at 06:30 (Tue,
+  America/Los_Angeles); urgent checks paused in quiet hours 22:00-07:00". A quiet night in the log is easy to read
+  as one (urgent checks don't run in quiet hours, and a brief runs at its time in Callsheet's time zone).
+- **No call time lost behind a slow start-up.** After a restart, Callsheet first catches up with a Refresh. With
+  Refresh on a slow preset (Careful), that catch-up, plus loading the Fast model again (which waits up to the Fast
+  timeout when the model server doesn't answer), can take several minutes. A call time that passes meanwhile now
+  still runs right after; before, it was skipped.
+- **Sturdier scheduler.** A call time that finds a Refresh or its writer still running says so in the log instead of
+  passing silently. A failing step is logged (error type only) and the scheduler goes on; a watchdog starts the
+  scheduler again if it ever stops, and logs when it hasn't moved for 45 minutes.
+
 ## 0.6.2
 
 - **Chat on a busy model server.** When the local model server is busy (a shared llama.cpp router, a model
