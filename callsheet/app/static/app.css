@@ -1598,6 +1598,43 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .prtbl .inp{max-width:none}
 }
 
+/* 0.8.1 Remember: the chat Save card (mockup understanding-v1 frame 5) and Setup → Memory's "Saved from chat". Theme tokens only. */
+.bv .csave{display:grid;gap:8px;width:min(100%,560px);margin:8px 0 4px;padding:12px 16px;border-radius:var(--radius);background:var(--bg);color:var(--text);box-shadow:inset 0 0 0 var(--rule-mid) var(--text)}
+.app[data-base=clean] .bv .csave{box-shadow:inset 0 0 0 1px var(--rule),0 6px 20px color-mix(in srgb,var(--text) 10%,transparent)}
+.bv .csave.refused{box-shadow:inset 4px 0 0 var(--alert);padding:8px 12px}
+.bv .csave.refused p{margin:0}
+.bv .csave .hd{display:flex;align-items:center;gap:8px;font-weight:700}
+.bv .csave .hd .ico{width:16px;height:16px;flex:none}
+.bv .csave p{margin:0}
+.bv .csave .ctext{font-size:var(--fs-md);white-space:pre-line}
+.bv .csave .aiw{font-size:var(--fs-sm);font-weight:700;color:var(--alert)}
+.bv .csave .ckeys{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:var(--fs-sm)}
+.bv .csave .ckeys .label{color:var(--muted)}
+.bv .csave .pchip{display:inline-block;max-width:100%;padding:2px 8px;border-radius:var(--chip-radius);background:var(--surface-2);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);overflow-wrap:anywhere}
+.bv .csave .cform{display:grid;gap:4px}
+.bv .csave .cform .label{color:var(--muted);margin-top:4px}
+.bv .csave .cform .inp{width:100%;min-width:0}
+.bv .csave textarea.inp{min-height:68px;resize:vertical;font:inherit}
+.bv .csave .cok{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);font-weight:600}
+.bv .csave .cok input{width:18px;height:18px;margin:0}
+.bv .csave .acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.bv .csave .act[disabled]{opacity:.45;cursor:not-allowed}
+.bv .csave .acts .tbtn,.bv .csaved .tbtn{min-height:24px}
+.bv .csave .fine{font-size:var(--fs-xs);color:var(--muted)}
+.bv .csaved{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:6px 0 2px;font-size:var(--fs-sm);font-weight:600}
+.bv .csaved .ico{width:14px;height:14px}
+.mem .memchat{margin:12px 0}
+.mem .memchat ul{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:8px}
+.mem .memchat li{padding:8px 0;border-bottom:var(--rule-w) solid var(--rule)}
+.mem .memchat li p{margin:0 0 4px;overflow-wrap:anywhere}
+.mem .memchat .btns{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.mem .memchat textarea{width:100%;margin-bottom:6px}
+@media (max-width:700px){
+  .bv .csave{width:100%}
+  .bv .csave .acts .act,.bv .csave .acts .tbtn,.bv .csaved .tbtn,.mem .memchat .tbtn{min-height:44px}
+  .bv .csave .cok{min-height:44px}
+}
+
 /* 0.7.0 projects */
 /* from mockups/planning-v1.html (approved), theme tokens only */
 .hdr .rf{display:inline-flex;align-items:center;gap:6px}

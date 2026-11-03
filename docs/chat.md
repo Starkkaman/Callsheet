@@ -202,9 +202,51 @@ Claude: `model`, `effort` low/medium/high, `thinking`; it uses the writer's save
 stores its own. Separate from the writer settings; validated, nothing saved on an error; the key is never
 returned (only a hint).
 
+## Remember (0.8.1, owner-approved 2026-11-03)
+The owner can ask Chat to remember something; Callsheet shows a **Save card** and writes nothing until the owner
+presses **Save to memory**. Code: the "0.8.1 Remember" section of `chat.py`, `save_note` behind
+`POST api/memory/notes {kind: "chat"}`; tests in `tests/test_remember_081.py`.
+
+- **Intent, owner's text only.** `chat.remember_intent(question)` is a fixed pattern over the owner's latest
+  message: "remember that…", "note that…" / "Note: …" / "make a note that…", "don't forget…", "keep in mind…",
+  "bear in mind…", "save this to memory: …", optionally after "please", "Callsheet," or "can you". Questions
+  ("Do you remember…?", "remember that?"), "I remember…", "remember to/when/if/me…", "note the…" and "note to
+  Callsheet/self" don't count, and neither does a trigger that isn't at the start. It never looks at tool results,
+  mail or earlier answers.
+- **The tool exists only in remember turns.** `propose_memory(text, people?, topics?, area?)` is offered (native,
+  JSON protocol and Claude) and `REMEMBER_RULE` is added to the system prompt only when the intent matched. In
+  every other turn the tool list and prompt are byte-identical to 0.8.0 (the 0.7.1 unscoped hash pin still
+  holds) and a `propose_memory` call gets the usual "There is no tool called…" error and is counted in the log as
+  ignored. The tool never writes: it returns "The owner now sees a Save card. Nothing is saved until they press
+  Save." One proposal per question.
+- **Whose words.** When the owner's words after the trigger say something ("remember that Leo is off next week"),
+  the card holds exactly those words and the model's text is ignored, so planted text the model read can't ride
+  along. Only when they point at something ("remember this", "remember what Priya said") does the card use the
+  model's `propose_memory` text, marked "Written by the AI from this chat: check it."; with no proposal the card
+  says there is nothing to save. People are kept only when the text names them (fuller names from the sources
+  win); topics are the model's when all their words are in the text, else up to three words from the text; area
+  only when it is one of the owner's areas.
+- **Checks (card and Save).** `chat.note_check`: `inject.instructions`, standing orders ("always say…", "Callsheet
+  should…", "ignore…") and a repeat of an instruction flagged in this chat are **refused** with a plain sentence
+  and no Save button. `writer.states_decision` and claim words (paid, approved, signed, agreed, confirmed…) need
+  a tick on "I know this is true" ("This reads like a decision; save anyway?"). Links become "(link removed)";
+  control characters go; 500 characters at most. The same checks run again on Save, on the edited text.
+- **The token.** Each card gets a one-time token (24 random bytes, urlsafe) bound to the chat id and the turn
+  number, valid 30 minutes, kept in server memory only; the chat file stores `pid` (first 16 hex of its
+  SHA-256). `GET api/chat/<id>` returns the token only on an open card; a used, expired or unknown one shows "This
+  note has expired; ask again to save it." A restart expires all cards. Save compares in constant time; a wrong,
+  reused, expired, other-chat or other-turn token is a 400 and nothing is written. A refused text or a confirm
+  request leaves the token usable.
+- **Saved.** One entry in memory.md Notes, the notepad format with `- from: chat` and `- ref: <chat id>:<turn>`
+  (title = first person or "From chat", `created` in the owner's time zone, never emails or domains). The toast
+  "Saved to memory." has Undo for 30 seconds (`DELETE api/memory/notes/<id>`, the card then says "Removed from
+  memory."). Setup → Memory lists "Saved from chat" notes with Edit and Remove. Briefs read them like any note
+  (`memory.relevant` → the writer's `<notes>` block). Logs say only "a note from chat was saved (N characters)".
+
 ## Storage
 `$CALLSHEET_DATA/chat/c_<16 hex>.json`, folder 0700 and files 0600, written atomically. Each holds the
-questions, answers (text, cited sources, steps, model label, warning, `instr_warning`, `instr_seen` ids) and errors. Kept 30 days after the
+questions, answers (text, cited sources, steps, model label, warning, `instr_warning`, `instr_seen` ids, 0.8.1
+`proposal` without its token) and errors. Kept 30 days after the
 last message, at most 100 conversations and 80 messages each; "Clear all chats" deletes them all.
 Logs hold counts only (rounds, tool calls, sources, tokens, time), never questions or answers.
 
@@ -212,6 +254,9 @@ Logs hold counts only (rounds, tool calls, sources, tokens, time), never questio
 `GET /api/chat` (overview), `DELETE /api/chat` (clear all), `POST /api/chat/ask` `{q, id?}`,
 `GET|DELETE /api/chat/<id>`, `POST /api/chat/<id>/stop`, `GET|PATCH /api/chat/settings`,
 `POST /api/chat/models`, `POST /api/chat/test`, `GET /api/chat/item/<id>` (the source panel).
+0.8.1: `POST /api/memory/notes` `{kind: "chat", chat, turn, token, text, people, topics, area, confirm?}` saves a
+Save card's note; it returns `{ok: true, note}` or `{ok: false, confirm: true, warning}` when the text needs the
+owner's confirm.
 
 ## Known untested
 - The Claude-with-thinking path of the project chat's first lookup (the block goes in as a second text block of the

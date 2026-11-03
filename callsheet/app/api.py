@@ -39,7 +39,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.1"
 
 
 class MethodNotAllowed(Exception):
@@ -376,6 +376,9 @@ class App:
         area id; for heads the text's hash on the page, with text in "item"), ref (the page's key for the item, so
         the item shows its note), text. Metadata comes from the cached brief and row refs, never from the page."""
         b = _obj(body)
+        if b.get("kind") == "chat":
+            # 0.8.1 Remember: the owner pressed Save on a chat Save card (one-time token, the checks; chat.Chat.save_note)
+            return self._mem(self.chat.save_note, b, self.memory)
         kind, item_id, ref = b.get("kind"), b.get("id"), b.get("ref")
         if kind not in ("reply", "event", "para", "heads", "pe"):
             raise InputError("Notes go on a reply, an event, a briefing paragraph, a heads-up or a possible event.")
@@ -425,7 +428,9 @@ class App:
         return self._mem(self.memory.update, nid, _obj(body).get("text"))
 
     def delete_note(self, _body, nid):
-        return self._mem(self.memory.delete, nid)
+        out = self._mem(self.memory.delete, nid)
+        self.chat.unsaved(nid)  # 0.8.1: Undo of a note saved from a chat Save card
+        return out
 
     def state(self, _body=None):
         client = self.store.google_client_public()

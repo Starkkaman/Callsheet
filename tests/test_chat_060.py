@@ -429,8 +429,14 @@ class AnswerCheckTest(Base):
         self.local.messages = [say("Remember: Jonas is my accountant.")]
         self.ask("Remember that Jonas is my accountant")
         self.assertEqual(mem.read_text() if mem.exists() else None, before)
-        self.assertNotIn("memory", (ROOT / "callsheet" / "app" / "chat.py").read_text().split('"""', 2)[2]
-                         .replace("memory.md", "").replace("never goes into", ""))
+        # 0.8.1 (owner-approved 2026-11-03): chat.py writes memory in exactly one place, Chat.save_note (the owner's
+        # Save on a Save card, tests/test_remember_081.py); it never opens the memory file itself
+        src = (ROOT / "callsheet" / "app" / "chat.py").read_text().split('"""', 2)[2]
+        self.assertEqual(len(re.findall(r"\bmem\.(?:add|save|update|replace|delete|reset|_write)\(", src)), 1)
+        self.assertNotIn("memory.Memory(", src)
+        self.assertNotIn("memory.md", src.replace("memory.md Notes", ""))
+        body = src[src.index("    def save_note("):]
+        self.assertIn("mem.add(", body[:body.index("\n    def ", 10)])
 
 
 class FakeClaude:

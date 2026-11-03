@@ -1451,11 +1451,11 @@
       T.undo ? h('button', { type: 'button', class: 'tbtn', 'data-undo': '1' }, 'Undo') : null,
       h('button', { type: 'button', class: 'tx', 'data-toastx': '1', 'aria-label': 'Close' }, ico('close'))]);
   }
-  function showToast(b, d, undo, err) {
+  function showToast(b, d, undo, err, ms) {  /* 0.8.1: ms, how long it stays (a chat note's Undo: 30 s) */
     U.toast = { b: b, d: d, undo: undo || null, err: !!err, id: Date.now() };
     var id = U.toast.id;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { if (U.toast && U.toast.id === id) { U.toast = null; renderLayer(); } }, undo ? 8000 : 6000);
+    toastTimer = setTimeout(function () { if (U.toast && U.toast.id === id) { U.toast = null; renderLayer(); } }, ms || (undo ? 8000 : 6000));
   }
   function renderLayer() {
     if (ui.view !== 'brief' || !B) { clearLayer(); return; }
@@ -1831,6 +1831,7 @@
       else if (u.kind === 'suppress') unSuppress(u);
       else if (u.kind === 'dismiss') { setDismissed(u.key, false); U.toast = null; renderBrief(); }
       else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
+      else if (u.kind === 'memory') chatUndoNote(u);  /* 0.8.1: a note saved from a chat Save card */
     }
     else if (d.toastx) { U.toast = null; renderLayer(); }
     /* 0.8.0 */
@@ -3450,7 +3451,7 @@
      GET api/memory when the step is shown; Save = PATCH api/memory {text} (the server validates the file and says
      what's wrong); Clear = POST api/memory/reset after a confirmation. The fixed sentence the writer gets with the
      notes is shown as it is (api/memory rule). */
-  var MEM = { data: null, draft: null, err: null, seq: 0, loading: false };
+  var MEM = { data: null, draft: null, err: null, seq: 0, loading: false, editing: null };  /* 0.8.1: editing, a chat note's id */
   function loadMemory() {
     var seq = ++MEM.seq;
     MEM.loading = true;
@@ -3499,6 +3500,7 @@
     }) : askBtn('mem-reset', 'Clear memory');
     return h('div', { class: 'where mem', role: 'region', 'aria-labelledby': 'mem-h' }, [head, intro,
       m.error ? h('p', { class: 'err', role: 'alert' }, 'The file has a problem, so no notes are read until it’s fixed: ' + m.error) : null,
+      memChatList(m, cur !== saved),
       h('label', { class: 'label', for: 'mem-text' }, 'memory.md'),
       h('p', { class: 'help', id: 'mem-help' }, 'Each note starts with “### ” and a title, then “- key: value” lines (people, emails, domains, topics, area), a blank line and the note. ' +
         'A note without people, emails, domains or topics applies to its whole area. Profile and Answers hold what you saved in Get to know me.'),
@@ -3509,6 +3511,34 @@
         h('div', { class: 'lh', id: 'mem-lock' }, [ico('lock'), 'Sent with your notes (can’t be changed)']),
         h('p', { class: 'fixtext' }, m.rule || ''),
         h('p', { class: 'muted' }, 'Your notes go to the writer in their own block, apart from mail and chat. The safety rules still come first.')])]);
+  }
+
+  /* 0.8.1 Remember: the notes saved from chat Save cards (from: chat), each with Edit (PATCH api/memory/notes/<id>) and
+     Remove (DELETE, after a confirmation). Hidden while the file has unsaved changes above (one source of truth). */
+  function memChatList(m, dirty) {
+    var notes = (m.notes || []).filter(function (x) { return x.from === 'chat' && x.id; });
+    if (!notes.length) return null;
+    return h('div', { class: 'memchat', role: 'group', 'aria-labelledby': 'mem-chat-h' }, [
+      h('h3', { class: 'label', id: 'mem-chat-h' }, 'Saved from chat'),
+      dirty ? h('p', { class: 'muted' }, 'Save or undo your changes to the file first.') : h('ul', null, notes.map(function (n) {
+        var key = 'memrm:' + n.id, meta = [].concat(n.people || [], n.topics || [], n.area ? [n.area] : []).join(' · ');
+        if (MEM.editing === n.id) {
+          var err = errBox(), ta = h('textarea', { class: 'inp', id: 'mem-e-' + n.id, rows: '3', maxlength: String(m.note_max || 500), 'data-fk': 'mem-e:' + n.id });
+          ta.value = n.text;
+          var sv = btn('act', 'Save', { 'data-fk': 'mem-es:' + n.id }, function () {
+            run([sv, cn], err, function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(n.id), { text: ta.value }); }, function () {
+              MEM.editing = null; loadMemory();
+            });
+          });
+          var cn = btn('tbtn', 'Cancel', null, function () { MEM.editing = null; renderSetup('[data-fk="' + cssq('mem-ed:' + n.id) + '"]'); });
+          return h('li', null, [h('label', { class: 'sr', for: 'mem-e-' + n.id }, 'Edit the note'), ta, h('div', { class: 'btns' }, [sv, cn]), err]);
+        }
+        return h('li', null, [h('p', { class: 'mt' }, n.text), meta || n.created ? h('p', { class: 'muted' }, (meta ? meta + ' · ' : '') + 'from chat' + (n.created ? ' · ' + n.created : '')) : null,
+          ui.confirm === key ? confirmRow('Remove this note from memory?', 'Remove', function (y, c, e) {
+            run([y, c], e, function () { return api('DELETE', 'api/memory/notes/' + encodeURIComponent(n.id)); }, function () { ui.confirm = null; loadMemory(); });
+          }) : h('div', { class: 'btns' }, [btn('tbtn', 'Edit', { 'data-fk': 'mem-ed:' + n.id }, function () { MEM.editing = n.id; renderSetup('[data-fk="' + cssq('mem-e:' + n.id) + '"]'); }),
+            askBtn(key, 'Remove')])]);
+      }))]);
   }
 
   /* ---------- 0.5.1: Setup → Delivery → Phone notifications (through Home Assistant's notify.mobile_app_*) ----------
@@ -4456,7 +4486,8 @@
     cid: load(KEY_CHAT) || null,
     input: '', err: '', loading: false, sending: null, timer: null, fails: 0,
     items: {},           /* index item id -> api/chat/item/<id> (null while loading) */
-    earlier: false, clearAsk: false, scroll: true, keepTop: null
+    earlier: false, clearAsk: false, scroll: true, keepTop: null,
+    cards: {}            /* 0.8.1: Save card state by proposal id: {edit, text, people, topics, area, confirm, ok, warning, err, busy, dismissed} */
   };
   var CHAT_SUGG = ['What’s waiting on me?', 'When did I last talk to…', 'Summarise this week'];
   var SRC_ICON = { gmail: 'mail', slack: 'slack', calendar: 'cal', drive: 'drive', obsidian: 'note', signal: 'signal', github: 'tasks' };
@@ -4652,9 +4683,112 @@
       String(m.text || '').split(/\n{2,}/).forEach(function (p) { if (p.trim()) kids.push(h('p', null, p.trim())); });
       if (m.sources && m.sources.length) kids.push(h('div', { class: 'from' }, [h('span', { class: 'label' }, 'From'), m.sources.map(chatChip)]));
     }
+    if (m.proposal) kids.push(chatCard(m, i));  /* 0.8.1 Remember: the Save card (also after a failed answer) */
     var steps = (m.steps || []).length ? h('p', { class: 'csteps' }, m.steps.join(' · ')) : null;
     kids.push(h('div', { class: 'macts' }, [steps, m.text ? h('button', { type: 'button', class: 'tbtn', 'data-ccopy': String(i) }, 'Copy') : null]));
     return h('div', { class: 'ma' }, kids);
+  }
+  /* ---------- 0.8.1 Remember: the Save card. The owner's own "remember that…" gets a card with the note (chat.py
+     build_proposal); nothing is saved until Save, which sends the card's one-time token with the (maybe edited) note to
+     POST api/memory/notes {kind: "chat"}. The server checks it again: an instruction is refused (its plain reason is
+     shown), a decision or claim asks for "I know this is true". Undo (30 s, in the toast) deletes the note again. ---------- */
+  function cardState(p) {
+    var st = CH.cards[p.pid];
+    if (!st) st = CH.cards[p.pid] = { edit: false, text: p.text || '', people: (p.people || []).slice(), topics: (p.topics || []).slice(),
+      area: p.area || '', confirm: !!p.confirm, ok: false, warning: p.warning || '', err: '', busy: false, dismissed: false };
+    return st;
+  }
+  function cardOpen(m) {
+    var p = m && m.proposal;
+    return !!(p && p.status !== 'refused' && p.token && !p.saved && !p.undone && !p.expired && !cardState(p).dismissed);
+  }
+  function listText(a) { return (a || []).join(', '); }
+  function listOf(v) { return String(v || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 12); }
+  function chatCard(m, i) {
+    var p = m.proposal;
+    if (!p || typeof p !== 'object') return null;
+    if (p.status === 'refused') return h('div', { class: 'csave refused', role: 'note' }, h('p', { class: 'err' }, p.reason || 'This can’t be saved.'));
+    if (p.saved) return h('div', { class: 'csaved', role: 'status' }, [ico('note'), h('span', null, 'Saved to memory'),
+      h('button', { type: 'button', class: 'tbtn', 'data-pmem': '1' }, 'Open in Setup → Memory')]);
+    if (p.undone) return h('p', { class: 'muted csaved' }, 'Removed from memory.');
+    var st = cardState(p);
+    if (st.dismissed) return h('p', { class: 'muted csaved' }, 'Not saved.');
+    if (p.expired || !p.token) return h('p', { class: 'muted csaved' }, 'Not saved. This note has expired; ask again to save it.');
+    var ix = String(i), id = 'cs' + ix, kids = [h('div', { class: 'hd', id: id + '-h' }, [ico('note'), h('span', null, 'Save to memory?')])];
+    if (p.by === 'ai') kids.push(h('p', { class: 'aiw' }, p.note || 'Written by the AI from this chat: check it.'));
+    if (st.edit) {
+      var ta = h('textarea', { class: 'inp', id: id + '-t', rows: '3', maxlength: '500', 'data-ptext': ix });
+      ta.value = st.text;
+      var pe = h('input', { class: 'inp', id: id + '-p', type: 'text', maxlength: '300', autocomplete: 'off', 'data-ppeople': ix });
+      pe.value = listText(st.people);
+      var to = h('input', { class: 'inp', id: id + '-o', type: 'text', maxlength: '300', autocomplete: 'off', 'data-ptopics': ix });
+      to.value = listText(st.topics);
+      var ar = h('select', { class: 'inp', id: id + '-a', 'data-parea': ix }, [h('option', { value: '' }, 'No area')].concat(((B && B.areas) || []).map(function (a) {
+        return h('option', { value: a.name, selected: a.name === st.area ? true : null }, a.name);
+      })));
+      kids.push(h('div', { class: 'cform' }, [h('label', { class: 'label', for: id + '-t' }, 'Note'), ta,
+        h('label', { class: 'label', for: id + '-p' }, 'People (commas between)'), pe,
+        h('label', { class: 'label', for: id + '-o' }, 'Topics (commas between)'), to,
+        h('label', { class: 'label', for: id + '-a' }, 'Area'), ar]));
+    } else {
+      kids.push(h('p', { class: 'ctext' }, st.text));
+      var keys = [];
+      if (st.people.length) keys.push(h('span', { class: 'label' }, 'People'), st.people.map(function (x) { return h('span', { class: 'pchip' }, x); }));
+      if (st.topics.length) keys.push(h('span', { class: 'label' }, 'Topics'), st.topics.map(function (x) { return h('span', { class: 'pchip' }, x); }));
+      if (st.area) keys.push(h('span', { class: 'label' }, 'Area'), h('span', { class: 'pchip' }, st.area));
+      if (keys.length) kids.push(h('div', { class: 'ckeys' }, keys));
+    }
+    if (st.confirm) kids.push(h('p', { class: 'err sugwarn' }, st.warning || 'This reads like a decision; save anyway?'),
+      h('label', { class: 'cok' }, [h('input', { type: 'checkbox', 'data-pok': ix, checked: st.ok ? true : null }), 'I know this is true']));
+    if (st.err) kids.push(h('p', { class: 'err', role: 'alert' }, st.err));
+    kids.push(h('div', { class: 'acts' }, [
+      h('button', { type: 'button', class: 'act', 'data-psave': ix, 'aria-busy': st.busy ? 'true' : null,
+        disabled: st.busy || (st.confirm && !st.ok) || !st.text.trim() }, 'Save to memory'),
+      h('button', { type: 'button', class: 'act ghost', 'data-pedit': ix, 'aria-pressed': String(st.edit) }, st.edit ? 'Done editing' : 'Edit'),
+      h('button', { type: 'button', class: 'tbtn', 'data-pdismiss': ix }, 'Dismiss')]));
+    kids.push(h('p', { class: 'fine' }, 'Nothing is saved until you press Save. Edit or remove it later in Setup → Memory.'));
+    return h('div', { class: 'csave', role: 'group', 'aria-labelledby': id + '-h' }, kids);
+  }
+  function chatCardMsg(i) {
+    var m = CH.conv && CH.conv.messages && CH.conv.messages[Number(i)];
+    return m && m.proposal && m.proposal.pid ? m : null;
+  }
+  function chatSaveNote(i, b) {
+    var m = chatCardMsg(i), p = m && m.proposal, cid = CH.conv && CH.conv.id;
+    if (!p || !p.token || !cid) return;
+    var st = cardState(p);
+    st.busy = true; st.err = ''; b.disabled = true;
+    api('POST', 'api/memory/notes', { kind: 'chat', chat: cid, turn: p.turn, token: p.token, text: st.text, people: st.people,
+      topics: st.topics, area: st.area, confirm: !!(st.confirm && st.ok) }).then(function (r) {
+      st.busy = false;
+      if (r && r.confirm) { st.confirm = true; st.ok = false; st.warning = r.warning || ''; chatRender('[data-pok="' + i + '"]'); return; }
+      p.saved = r && r.note ? r.note.id : true; delete p.token; MEM.data = null;
+      showToast('Saved to memory.', 'Briefs use it from the next one.', r && r.note ? { kind: 'memory', id: r.note.id, pid: p.pid, i: Number(i) } : null, false, 30000);
+      chatRender('[data-pmem]');
+    }, function (e) { st.busy = false; st.err = e.message; chatRender('[data-psave="' + i + '"]'); });
+  }
+  function chatUndoNote(u) {
+    U.toast = null; renderLayer();
+    api('DELETE', 'api/memory/notes/' + encodeURIComponent(u.id)).then(function () {
+      MEM.data = null;
+      var m = chatCardMsg(u.i);
+      if (m && m.proposal.pid === u.pid) { m.proposal.saved = null; m.proposal.undone = true; }
+      showToast('Removed from memory.', 'The note is gone.');
+      chatRender();
+    }, failToast);
+  }
+  function cardInput(t) {
+    var d = t.dataset, k = d.ptext || d.ppeople || d.ptopics || d.parea || d.pok, m = k != null ? chatCardMsg(k) : null;
+    if (!m) return false;
+    var st = cardState(m.proposal);
+    if (d.ptext != null) st.text = t.value;
+    else if (d.ppeople != null) st.people = listOf(t.value);
+    else if (d.ptopics != null) st.topics = listOf(t.value).map(function (x) { return x.toLowerCase(); });
+    else if (d.parea != null) st.area = t.value;
+    else if (d.pok != null) st.ok = !!t.checked;
+    var sb = main.querySelector('[data-psave="' + k + '"]');
+    if (sb) sb.disabled = st.busy || (st.confirm && !st.ok) || !st.text.trim();
+    return true;
   }
   function chatBusy(p, canStop) {
     var steps = p.steps || [];
@@ -4675,7 +4809,8 @@
       chatScopeRow(), empty ? h('div', { class: 'sugg', role: 'group', 'aria-label': 'Suggestions' }, (chatScope() ? PJ_SCOPE_SUGG : CHAT_SUGG).map(function (s) { return h('button', { type: 'button', 'data-csug': s }, s); })) : null,
       CH.err && CH.ov ? h('p', { class: 'err', role: 'alert' }, CH.err) : null,
       h('div', { class: 'inrow' }, [h('label', { class: 'sr', for: 'ch-ask' }, 'Ask Callsheet'), inp,
-        h('button', { type: 'button', class: 'act', 'data-csend': '1', 'aria-label': 'Ask', disabled: chatPending() }, [ico('send'), h('span', { class: 'd-only' }, 'Ask')])]),
+        h('button', { type: 'button', class: CH.conv && (CH.conv.messages || []).some(cardOpen) ? 'act ghost' : 'act', 'data-csend': '1', 'aria-label': 'Ask',
+          disabled: chatPending() }, [ico('send'), h('span', { class: 'd-only' }, 'Ask')])]),  /* 0.8.1: the Save card's button is the loud one */
       h('p', { class: 'fine' }, 'Answers come from your own mail, chat and calendar on this box. Callsheet can’t send or change anything.'
         + (ov.provider === 'claude' ? ' With Claude, the search results for each question go to Anthropic.' : ''))]);
   }
@@ -4765,9 +4900,19 @@
     else if (d.csetup) { ui.step = 5; ui.focusNext = '#ch-h'; location.hash = 'setup'; }
     else if (d.cknow) location.hash = 'knowme';
     else if (d.cretry) { CH.err = ''; chatLoad(); }
+    /* 0.8.1 Remember: the Save card */
+    else if (d.psave) chatSaveNote(d.psave, t);
+    else if (d.pedit) { var em = chatCardMsg(d.pedit); if (em) { var es = cardState(em.proposal); es.edit = !es.edit; chatRender(es.edit ? '[data-ptext="' + d.pedit + '"]' : '[data-pedit="' + d.pedit + '"]'); } }
+    else if (d.pdismiss) { var dm = chatCardMsg(d.pdismiss); if (dm) { cardState(dm.proposal).dismissed = true; chatRender('[data-ask-in]'); } }
+    else if (d.pmem) { ui.step = 5; ui.focusNext = '#mem-h'; location.hash = 'setup'; }
   });
   document.addEventListener('input', function (e) {
     if (e.target.dataset && e.target.dataset.askIn) CH.input = e.target.value;
+    else if (e.target.dataset && U.tab === 'chat' && main.contains(e.target)) cardInput(e.target);  /* 0.8.1 */
+  });
+  document.addEventListener('change', function (e) {  /* 0.8.1: the Save card's checkbox and area */
+    var d = e.target.dataset;
+    if (d && (d.pok != null || d.parea != null) && U.tab === 'chat' && main.contains(e.target)) cardInput(e.target);
   });
   document.addEventListener('keydown', function (e) {
     var t = e.target;

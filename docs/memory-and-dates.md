@@ -35,7 +35,7 @@ Budget questions can wait until Tuesday; keep replies short.
 
 - Entry: a `### ` heading (the title), `- key: value` lines, a blank line, then the text (500 characters at
   most). Keys: `people`, `emails`, `domains`, `topics` (comma-separated lists, 12 at most), `area` (area name),
-  `created` (YYYY-MM-DD), `from` (reply, event, briefing, heads-up, possible event), `ref` (the brief item the
+  `created` (YYYY-MM-DD), `from` (reply, event, briefing, heads-up, possible event, 0.8.1 chat), `ref` (the brief item the
   note was made on), `id` (`n` + hex). Accepted aliases: person, email, domain, topic, date, source.
 - Limits: 20,000 characters, 200 entries, no control characters, valid emails, domains, dates and ids,
   unique ids. Errors are plain sentences with the line number. A file with an error isn't read for the
@@ -76,7 +76,8 @@ fixed texts say "message" for "email" and the pinned shape is 0.5.3's. With note
 - `POST api/memory/reset` takes `{confirm: true}` and restores the template
 - `POST api/memory/notes` takes `{kind: reply|event|para|heads|pe, id, ref, text, item?}`. The metadata
   (people, sender address and domain, topics, area) comes from the cached brief and the row refs, never from
-  the page.
+  the page. 0.8.1: `{kind: "chat", chat, turn, token, text, people, topics, area, confirm?}` saves a Chat Save
+  card (one-time token, owner's Save only; see docs/chat.md "Remember").
 - `PATCH api/memory/notes/<id>` takes `{text}`; `DELETE api/memory/notes/<id>` deletes the note
 - The brief's `notes` field is `{ref: {id, text}}`, so the notepad marks items that have a note.
 

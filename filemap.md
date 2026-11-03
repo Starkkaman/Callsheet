@@ -57,6 +57,7 @@
 - `tests/test_see_080.py`: 0.8.0 invites, DMARC marks, needsAction, calendar gaps, security, Sorted, Coming up, What changed.
 - `tests/test_ics_fuzz_080.py`: 0.8.0 ICS fuzz suite (F1-F8, lures, VIP spoofs) with time and memory caps.
 - `tests/test_see_page_080.py`: 0.8.0 page checks: text only, no URLs built on the page, links only through gLink (run under node when installed), email-only invites without a Calendar link and outside the timeline's calendar column, api/horizon, theme tokens only.
+- `tests/test_remember_081.py`: 0.8.1 Remember: intent detection, propose_memory only in remember turns, injection via tool results and mail, two-turn attack, note checks, one-time Save token (forgery, replay, expiry, restart), saved format, undo, unscoped prompt pin, API and page checks.
 - `tests/fake_google_index.py`: the fake Google plus Gmail list/get(full), profile, Calendar pages, Drive list/export/media (scope-gated) and one-shot injected failures.
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
@@ -115,7 +116,7 @@
 - `docs/know-me-index.md`: 0.6.0 Know me index (3a): schema, sources and allowlist additions, scan and estimates, API, and the Python interface for 3b/3c.
 - `docs/writer-presets.md`: 0.6.1 writer presets per call time: design (from model-per-call-time.md), data model, validation, the Careful suggestion, API, run flow, logs, risks.
 - `docs/projects.md`: 0.7.0 Projects: data model, drafting and slipped rules, AI pass, weekly review, GitHub allowlist, chat scope, API.
-- `docs/chat.md`: 0.6.0 Chat (3c): tools, prompt, local native/JSON and Claude protocols, citations, queue, settings, storage, API.
+- `docs/chat.md`: 0.6.0 Chat (3c): tools, prompt, local native/JSON and Claude protocols, citations, queue, settings, storage, API; 0.8.1 Remember (Save card, token, checks).
 - `docs/memory-and-dates.md`: 0.5.0 notes to Callsheet (memory file format, relevance, the notes block, API) and possible events (date rules, calendar check, the Add to calendar link).
 - `docs/chat-safety-0.5.3.md`: 0.5.3 chat safety: why (Signal rows broke the safety bar), the fixed texts old and new, the relay sentence, the channel label, the post-check changes and the offline re-score.
 - `docs/signal.md`: 0.5.1 Signal: linking, unlinking, importing a Mac export (owner how-to), packaging, the signal-cli process and allow-list, what is stored, rows, import formats, API.

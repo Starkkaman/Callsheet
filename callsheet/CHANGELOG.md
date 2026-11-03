@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.1 ("Remember")
+
+- **Remember from Chat**: say "remember that…", "note that…", "don't forget…" or "keep in mind…" in Chat and a
+  Save card shows the note, with people, topics and area you can edit. Nothing is saved until you press **Save to
+  memory**; Dismiss drops it. Undo for 30 seconds after saving; edit or remove it later in Setup → Memory, under
+  "Saved from chat".
+- Only your own message can start this: text in mail, Slack, files or the AI's answers can't. When you say what to
+  remember, the card holds your words; "remember this" uses the AI's summary, marked "Written by the AI from this
+  chat: check it."
+- Notes that read like instructions to Callsheet are refused; notes that read like a decision or a payment ("the
+  invoice is paid") ask you to confirm first. Links are removed.
+- Saved notes are ordinary memory notes (`from: chat`) and briefs use them like your other notes.
+
 ## 0.8.0 ("See everything")
 
 Rules only: nothing new goes to the AI writer, and nothing is answered, booked or sent for you.

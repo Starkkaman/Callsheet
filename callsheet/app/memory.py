@@ -52,7 +52,8 @@ LIST_KEYS = ("people", "emails", "domains", "topics")
 KEYS = LIST_KEYS + ("area", "created", "from", "ref", "id")
 ALIASES = {"person": "people", "email": "emails", "domain": "domains", "topic": "topics", "date": "created",
            "source": "from"}
-FROM_KINDS = ("reply", "event", "briefing", "heads-up", "possible event", "setup", "interview", "profile")
+FROM_KINDS = ("reply", "event", "briefing", "heads-up", "possible event", "setup", "interview", "profile",
+              "chat")   # 0.8.1: a chat Save card
 
 HEADER = """# Callsheet memory
 
