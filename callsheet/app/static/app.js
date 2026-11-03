@@ -167,7 +167,7 @@
   var setupBtn = document.getElementById('setup-btn'), backBtn = document.getElementById('back-btn');
   var fresh = document.getElementById('fresh'), freshT = document.getElementById('fresh-t'), hdrDate = document.getElementById('hdr-date');
   var refreshBtn = document.getElementById('refresh-btn'), refreshErr = document.getElementById('refresh-err');
-  setupBtn.addEventListener('click', function () { ui.step = 1; location.hash = 'setup'; });
+  setupBtn.addEventListener('click', function () { ui.step = 0; location.hash = 'setup'; });  /* 0.7.1: Setup opens on its home page */
   backBtn.addEventListener('click', function () { location.hash = 'brief'; });
   refreshBtn.addEventListener('click', function () {
     run([refreshBtn], refreshErr, function () { return api('POST', 'api/sync', {}); }, function (ls) {
@@ -219,8 +219,14 @@
     tab: tabFromHash(location.hash) || savedTab(),
     open: null,            /* {kind: 'reply'|'event'|'item', id} ('item': an index item from a chat source chip, 0.6.0) */
     pop: null,             /* notepad menu {kind: 'reply'|'event'|'heads'|'para', id, anc, sub} */
-    doneOpen: false, area: null, more: false, drafts: {}, toast: null, busy: false
+    doneOpen: false, area: null, more: false, drafts: {}, toast: null, busy: false,
+    legend: false,         /* 0.7.1: the reason legend unfolded behind its "?" (after first use) */
+    keys: null,            /* 0.7.1: the key sheet is open: {from: the element to focus again} */
+    kcur: null             /* 0.7.1: the row J/K last moved to (a reply id) */
   };
+  /* 0.7.1 quick wins, remembered on this device: the legend has been used (first tick), the day the All clear
+     moment played, and which Setup help sections are unfolded */
+  var KEY_LEGEND = 'callsheet.legend', KEY_CLEAR = 'callsheet.clear', KEY_HELP = 'callsheet.help';
   var toastTimer = null;
 
   /* dismissed on this device until tomorrow: {day: brief date, keys: [...]} */
@@ -357,11 +363,21 @@
     return waitOf(r).replace(/^waiting since today/, 'waiting today').replace(/ (\d+) days?/g, ' $1d')
       .replace(/last nudge (\S+)(?: ago)?/, 'nudge $1');
   }
+  /* 0.7.1: the reasons in words (the dot's colour is never the only cue): the row's tooltip and aria-label */
+  function reasonWords(r) {
+    var x = reasonOf(r);
+    return x ? ((Array.isArray(r.reasons) ? r.reasons : []).join(' · ') || x[1]) : '';
+  }
+  /* 0.7.1: a reply's draft as the owner left it (edited in the panel or as written) */
+  function draftOf(r) {
+    if (!r || typeof r.suggestion !== 'string' || !r.suggestion) return '';
+    return U.drafts[r.id] != null ? U.drafts[r.id] : r.suggestion;
+  }
   function rowEl(r, where) {
     var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
-    return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-row': r.id }, [
+    return h('div', { class: 'row' + (sel ? ' sel' : '') + (U.kcur === r.id ? ' kcur' : ''), 'data-row': r.id, 'data-kr': r.id }, [
       h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
-      h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id,
+      h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id, title: reasonWords(r) || null,
         'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
@@ -385,13 +401,42 @@
     var n = parseInt(B && B.hidden, 10) || 0;
     return n > 0 ? h('p', { class: 'hidline' }, [n + ' hidden · ', h('button', { type: 'button', class: 'tbtn', 'data-manage': '1' }, 'Manage')]) : null;
   }
+  /* 0.7.1: the reason legend shows until the first tick on this device; after that it folds behind a "?" */
+  function legendUsed() { return load(KEY_LEGEND) === '1'; }
   function legend() {
-    return h('div', { class: 'legend' }, REASONS.map(function (x) {
+    var used = legendUsed();
+    return h('div', { class: 'legend', id: 'bv-legend' }, REASONS.map(function (x) {
       return h('span', null, [h('span', { class: 'rdot ' + x[0], 'aria-hidden': 'true' }), x[1]]);
-    }).concat([h('span', { class: 'hint' }, 'Tick when done.')]));
+    }).concat([used ? null : h('span', { class: 'hint' }, 'Tick when done.')]));
+  }
+  function legendBtn() {
+    return h('button', { type: 'button', class: 'qbtn', 'data-legend': '1', 'aria-expanded': String(!!U.legend), 'aria-controls': U.legend ? 'bv-legend' : null,
+      'aria-label': 'What the coloured dots mean', title: 'What the coloured dots mean' }, '?');
+  }
+  /* 0.7.1: "2 of 8 done today" (done today against done plus still waiting) */
+  function meter() {
+    var nd = ((B && B.done) || []).length, m = nd + openReplies().length;
+    if (!m) return null;
+    var fill = h('i'); fill.style.width = Math.round(nd / m * 100) + '%';
+    return h('div', { class: 'meter' }, [h('span', { class: 'bar', 'aria-hidden': 'true' }, fill), nd + ' of ' + m + ' done today']);
+  }
+  /* 0.7.1: All clear, when no reply is waiting. Flat shapes drop in and the stamp lands once per day (the day
+     is kept on this device); after that, and under reduced motion, it is still. No sound. */
+  function allClear() {
+    var day = (B && B.date) || new Date().toDateString(), played = load(KEY_CLEAR) === day;
+    if (!played) save(KEY_CLEAR, day);
+    var nd = ((B && B.done) || []).length, ne = events().length, nn = B && B.notes && typeof B.notes === 'object' ? Object.keys(B.notes).length : 0;
+    function stat(n, one, many) { return h('li', null, [h('b', null, String(n)), n === 1 ? one : many]); }
+    return h('section', { class: 'clear' + (played ? ' still' : ''), 'aria-labelledby': 'bv-clear' }, [
+      h('div', { class: 'shapes', 'aria-hidden': 'true' }, [h('i', { class: 'c' }), h('i', { class: 's' }), h('i', { class: 't' })]),
+      h('h2', { class: 'stamp', id: 'bv-clear' }, 'All clear'),
+      h('p', { class: 'say' }, 'Nobody is waiting on you.'),
+      h('ul', { class: 'stats', 'aria-label': 'Today' }, [stat(nd, 'reply done', 'replies done'), stat(ne, 'event', 'events'), stat(nn, 'note', 'notes')])]);
   }
   function foot() {
-    return h('div', { class: 'foot' }, [h('span', null, B.sources || ''), h('span', null, 'Nothing was sent. Drafts wait for you.')]);
+    return h('div', { class: 'foot' }, [h('span', null, B.sources || ''),
+      h('button', { type: 'button', class: 'tbtn keyhint d-only', 'data-keyshow': '1', 'aria-haspopup': 'dialog' }, 'Keys: ?'),
+      h('span', null, 'Nothing was sent. Drafts wait for you.')]);
   }
 
   /* ----- tabs ----- */
@@ -407,11 +452,20 @@
     /* 0.6.1: the writer is still working on this brief: a quiet line instead of the summary (the page asks again) */
     if (B.writing && !sum) text = [text, h('p', { class: 'writing muted', role: 'status' }, [B.writing.text || 'Writing the summary…',
       B.writing.since ? ' Started ' + B.writing.since + '.' : ''])];
+    /* 0.7.1: a reply in Top of the day gets the Replies tick (Done + Undo) and, with a draft, Copy; an event
+       keeps its calendar glyph */
     var topEl = top.length ? [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
-      var isEv = t.kind === 'event', gone = !isEv && !replyById(t.ref), dn = gone && doneIds.indexOf(t.ref) >= 0;
-      var kids = [h('span', { class: 'ri' }, ico(isEv ? 'cal' : 'mail')), h('span', { class: 'tt' }, [t.text, checkLabel('span', t.check === true)])];
-      return h('li', null, gone ? h('span', { class: 'tline' + (dn ? ' isdone' : '') }, kids)
-        : h('button', { type: 'button', class: 'tline', 'data-open': (isEv ? 'event:' : 'reply:') + t.ref }, kids));
+      var isEv = t.kind === 'event', r = isEv ? null : replyById(t.ref), gone = !isEv && !r, dn = gone && doneIds.indexOf(t.ref) >= 0;
+      var tt = h('span', { class: 'tt' }, [t.text, checkLabel('span', t.check === true)]);
+      var lead = isEv ? h('span', { class: 'ck ri' }, ico('cal', 'Event'))
+        : r ? h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' }))
+        : h('span', { class: 'ck', 'aria-hidden': 'true' }, dn ? h('span', { class: 'bx on' }) : null);
+      var copy = r && draftOf(r) ? h('button', { type: 'button', class: 'ib', 'data-copyr': r.id, 'aria-label': 'Copy the draft for ' + r.who, title: 'Copy the draft' }, ico('copy')) : h('span');
+      return h('li', { class: 'trow' + (r && U.kcur === r.id ? ' kcur' : ''), 'data-kr': r ? r.id : null }, [lead,
+        gone ? h('span', { class: 'tline' + (dn ? ' isdone' : '') }, tt)
+          : h('button', { type: 'button', class: 'tline', 'data-open': (isEv ? 'event:' : 'reply:') + t.ref, 'data-anc': r ? 'tp-' + r.id : null,
+            'aria-label': r ? t.text + (reasonWords(r) ? ', ' + reasonWords(r) : '') : null, title: r ? reasonWords(r) || null : null }, tt),
+        copy]);
     }))] : null;
     var areas = sum && sum.areas ? (B.areas || []).filter(function (a) { return sum.areas[a.id] && !isDismissed('ar:' + a.id + ':' + hashOf(sum.areas[a.id])); }) : [];
     var byArea = areas.length ? [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
@@ -438,10 +492,13 @@
   }
   function T_replies() {
     var all = openReplies(), nNew = B.previous_at ? all.filter(function (r) { return r.new; }).length : 0;
+    if (!all.length) return [allClear(), hiddenLine(), doneRows()];  /* 0.7.1: All clear */
     var rs = U.area ? all.filter(function (r) { return r.area === U.area; }) : all;  /* 0.6.0 chat: the area chips */
-    return [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, all.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
+    var used = legendUsed();
+    return [h('div', { class: 'rhead' }, [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, all.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
+        h('span', { class: 'sp' }), meter(), used && rs.length ? legendBtn() : null]),
       areaChips(all),
-      rs.length ? legend() : null,
+      rs.length && (!used || U.legend) ? legend() : null,
       rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, U.area ? 'Nothing waiting in this area.' : 'Nothing waiting.'),
       hiddenLine(), doneRows()];
   }
@@ -1026,8 +1083,26 @@
   function renderLayer() {
     if (ui.view !== 'brief' || !B) { clearLayer(); return; }
     layer.textContent = '';
-    add(layer, [popEl(), toastEl()]);
+    add(layer, [popEl(), toastEl(), keysEl()]);
     placePop();
+  }
+  /* 0.7.1: the key sheet ("?"); the keys work on Briefing's Top of the day and on Replies, never while typing */
+  var KEYS = [['J', 'Next row'], ['K', 'Previous row'], ['Enter', 'Open the details'], ['D', 'Done (Undo in the message below)'],
+    ['C', 'Copy the draft'], ['O', 'Open in Gmail or Slack'], ['N', 'Note for Callsheet'], ['Esc', 'Close'], ['?', 'These keys']];
+  function keysEl() {
+    if (!U.keys) return null;
+    return h('div', { class: 'keysheet', role: 'dialog', 'aria-labelledby': 'bv-keys-h', 'data-keys': '1' }, [
+      h('div', { class: 'kh' }, [h('h2', { id: 'bv-keys-h' }, 'Keys'), h('button', { type: 'button', class: 'tx', 'data-keysx': '1', 'aria-label': 'Close' }, ico('close'))]),
+      h('dl', null, KEYS.map(function (k) { return h('div', null, [h('dt', null, h('kbd', null, k[0])), h('dd', null, k[1])]); })),
+      h('p', { class: 'kfoot' }, 'They work on Top of the day and on Replies. Copy and open only: nothing is sent.')]);
+  }
+  function openKeys() {
+    U.keys = { from: document.activeElement }; U.pop = null; renderLayer(); focusLayer('[data-keysx]');
+  }
+  function closeKeys() {
+    var from = U.keys && U.keys.from;
+    U.keys = null; renderLayer();
+    if (from && document.contains(from)) from.focus();
   }
 
   /* ----- 0.5.0: notes to Callsheet (memory.md) and possible events -----
@@ -1210,6 +1285,7 @@
       if (doneList) B.done = doneList; else B.done = [{ id: r.id, who: r.who, summary: gistSum(r), done_at: '' }].concat(B.done || []);
       if (U.open && U.open.id === id) U.open = null;
       U.pop = null;
+      save(KEY_LEGEND, '1');  /* 0.7.1: the first tick: the legend folds behind its "?" from now on */
       showToast('Marked done.', r.who + ' · comes back if they write again', { kind: 'done', id: id, row: r });
       renderBrief('[data-undo]');
     };
@@ -1288,6 +1364,24 @@
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(function () { said('Copied'); }, selectIt);
     else selectIt();
   }
+  /* 0.7.1: Copy from a row (Top of the day's copy button, the C key): the same draft text as the panel's Copy */
+  function copyReply(id, b) {
+    var r = replyById(id), s = draftOf(r);
+    if (!s) { if (r) { showToast('No draft for this one.', 'Open it to reply in ' + srcName(r) + '.'); renderLayer(); } return; }
+    function said(ok) {
+      showToast(ok ? 'Draft copied.' : 'Couldn’t copy.', ok ? r.who + ' · paste it into ' + srcName(r) + '. Nothing is sent for you.' : 'Open the row and copy it from there.', null, !ok);
+      renderLayer();
+      if (b && document.contains(b)) b.focus();
+    }
+    function fallback() {
+      var ta = h('textarea', { class: 'cpy', readonly: '', tabindex: '-1', 'aria-hidden': 'true' }), ok = false;
+      ta.value = s; layer.appendChild(ta);
+      try { ta.select(); ok = !!(document.execCommand && document.execCommand('copy')); } catch (e) { ok = false; }
+      ta.remove(); said(ok);
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(s).then(function () { said(true); }, fallback);
+    else fallback();
+  }
   function openItem(spec) {
     var i = spec.indexOf(':'), kind = spec.slice(0, i), id = spec.slice(i + 1);
     U.open = { kind: kind, id: id };
@@ -1318,13 +1412,18 @@
       U.pop = null; renderLayer();
       main.querySelectorAll('[data-np][aria-expanded="true"]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
     }
+    if (U.keys && !e.target.closest('[data-keys]') && !(t && t.dataset.keyshow)) { U.keys = null; renderLayer(); }  /* 0.7.1 */
     if (!t || t.disabled || !inBrief(t)) return;
     var d = t.dataset, P = U.pop;
     if (d.tab) setTab(d.tab, true);
-    else if (d.open) openItem(d.open);
+    else if (d.open) { U.kcur = null; openItem(d.open); }
     else if (d.close) closePanel();
+    else if (d.copyr) copyReply(d.copyr, t);  /* 0.7.1 */
+    else if (d.legend) { U.legend = !U.legend; renderBrief('[data-legend]'); }
+    else if (d.keyshow) { if (U.keys) closeKeys(); else openKeys(); }
+    else if (d.keysx) closeKeys();
     else if (d.ck) {
-      var rowEl = t.closest('.row');
+      var rowEl = t.closest('.row, .trow');
       t.setAttribute('aria-pressed', 'true'); if (rowEl) rowEl.classList.add('gone');
       setTimeout(function () { markDone(d.ck); }, 380);
     }
@@ -1362,8 +1461,54 @@
     if (ui.view === 'brief' && t.dataset && t.dataset.draft) U.drafts[t.dataset.draft] = t.value;
     if (ui.view === 'brief' && t.dataset && t.dataset.ntext && U.pop) U.pop.text = t.value;
   });
+  /* 0.7.1 keys: J/K move, D done, C copy, O open, N note, Esc close, ? the key sheet. Never while typing (inputs,
+     text areas, selects, editable text), never with Ctrl, Cmd or Alt. */
+  function typing(t) {
+    if (!t || !t.tagName) return false;
+    return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || !!t.isContentEditable;
+  }
+  function keyRows() { return [].slice.call(main.querySelectorAll('#bv-pane [data-kr]')); }
+  function keyRow() {   /* the row with focus, else the one J/K last moved to, else the open reply's */
+    var rows = keyRows(), a = document.activeElement, i;
+    for (i = 0; i < rows.length; i++) if (rows[i].contains(a)) return rows[i];
+    var id = U.kcur || (U.open && U.open.kind === 'reply' ? U.open.id : null);
+    return rows.filter(function (x) { return x.getAttribute('data-kr') === id; })[0] || null;
+  }
+  function keyMove(step) {
+    var rows = keyRows();
+    if (!rows.length) return;
+    var cur = keyRow(), inRow = cur && cur.contains(document.activeElement), i = cur ? rows.indexOf(cur) : -1;
+    i = !cur ? (step > 0 ? 0 : rows.length - 1) : inRow ? Math.max(0, Math.min(rows.length - 1, i + step)) : i;
+    var id = rows[i].getAttribute('data-kr');
+    U.kcur = id;
+    if (U.open && U.open.kind === 'reply' && U.open.id !== id) { U.open = { kind: 'reply', id: id }; U.pop = null; }  /* the panel follows */
+    renderBrief('#bv-pane [data-kr="' + cssq(id) + '"] [data-open]');
+  }
+  function keyAct(k) {
+    var row = keyRow();
+    if (!row) return false;
+    var id = row.getAttribute('data-kr'), r = replyById(id);
+    if (!r) return false;
+    if (k === 'd') {
+      var rows = keyRows(), nx = rows[rows.indexOf(row) + 1] || rows[rows.indexOf(row) - 1];
+      U.kcur = nx ? nx.getAttribute('data-kr') : null;
+      var ck = row.querySelector('[data-ck]'); if (ck) ck.click(); else markDone(id);
+    } else if (k === 'c') copyReply(id, row.querySelector('[data-open]'));
+    else if (k === 'o') {
+      var link = safeHttps(r.link);
+      if (link) window.open(link, '_blank', 'noopener,noreferrer'); else openItem('reply:' + id);
+    } else if (k === 'n') {
+      var anc = row.querySelector('[data-anc]');
+      if (!anc) return false;
+      var ok = !B.sample && !!noteRef('reply', id);
+      U.pop = { kind: 'reply', id: id, anc: anc.getAttribute('data-anc'), sub: false, mode: ok ? 'note' : null, text: null };
+      renderLayer(); focusLayer(ok ? '[data-ntext]' : '[data-pop] button');
+    } else return false;
+    return true;
+  }
   document.addEventListener('keydown', function (e) {
     if (ui.view !== 'brief' || !B) return;
+    if (e.key === 'Escape' && U.keys) { closeKeys(); e.preventDefault(); return; }  /* 0.7.1 */
     if (e.key === 'Escape') {
       if (U.pop) { var anc = U.pop.anc; U.pop = null; renderLayer(); var a = main.querySelector('[data-anc="' + cssq(anc) + '"]'); if (a) { a.setAttribute('aria-expanded', 'false'); a.focus(); } e.preventDefault(); }
       else if (U.open && lookPanel.hidden) { closePanel(); e.preventDefault(); }
@@ -1374,7 +1519,14 @@
       var i = LIVE_TABS.indexOf(t.dataset.tab), n = LIVE_TABS.length;
       i = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
       setTab(LIVE_TABS[i], true); e.preventDefault();
+      return;
     }
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || typing(t)) return;  /* 0.7.1: never steal keys while typing */
+    if (e.key === '?') { if (U.keys) closeKeys(); else openKeys(); e.preventDefault(); return; }
+    if (U.pop || U.keys) return;
+    var k = e.key.length === 1 ? e.key.toLowerCase() : '';
+    if (k === 'j' || k === 'k') { keyMove(k === 'j' ? 1 : -1); e.preventDefault(); }
+    else if ((k === 'd' || k === 'c' || k === 'o' || k === 'n') && !e.shiftKey && keyAct(k)) e.preventDefault();
   });
 
   /* ---------- state ---------- */
@@ -1469,35 +1621,39 @@
   window.addEventListener('hashchange', route);
 
   /* ---------- render: setup ---------- */
-  function go(n) { ui.step = Math.max(1, Math.min(6, n)); ui.confirm = null; renderSetup('#wiz-title'); window.scrollTo(0, 0); }
+  function go(n) { ui.step = Math.max(0, Math.min(6, n)); ui.confirm = null; renderSetup('#wiz-title'); window.scrollTo(0, 0); }  /* 0 = Setup home (0.7.1) */
   function reload(focusKey) {
     return loadState().then(function () { renderSetup(focusKey ? '[data-fk="' + cssq(focusKey) + '"]' : null); },
       function (e) { var w = document.getElementById('wiz-err'); if (w) w.textContent = 'Could not reload (' + e.message + ')'; });
   }
   function renderSetup(focusSel) {
-    var n = ui.step;
-    var rail = h('nav', { class: 'rail', 'aria-label': 'Setup steps' }, STEPS.map(function (name, i) {
-      var k = i + 1;
-      return btn(k < n ? 'done' : k === n ? 'on' : '', [h('span', { class: 'n' }, String(k)), name],
-        { 'aria-current': k === n ? 'step' : null }, function () { go(k); });
-    }));
-    var prail = h('div', { class: 'prail' }, [
-      h('div', { class: 'label' }, 'Step ' + n + ' of 6 · ' + STEPS[n - 1]),
-      h('div', { class: 'segs', 'aria-hidden': 'true' }, STEPS.map(function (x, i) { return h('i', { class: i + 1 < n ? 'done' : i + 1 === n ? 'on' : '' }); }))]);
-    var body = [stepAbout, stepAreas, stepVips, stepTimes, stepDelivery, stepReview][n - 1]();
-    var wnav = h('div', { class: 'wnav' }, [
-      n > 1 ? btn('btn', 'Back: ' + STEPS[n - 2], null, function () { go(n - 1); }) : null,
+    var n = ui.step || 0, home = n === 0;
+    /* 0.7.1: the rail starts with Home and shows on phones too (a row that scrolls sideways) */
+    var rail = h('nav', { class: 'rail', 'aria-label': 'Setup steps' }, [btn('home' + (home ? ' on' : ''), 'Home', { 'aria-current': home ? 'page' : null }, function () { go(0); })]
+      .concat(STEPS.map(function (name, i) {
+        var k = i + 1;
+        return btn(!home && k < n ? 'done' : k === n ? 'on' : '', [h('span', { class: 'n' }, String(k)), name],
+          { 'aria-current': k === n ? 'step' : null }, function () { go(k); });
+      })));
+    var body = home ? stepHome() : [stepAbout, stepAreas, stepVips, stepTimes, stepDelivery, stepReview][n - 1]();
+    var wnav = home ? null : h('div', { class: 'wnav' }, [
+      btn('btn', 'Back: ' + (n > 1 ? STEPS[n - 2] : 'Home'), null, function () { go(n - 1); }),
       n < 6 ? btn('btn primary', 'Next: ' + STEPS[n], null, function () { go(n + 1); }) : null]);
+    var ls = S.last_sync || {};
     var sheet = h('div', { class: 'sheet wiz' }, [
       h('div', { class: 'mast two' }, [
-        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'wiz-title', tabindex: '-1' }, STEPS[n - 1])]),
-        h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Step'), h('div', { class: 'disp' }, n + ' / 6')])]),
-      rail, prail,
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'wiz-title', tabindex: '-1' }, home ? 'Your setup' : STEPS[n - 1])]),
+        home ? h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Last refreshed'), h('div', { class: 'disp when' }, ls.at ? fmtWhen(ls.at, true) : 'Not yet')])
+          : h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Step'), h('div', { class: 'disp' }, n + ' / 6')])]),
+      rail,
       h('section', { class: 'step', 'aria-labelledby': 'wiz-title' }, [h('p', { class: 'err', id: 'wiz-err', role: 'alert' }), body]),
       wnav,
       h('p', { class: 'ver' }, 'Callsheet ' + (S.version || PAGE_VERSION))]);
     main.textContent = '';
     add(main, sheet);
+    foldHelp(sheet.querySelector('.step'), n);  /* 0.7.1: long help behind "?" */
+    var cur = rail.querySelector('[aria-current]');
+    if (cur && rail.scrollWidth > rail.clientWidth) rail.scrollLeft = Math.max(0, cur.offsetLeft - 16);
     press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
     syncBg();
     main.querySelectorAll('.wi textarea').forEach(fitTa);
@@ -1878,7 +2034,7 @@
       });
       return b;
     }
-    function later(label, why) { return h('button', { type: 'button', class: 'chip later', disabled: true, 'aria-pressed': 'false' }, [label, h('span', { class: 'cl' }, ' · ' + (why || 'Coming later'))]); }
+    function later(label, why) { return h('button', { type: 'button', class: 'chip later', disabled: true, 'aria-pressed': 'false' }, [label, h('span', { class: 'cl' }, ' · ' + why)]); }
     var accts = a.accounts || [], key = 'area:' + a.id;
     return h('div', { class: 'acard a' + c }, [
       h('h3', { class: 'areahead', tabindex: '-1', 'data-fk': 'areah:' + a.id }, a.name),
@@ -1887,7 +2043,7 @@
       slackBlock(a),
       h('div', { class: 'reads' }, [h('div', { class: 'q', id: 'q-' + a.id }, 'What may the brief read?'),
         h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'),
-          a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack or link Signal first'), readChip('writer', 'AI writer'), later('Tasks')]),
+          a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack or link Signal first'), readChip('writer', 'AI writer')]),  /* 0.7.1: the disabled Tasks chip is gone (Projects replaced Tasks) */
         err, h('p', { class: 'note' }, a.chat_available ? 'Chat is ' + chatNames(a) + '. Check your employer\u2019s policy first.' : 'Check your employer\u2019s policy first.')]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
@@ -1906,8 +2062,7 @@
       h('h3', { class: 'big' }, '+ Add an area'),
       h('div', null, [h('label', { class: 'label', for: 'f-area' }, 'Name'), name]),
       h('div', null, [h('span', { class: 'label', id: 'lbl-swatch' }, 'Header colour'), sws]),
-      h('div', { class: 'btns' }, addB), err,
-      h('p', { class: 'note' }, 'Each area gets its own column on the brief.')]), 'submit', function (e) {
+      h('div', { class: 'btns' }, addB), err]), 'submit', function (e) {
       e.preventDefault();
       var nm = name.value.trim();
       if (!nm) { err.textContent = 'Give the area a name.'; return; }
@@ -2539,28 +2694,74 @@
     var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
     return p && p.id !== 'default' ? ' · Writing profile: ' + p.name : '';
   }
-  function stepReview() {
-    var st = S.settings, nAcc = 0, err = errBox();
-    var nSlack = 0, sig = false;
-    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
-    var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
-    var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
-    function onDays(c) { var d = DAYS.filter(function (x) { return (c.days || DAYS).indexOf(x) >= 0; }); return d.length === 7 ? '' : ' (' + daysSummary(d) + ')'; }  /* 0.6.2 */
-    var timesSum = [morning ? morning.time + ' brief' + onDays(morning) : 'No morning brief',
-      checks.length ? checks.map(function (c) { return c.time + onDays(c); }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') : 'no check-ins'].join(' · ');
-    var lines = [
-      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
-      [S.areas.map(function (a) { return a.name; }).join(', '),
-        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
-        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean).join(' · '),
-      plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
-        ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
-      timesSum,
-      'Sidebar page in Home Assistant' + (pushOn() ? ' · Phone notifications' : '') + ' · Writer: ' + writerName(writerOf()) + profileLine()];
-    var ls = S.last_sync || {};
-    var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () {
-      run([refresh, goB], err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="sync"]'); });
+  /* 0.7.1: Setup home: each step's summary (the Review lines) with Edit; Refresh now is its one filled button
+     (Start: About you on the first run) */
+  function syncNow(btns, err, fk) {
+    return run(btns, err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="' + fk + '"]'); });
+  }
+  function stepHome() {
+    var lines = reviewLines(), ls = S.last_sync || {}, err = errBox(), first = !S.setup_done;
+    var errs = Array.isArray(ls.errors) ? ls.errors : [];
+    var refresh = btn(first ? 'btn' : 'btn primary', 'Refresh now', { 'data-fk': 'home-sync' }, function () { syncNow([refresh], err, 'home-sync'); });
+    return [
+      h('p', { class: 'intro' }, first ? 'Six short steps. Start with About you, or open any part.' : 'Each part and what it’s set to now.'),
+      h('div', { class: 'shome' }, STEPS.slice(0, 5).map(function (name, i) {
+        return h('section', { class: 'scard', 'aria-labelledby': 'sh-' + (i + 1) }, [
+          h('h2', { class: 'h3', id: 'sh-' + (i + 1) }, [h('span', { class: 'n' }, String(i + 1)), name]),
+          h('ul', { class: 'ln' }, lines[i].split(' · ').map(function (s) { return h('li', null, s); })),
+          btn('btn sm', 'Edit', { 'aria-label': 'Edit ' + name, 'data-fk': 'home:' + (i + 1) }, function () { go(i + 1); })]);
+      })),
+      h('div', { class: 'go' }, [first ? btn('btn primary', 'Start: About you', null, function () { go(1); }) : null, refresh]),
+      err,
+      ls.at && ls.ok === false ? h('p', { class: 'syncst bad' }, 'Last refresh had problems:') : null,
+      errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+  /* 0.7.1: help paragraphs in a Setup section fold behind one "?": the first sentence stays, the rest opens on
+     demand. Open or closed is remembered per section on this device. State lines (status, errors, "No … yet",
+     "Loading…") and paragraphs with controls in them always show. */
+  var HELP_SEC = '.where, .keyp, .acard, .sigcard, .wpanel, .callout, .ign, .step';
+  function helpOpen() { var o = null; try { o = JSON.parse(load(KEY_HELP) || '{}'); } catch (e) { o = null; } return o && typeof o === 'object' ? o : {}; }
+  function firstSentence(s) {
+    var m = /^([\s\S]*?[.!?:])\s+(?=[A-Z“"(‘])/.exec(s);
+    return m ? [m[1], s.slice(m[0].length)] : [s, ''];
+  }
+  function foldHelp(root, step) {
+    if (!root) return;
+    var secs = [], groups = [], open = helpOpen();
+    root.querySelectorAll('p.note, p.help').forEach(function (p) {
+      if (p.hasAttribute('role') || /\b(err|warn|none|sigdone|sigwait|sigprog)\b/.test(p.className)) return;
+      if (p.closest('.confirm, [role=status], [role=alert]') || p.querySelector('button, a, input, select, textarea')) return;
+      if (/^(No |Nothing|Loading)/.test(p.textContent)) return;
+      var sec = p.closest(HELP_SEC) || root, i = secs.indexOf(sec);
+      if (i < 0) { secs.push(sec); groups.push([]); i = secs.length - 1; }
+      groups[i].push(p);
     });
+    groups.forEach(function (ps, gi) {
+      var sec = secs[gi], hd = sec.querySelector('h2, h3, .wh, .h, .areahead, .sighead');
+      var name = hd ? hd.textContent.trim() : '', key = step + ':' + (name || gi), first = ps[0], hide = ps.slice(1);
+      if (!first.children.length) {
+        var fs = firstSentence(first.textContent);
+        if (fs[1]) { first.textContent = fs[0] + ' '; var more = h('span', { class: 'hmore' }, fs[1]); first.appendChild(more); hide.unshift(more); }
+      }
+      if (!hide.length) return;
+      var isOpen = !!open[key], ids = [];
+      hide.forEach(function (x, k) { x.id = x.id || 'hx-' + step + '-' + gi + '-' + k; ids.push(x.id); x.hidden = !isOpen; x.classList.add('hfold'); });
+      var q = btn('helpq', '?', { 'aria-expanded': String(isOpen), 'aria-controls': ids.join(' '), 'aria-label': (isOpen ? 'Less help' : 'More help') + (name ? ': ' + name : ''),
+        title: isOpen ? 'Less help' : 'More help' }, function () {
+        isOpen = !isOpen;
+        hide.forEach(function (x) { x.hidden = !isOpen; });
+        q.setAttribute('aria-expanded', String(isOpen)); q.title = isOpen ? 'Less help' : 'More help';
+        q.setAttribute('aria-label', (isOpen ? 'Less help' : 'More help') + (name ? ': ' + name : ''));
+        var o = helpOpen(); if (isOpen) o[key] = 1; else delete o[key];
+        save(KEY_HELP, JSON.stringify(o));
+      });
+      first.appendChild(q);
+    });
+  }
+  function stepReview() {
+    var lines = reviewLines(), err = errBox();
+    var ls = S.last_sync || {};
+    var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () { syncNow([refresh, goB], err, 'sync'); });
     var goB = btn('btn', 'Go to my brief', null, function () {
       if (S.setup_done) { location.hash = 'brief'; return; }
       run([goB, refresh], err, function () { return api('PATCH', 'api/settings', { setup_done: true }); }, function () {
@@ -2578,6 +2779,27 @@
       err,
       h('p', { class: 'syncst', role: 'status' }, ls.at ? 'Last refreshed ' + fmtWhen(ls.at, true) + (ls.ok === false ? ', with problems:' : '.') : 'Not refreshed yet.'),
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+  /* the steps' one-line summaries (Review, and the cards on Setup home) */
+  function reviewLines() {
+    var st = S.settings, nAcc = 0;
+    var nSlack = 0, sig = false;
+    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
+    var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
+    var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
+    function onDays(c) { var d = DAYS.filter(function (x) { return (c.days || DAYS).indexOf(x) >= 0; }); return d.length === 7 ? '' : ' (' + daysSummary(d) + ')'; }  /* 0.6.2 */
+    var timesSum = [morning ? morning.time + ' brief' + onDays(morning) : 'No morning brief',
+      checks.length ? checks.map(function (c) { return c.time + onDays(c); }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') : 'no check-ins'].join(' · ');
+    var lines = [
+      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
+      [S.areas.map(function (a) { return a.name; }).join(', '),
+        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
+        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean).join(' · '),
+      plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
+        ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
+      timesSum,
+      'Sidebar page in Home Assistant' + (pushOn() ? ' · Phone notifications' : '') + ' · Writer: ' + writerName(writerOf()) + profileLine()];
+    return lines;
   }
 
   /* ---------- 0.5.1: Setup → Areas → Signal: link (QR code), status, area, ignored chats, unlink, history import ----------
@@ -2601,6 +2823,7 @@
     var a = document.activeElement, fk = focusKey || (a && old.contains(a) ? a.getAttribute('data-fk') : null);
     var nu = signalCard();
     old.parentNode.replaceChild(nu, old);
+    foldHelp(nu, 2);  /* 0.7.1 */
     if (fk) { var f = nu.querySelector('[data-fk="' + cssq(fk) + '"]'); if (f) f.focus(); }
   }
   /* while a link code waits for the phone: ask every 2 s whether it was scanned */

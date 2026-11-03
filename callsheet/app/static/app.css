@@ -246,9 +246,10 @@ button{cursor:pointer;border:0;border-radius:0;background:none;padding:0;text-al
 .topbar{gap:4px 6px}
 .brand{flex:1}
 .hnav{order:1;gap:2px}
-.hbtn{box-shadow:none;width:36px;height:36px;padding:0;justify-content:center}
+/* 0.7.1: a short label under each icon; 44 px targets */
+.hbtn{box-shadow:none;min-width:44px;height:44px;padding:2px 4px;flex-direction:column;justify-content:center;gap:2px}
 .hbtn .ico{width:18px;height:18px}
-.hbtn .bl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.hbtn .bl{font-size:11px;line-height:1;font-weight:600;letter-spacing:.02em}
 #back-btn{width:auto;padding:5px 10px;box-shadow:inset 0 0 0 1px currentColor;height:auto}
 .lookbtn[aria-expanded=true]{background:var(--on-masthead);color:var(--masthead)}
 .hmeta{order:2;flex-basis:100%;gap:4px 10px}
@@ -360,17 +361,13 @@ a.who{text-decoration:underline;text-decoration-thickness:2px}
 
 /* ================= setup (v3 setup view) ================= */
 .mast.two{grid-template-columns:1fr 230px}
-.rail{display:grid;grid-template-columns:repeat(6,1fr);border-bottom:var(--rule-heavy) solid var(--rule)}
+.rail{display:grid;grid-template-columns:auto repeat(6,1fr);border-bottom:var(--rule-heavy) solid var(--rule);position:relative}
 .rail button{padding:12px 14px;border-right:var(--rule-mid) solid var(--rule);color:var(--muted);font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-lg);line-height:1.1;display:flex;gap:8px;align-items:baseline;min-width:0}
 .rail button:last-child{border-right:0}
 .rail .n{font-family:var(--font-body);font-size:var(--fs-xs);letter-spacing:.06em;font-weight:700}
 .rail button.done{color:var(--text)}
 .rail button.done .n::after{content:" ✓"}
 .rail button.on{background:var(--sel);color:var(--on-sel)}
-.prail{display:none;padding:12px 16px 14px;border-bottom:var(--rule-heavy) solid var(--rule)}
-.prail .segs{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:8px}
-.prail .segs i{height:6px;background:var(--track);border-radius:var(--radius)}
-.prail .segs i.done{background:var(--fill)}.prail .segs i.on{background:var(--accent)}
 .step{padding:22px 26px 8px}
 .step>.err{margin:0 0 12px}
 .intro{font-size:var(--fs-lg);margin:0 0 16px;max-width:760px}
@@ -597,8 +594,10 @@ textarea.mfst{margin:8px 0 0;font-family:ui-monospace,Menlo,Consolas,monospace;f
 .wiz .mast .t{padding:18px 16px}
 .wiz .mast .box{padding:10px 16px;border-left:0;display:flex;align-items:baseline;gap:12px}
 .wiz .mast .box .disp{margin:0}
-.rail{display:none}
-.prail{display:block}
+/* 0.7.1: the rail stays on phones, as a row that scrolls sideways */
+.rail{display:flex;overflow-x:auto;scrollbar-width:none}
+.rail::-webkit-scrollbar{display:none}
+.rail button{flex:none;min-height:44px;padding:10px 14px;font-size:var(--fs-md)}
 .step{padding:18px 14px 6px}
 .cols,.cards,.times,.looks,.keyform,.vipadd,.lm{grid-template-columns:1fr}
 .cols>*+*{margin-top:8px}
@@ -1387,3 +1386,79 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .pj .ef label{font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
 .pj .ef .inp{width:100%;max-width:none;min-width:0}
 @media (max-width:700px){.pj .picks.row5{grid-template-columns:repeat(3,minmax(0,1fr))}.pj .efg{grid-template-columns:minmax(0,1fr)}}
+
+/* ===== 0.7.1 quick wins: Replies progress, legend "?", All clear, Top of the day tick and copy, keys, Setup home, help "?" ===== */
+/* Replies header: title, the "n of m done today" meter, the legend's "?" */
+.bv .rhead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:8px}
+.bv .rhead .sec-h{margin:0}
+.bv .rhead .sp{flex:1}
+.bv .meter{display:flex;align-items:center;gap:8px;font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted);font-variant-numeric:tabular-nums}
+.bv .meter .bar{display:block;width:120px;height:8px;background:var(--track);border-radius:var(--radius);overflow:hidden}
+.bv .meter .bar i{display:block;height:100%;background:var(--fill);transition:width .3s ease}
+/* the small "?" toggles (Replies legend, Setup help): 24 px, 44 px to touch on a phone */
+.qbtn,.helpq{display:inline-grid;place-items:center;width:24px;height:24px;flex:none;position:relative;vertical-align:middle;border-radius:var(--chip-radius);
+  box-shadow:inset 0 0 0 var(--rule-w) var(--rule);color:var(--muted);font-family:var(--font-body);font-weight:700;font-size:var(--fs-sm);line-height:1}
+.qbtn:hover,.helpq:hover{color:var(--text);box-shadow:inset 0 0 0 var(--rule-w) var(--text)}
+.qbtn[aria-expanded=true],.helpq[aria-expanded=true]{background:var(--sel);color:var(--on-sel);box-shadow:none}
+.helpq{margin-left:6px;width:22px;height:22px;font-size:var(--fs-xs)}
+@media (max-width:700px){.qbtn::after,.helpq::after{content:"";position:absolute;inset:-11px}}
+/* Top of the day: the Replies tick for replies, the calendar glyph for events, Copy when there is a draft */
+.bv .topl li.trow{display:grid;grid-template-columns:30px minmax(0,1fr) 30px;align-items:center;column-gap:6px;padding:0 2px;transition:background-color .3s}
+.bv .topl .tline::before{content:none}
+.bv .topl .ck.ri{color:var(--muted)}
+.bv .ck .bx.on{background:var(--sel);color:var(--on-sel);box-shadow:none}
+.bv .ck .bx.on::before{content:"✓"}
+.bv .ib{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--radius);color:var(--muted)}
+.bv .ib:hover{background:var(--surface-2);color:var(--text)}
+.bv .trow.gone{background:var(--surface-2)}
+.bv .trow.gone .tt{color:var(--muted);text-decoration:line-through}
+.bv .row.kcur:not(.sel),.bv .trow.kcur{box-shadow:inset 4px 0 0 var(--accent)}
+@media (max-width:700px){
+  .bv .topl li.trow{grid-template-columns:44px minmax(0,1fr) 44px;column-gap:2px}
+  .bv .topl .ck,.bv .topl .ib{width:44px;height:44px}
+}
+/* All clear: three flat shapes drop in, the stamp lands, the day's numbers; once a day, still under reduced motion */
+.bv .clear{display:grid;justify-items:center;gap:12px;padding:32px 16px 24px;text-align:center;overflow:hidden}
+.bv .clear .shapes{position:relative;width:220px;height:90px}
+.bv .clear .shapes i{position:absolute;display:block;animation:cs-drop .35s cubic-bezier(.2,1.4,.4,1) both}
+.bv .clear .shapes .c{width:64px;height:64px;border-radius:50%;background:var(--area-1);left:18px;top:20px}
+.bv .clear .shapes .s{width:58px;height:58px;background:var(--accent);left:84px;top:6px;transform:rotate(8deg);animation-delay:.08s}
+.bv .clear .shapes .t{width:70px;height:62px;background:var(--area-3);left:138px;top:26px;clip-path:polygon(50% 0,100% 100%,0 100%);animation-delay:.16s}
+.bv .clear .stamp{font-size:var(--fs-hero);line-height:1;background:var(--sel);color:var(--on-sel);padding:10px 22px 8px;clip-path:var(--cut);animation:cs-stamp .3s .3s ease both}
+.bv .clear .say{font-size:var(--fs-lg);margin:0;max-width:46ch}
+.bv .clear .stats{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-wrap:wrap;justify-content:center;gap:8px 28px;font-size:var(--fs-sm);color:var(--muted)}
+.bv .clear .stats b{display:block;font-family:var(--font-display);font-weight:var(--display-weight);font-size:var(--fs-stat);line-height:1.1;color:var(--text);font-variant-numeric:tabular-nums}
+.bv .clear.still .shapes i,.bv .clear.still .stamp{animation:none}
+@keyframes cs-drop{from{transform:translateY(-60px) rotate(-25deg);opacity:0}to{opacity:1}}
+@keyframes cs-stamp{0%{transform:scale(1.4);opacity:0}60%{transform:scale(.96);opacity:1}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.bv .clear .shapes i,.bv .clear .stamp{animation:none}.bv .meter .bar i,.bv .topl li.trow{transition:none}}
+/* the key sheet ("?") */
+.bv .foot .keyhint{padding:0 2px;color:inherit}
+.bv-layer .keysheet{position:fixed;z-index:96;left:50%;top:84px;transform:translateX(-50%);width:360px;max-width:calc(100vw - 24px);background:var(--surface);color:var(--text);
+  border:var(--rule-mid) solid var(--text);border-radius:var(--radius);padding:12px 16px 14px}
+.app[data-look=clean] .bv-layer .keysheet{border:1px solid var(--rule);box-shadow:0 14px 40px color-mix(in srgb,var(--text) 25%,transparent)}
+.bv-layer .keysheet .kh{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.bv-layer .keysheet h2{font-size:var(--fs-h3)}
+.bv-layer .keysheet .tx{width:32px;height:32px;display:grid;place-items:center;border-radius:var(--radius);color:var(--muted)}
+.bv-layer .keysheet .tx:hover{background:var(--surface-2);color:var(--text)}
+.bv-layer .keysheet .ico{width:16px;height:16px}
+.bv-layer .keysheet dl{margin:0;display:grid}
+.bv-layer .keysheet dl>div{display:grid;grid-template-columns:64px minmax(0,1fr);align-items:center;gap:10px;padding:5px 0;border-top:var(--rule-w) solid var(--rule)}
+.bv-layer .keysheet dt,.bv-layer .keysheet dd{margin:0}
+.bv-layer .keysheet dd{font-size:var(--fs-md)}
+.bv-layer kbd{display:inline-block;min-width:26px;text-align:center;font-family:var(--font-body);font-size:var(--fs-xs);font-weight:700;padding:2px 7px;border-radius:var(--radius);
+  background:var(--surface-2);color:var(--text);box-shadow:inset 0 0 0 1px var(--rule),inset 0 -2px 0 var(--rule)}
+.bv-layer .keysheet .kfoot{margin:10px 0 0;font-size:var(--fs-xs);color:var(--muted)}
+.bv-layer .cpy{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
+@media (max-width:700px){.bv-layer .keysheet{top:auto;left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));transform:none;width:auto;max-width:none}}
+/* Setup home: one card per step with its summary and Edit */
+.shome{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;max-width:1120px}
+.scard{display:grid;grid-template-rows:auto 1fr auto;gap:8px;padding:14px 16px;border-radius:var(--radius);background:var(--bg);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);min-width:0}
+.scard h2{display:flex;align-items:baseline;gap:8px}
+.scard h2 .n{font-family:var(--font-body);font-size:var(--fs-xs);font-weight:700;color:var(--muted)}
+.scard .ln{list-style:none;margin:0;padding:0;display:grid;gap:2px;font-size:var(--fs-sm);overflow-wrap:anywhere}
+.scard .btn{justify-self:start}
+.mast .box .disp.when{font-size:var(--fs-h3)}
+.rail button.home{color:var(--text)}
+.rail button.home.on{color:var(--on-sel)}
+@media (max-width:700px){.scard .btn{min-height:44px}.shome{grid-template-columns:1fr}}

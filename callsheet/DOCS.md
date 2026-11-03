@@ -392,6 +392,18 @@ GitHub. Nothing there is written back anywhere: projects, tasks and notes are ke
   reads (`GET`) repos, commits, issues and pull requests; the token is never shown again. **Forget GitHub**
   deletes the token and everything read from it.
 
+## Finding your way (0.7.1)
+
+- **Setup** opens on a home page with each part's current settings and an **Edit** button. Small **?** buttons
+  show the longer help; Callsheet remembers on this device whether each one is open.
+- **Top of the day** and **Replies** have a tick (done, with Undo) and **Copy** for the drafted reply. The colour
+  legend on Replies hides after your first tick; the **?** next to "done today" brings it back.
+- **All clear**: when no replies are left you get a short moment and the day's numbers, once a day. With
+  "reduce motion" on in your device settings it doesn't move.
+- **Keys** (on a computer): **J**/**K** next and previous row, **Enter** open, **D** done, **C** copy the draft,
+  **O** open in Gmail or Slack, **N** note for Callsheet, **Esc** close, **?** the list of keys. They do nothing
+  while you're typing in a box. Copy and open only: nothing is sent.
+
 ## Your data
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable

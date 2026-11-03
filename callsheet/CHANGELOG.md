@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.1 ("Quick wins")
+
+- **Setup opens on a home page**: one card per part (About you, Areas, VIPs, Call times, Delivery) with what it's set
+  to now and an **Edit** button, plus Refresh now. The step bar now shows on phones too.
+- **Less reading in Setup**: each section keeps one sentence; the rest is behind a small **?**. Callsheet remembers
+  on this device whether you left it open.
+- **Area cards** no longer show the old "own column" line or the greyed-out "Tasks · coming later" switch.
+- **Top of the day** rows get a tick (done, with Undo) and **Copy** for the drafted reply, like Replies.
+- **Replies**: the colour legend shows until you first tick a reply, then hides behind **?**. Every coloured dot
+  also has its reason as text (screen readers and on hover). A bar shows "n of m done today".
+- **All clear**: when the last reply is done, a short moment with the day's numbers (replies done, events, notes).
+  It plays once a day, has no sound and stays still if your device asks for less motion.
+- **Keys** on Top of the day and Replies: J/K move, Enter opens, D done, C copy the draft, O open in Gmail or Slack,
+  N note, Esc close, ? shows them all. Keys never fire while you're typing. Nothing is ever sent.
+- **Phone header**: Refresh, Setup and Look now have labels under their icons, with bigger touch targets.
+
 ## 0.7.0 ("Projects")
 
 - **Projects tab** (replaces "Tasks · coming later"). Callsheet drafts your projects from your Obsidian notes
