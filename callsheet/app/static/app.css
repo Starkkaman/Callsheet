@@ -259,7 +259,7 @@
   --on-area-4:#f7f6f2;--sel:#262626;--on-sel:#efede8;--masthead:#e6e3dc;--on-masthead:#262626;--eyebrow:#5f5c55;--box:#f7f6f2;--on-box:#262626;
   --callbox:#3d3b37;--on-callbox:#f7f6f2;--panel:#e6e3dc;--on-panel:#262626;--panel-head:transparent;--on-panel-head:#262626;--panel-mark:#ec5b17;
   --track:#dcd8cf;--fill:#262626;--field:#f7f6f2;--field-line:#74716a;--phone:#efede8;--slab:#e6e3dc;--bezel:#cfcbc2;--tabbar:#e6e3dc;
-  --on-tabbar:#3d3b37;--tab-on:#262626;--on-tab-on:#f7f6f2;--focus:#c84a12;
+  --on-tabbar:#3d3b37;--tab-on:#262626;--on-tab-on:#f7f6f2;--focus:#e05414;
   --btn-radius:9px;--display-stretch:104%;--tab-case:lowercase;--critical:#c84a12;--on-critical:#ffffff;--ease:cubic-bezier(.2,.7,.2,1);
   --ease-press:linear(0,.3 12%,.72 28%,.97 44%,1.03 58%,1.005 76%,1);--elev:inset 0 1px 0 #fff,0 1px 0 #c3bfb5,0 2px 0 #b9b5ab,0 6px 10px -6px #0000004d;
 }
