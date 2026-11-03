@@ -93,7 +93,7 @@ class SourceTest(unittest.TestCase):
         for f in sorted(APP.glob("*.py")):
             src = f.read_text(encoding="utf-8")
             hits = self.NET.findall(src)
-            if f.name in ("google.py", "writer.py", "slack.py", "ha.py"):  # ha.py: 0.5.1 notify only
+            if f.name in ("google.py", "writer.py", "slack.py", "ha.py", "github.py"):  # ha.py: 0.5.1 notify only; github.py: 0.7.0 read-only
                 self.assertEqual(hits, ["urllib.request"], f.name)
             else:
                 self.assertEqual(hits, [], f.name)

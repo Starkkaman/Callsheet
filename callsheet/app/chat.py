@@ -334,9 +334,17 @@ def context_line(now, tz, areas, fmt):
             + (", ".join(a["name"] for a in areas) or "none") + ".")
 
 
-def system_prompt(now, tz, areas, fmt, mode="native", sources=SOURCES):
-    """Intro, style, today's context, (the JSON protocol), then the fixed rules, always last."""
+CHAT_SCOPE = ("This chat is about one of the owner's projects. The tools only return the items Callsheet linked "
+              "to that project (search, list_events and get_item are filtered to them). If they don't have the "
+              "answer, say so plainly instead of guessing.")
+
+
+def system_prompt(now, tz, areas, fmt, mode="native", sources=SOURCES, scoped=False):
+    """Intro, style, today's context, (the 0.7.0 project scope sentence, fixed, no project data), (the JSON
+    protocol), then the fixed rules, always last."""
     parts = [CHAT_INTRO, CHAT_STYLE, context_line(now, tz, areas, fmt)]
+    if scoped:
+        parts.append(CHAT_SCOPE)
     if mode == "json":
         parts.append(json_protocol(sources))
     parts.append(CHAT_SAFETY)
@@ -403,8 +411,11 @@ class Tools:
 
     ALLOWED = {"search": "_search", "get_item": "_get_item", "list_events": "_list_events", "stats": "_stats"}
 
-    def __init__(self, index, tz, areas, fmt="12h", clock=time.time):
+    def __init__(self, index, tz, areas, fmt="12h", clock=time.time, scope=None):
         self.index, self.tz, self.fmt, self.clock = index, tz, fmt, clock
+        # 0.7.0: a project's chat. None = the whole index; a set of item ids = only those (a filter on these same
+        # read-only tools, not a new tool)
+        self.scope = None if scope is None else {int(i) for i in scope}
         self.areas = [{"id": a["id"], "name": a["name"]} for a in areas]
         self.seen = {}
         self.flagged = set()   # 0.6.0: ids of returned items that hold a planted instruction (inject.py)
@@ -531,7 +542,8 @@ class Tools:
             raise _ArgError(f"limit must be a whole number from 1 to {SEARCH_MAX}.")
         lim = min(int(lim), SEARCH_MAX)
         lo, hi = self._bounds(since, until)
-        rows = self.index.search(q, source=source, area=area, people=person, since=lo, until=hi, limit=lim)
+        rows = self.index.search(q, source=source, area=area, people=person, since=lo, until=hi, limit=lim,
+                                 ids=self.scope)
         label = "Searched " + SOURCE_WORDS.get(source, "everything") + (f" for “{_clip(q, 60)}”" if q else "") + \
             (f" with {_clip(person, 40)}" if person else "")
         out = {"tool": "search", "count": len(rows), "items": [self._row(r) for r in rows]}
@@ -547,8 +559,10 @@ class Tools:
             v = int(v.strip().lstrip("#"))
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             raise _ArgError("id must be the number from a search result.")
-        r = self.index.get(v)
+        r = self.index.get(v) if self.scope is None or v in self.scope else None
         if r is None:
+            if self.scope is not None:
+                return {"tool": "get_item", "error": f"Item {v} isn't part of this project."}, "Looked for an item"
             return {"tool": "get_item", "error": f"There's no item {v} in the index."}, "Looked for an item"
         out = self._row(r, snippet=False)
         body = str(r.get("body") or r.get("snippet") or "")
@@ -563,7 +577,7 @@ class Tools:
         if (until - since).days > 366:
             raise _ArgError("Ask for at most a year of events at a time.")
         lo, hi = self._bounds(since, until)
-        rows = self.index.search("", source="calendar", since=lo, until=hi, limit=EVENTS_MAX)
+        rows = self.index.search("", source="calendar", since=lo, until=hi, limit=EVENTS_MAX, ids=self.scope)
         rows = sorted(rows, key=lambda r: r.get("ts") or 0)
         out = {"tool": "list_events", "count": len(rows), "events": [self._row(r) for r in rows]}
         if len(rows) >= EVENTS_MAX:
@@ -819,8 +833,9 @@ class Chat:
                 self.jobs[cid]["cancel"] = True
             return self.view(cid)
 
-    def ask(self, cid, text):
-        """Adds the owner's question and queues the answer. Returns the conversation with its pending state."""
+    def ask(self, cid, text, scope=None):
+        """Adds the owner's question and queues the answer. Returns the conversation with its pending state.
+        0.7.0: scope {project, name, ids} starts a chat about one project (its tools see only those items)."""
         if not isinstance(text, str):
             raise InputError("Write a question first.")
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text).strip()
@@ -844,6 +859,9 @@ class Chat:
                     raise Conflict("Callsheet is still answering in this chat. Wait, or press Stop.")
             else:
                 conv = {"id": _now_id(), "title": _clip(text, 80), "created_at": now, "messages": []}
+                if scope is not None:
+                    conv["scope"] = {"project": scope["project"], "name": _clip(scope["name"], 60),
+                                     "ids": [int(i) for i in scope["ids"]][:500]}
             conv["messages"].append({"role": "user", "text": text, "at": now})
             conv["updated_at"] = now
             self._write(conv)
@@ -935,7 +953,9 @@ class Chat:
             settings = self.store.settings()
             tz, fmt = rules.tzinfo(settings), rules.time_format(settings)
             now = dt.datetime.fromtimestamp(self.clock(), tz)
-            tools = Tools(self.index, tz, self.store.areas(), fmt, clock=self.clock)
+            sc = conv.get("scope") if isinstance(conv.get("scope"), dict) else None
+            tools = Tools(self.index, tz, self.store.areas(), fmt, clock=self.clock,
+                          scope=sc.get("ids") or [] if sc else None)
             question, history = conv["messages"][-1]["text"], self._history(conv)
             if provider == "claude":
                 raw, by = self._claude(job, t0, s["claude"], now, tz, fmt, tools, question, history, stats), \
@@ -1024,7 +1044,7 @@ class Chat:
         log = (lambda line: self.log(line.replace("Callsheet writer:", "Callsheet chat:", 1))) if self.log else None
 
         def start(m):
-            msgs = [{"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, m, sources)}]
+            msgs = [{"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, m, sources, tools.scope is not None)}]
             for q, a in history:
                 msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
             return msgs + [{"role": "user", "content": question}]
@@ -1066,7 +1086,7 @@ class Chat:
                     if act and act[0] == "tool":  # a tool call written as text: carry on with the JSON protocol
                         mode = "json"
                         msgs[0] = {"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, mode,
-                                                                              sources)}
+                                                                              sources, tools.scope is not None)}
                         final = self._json_round(job, tools, msgs, act, stats, final)
                         continue
                     if content.strip():
@@ -1151,7 +1171,7 @@ class Chat:
             msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         msgs.append({"role": "user", "content": question})
         kw = dict(model=cfg["model"], max_tokens=CLAUDE_MAX_TOKENS[1 if cfg["thinking"] else 0],
-                  system=system_prompt(now, tz, self.store.areas(), fmt, "native", sources),
+                  system=system_prompt(now, tz, self.store.areas(), fmt, "native", sources, tools.scope is not None),
                   tools=claude_tools(sources), output_config={"effort": cfg["effort"]},
                   thinking={"type": "adaptive"} if cfg["thinking"] else {"type": "disabled"})
         final = False

@@ -27,6 +27,7 @@ import scan as index_scan            # 0.6.0 index
 import sources as index_sources      # 0.6.0 index
 from index import Index, IndexError_  # 0.6.0 index
 import know_profile                  # 0.6.0 profile
+import projects as projects_mod     # 0.7.0 projects
 import chat                          # 0.6.0 chat
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
@@ -36,7 +37,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 
 
 class MethodNotAllowed(Exception):
@@ -80,6 +81,11 @@ class App:
         self._index_init(data_dir)  # 0.6.0 index: Know me (index.db, scanner)
         self._profile_init()  # 0.6.0 profile: the drafted profile and questions
         self._chat_init(data_dir)  # 0.6.0 chat: Ask Callsheet over the index (chat.py)
+        # 0.7.0 projects: the planning assistant (projects.py, docs/projects.md)
+        self.projects = projects_mod.Projects(self.store, self.index, notifier=self.notifier,
+                                              near_call=self.evaluator.near_call,
+                                              sync_busy=self.syncer.lock.locked, clock=clock)
+        self.scheduler.projects = self.projects
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -128,6 +134,7 @@ class App:
         ] + self._memory_routes() + self._push_routes() + self.signal.routes() + self._index_routes() \
             + self._profile_routes()
         self.routes += self._chat_routes()  # 0.6.0 chat
+        self.routes += projects_mod.ProjectsApi(self.projects).routes()  # 0.7.0 projects
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -183,6 +190,11 @@ class App:
                                     writer_on=self.store.writer_config()["provider"] != "off")
         self._brief_050(brief, cache, s)
         self._brief_writing(brief, cache, s, now)
+        if not brief.get("sample"):
+            try:  # 0.7.0: the Slipped line and the weekly review card
+                brief["projects"] = self.projects.brief_line()
+            except Exception as e:  # noqa: BLE001 (the brief must always load)
+                sys.stderr.write(f"Callsheet projects line failed: {type(e).__name__}\n")
         return brief
 
     def _brief_writing(self, brief, cache, settings, now):
@@ -1002,7 +1014,13 @@ class App:
         conv = body.get("conversation_id")
         if conv is not None and not isinstance(conv, str):
             raise InputError("conversation_id must be text.")
-        return self.chat.ask(conv or None, body.get("text"))
+        pid = body.get("project_id")
+        scope = None
+        if pid is not None:  # 0.7.0: a new chat about one project (a filter on the existing read-only tools)
+            if conv:
+                raise InputError("A project scope starts a new chat.")
+            scope = self.projects.scope(pid if isinstance(pid, str) else "")
+        return self.chat.ask(conv or None, body.get("text"), scope=scope)
 
     def chat_settings(self, _body=None):
         return chat.public_settings(self.store)

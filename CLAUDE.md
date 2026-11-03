@@ -19,7 +19,11 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   endpoint, and the token is never logged, stored or returned. Since 0.5.1, signal-cli (linked device, owner
   approved 2026-10-30) talks to Signal's servers to receive the owner's messages; `signalcli.py`'s JSON-RPC method
   allow-list keeps it receive-only (no send, reactions, read receipts or typing; delivery receipts are
-  automatic). Each needs the user's setup first. The
+  automatic). Since 0.7.0, GitHub's REST API (`api.github.com`), read-only, owner approved 2026-11-03: a
+  fine-grained read-only token (Contents, Issues, Pull requests: Read) and the repos the owner picks; `github.py`'s
+  (method, URL) allowlist permits only `GET /user/repos`, `/repos/{o}/{r}`, `/repos/{o}/{r}/commits`, `/issues` and
+  `/pulls` (no other method, path or host, no redirects); nothing is ever written to GitHub. Each needs the user's
+  setup first. The
   browser page itself never calls out.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
@@ -38,6 +42,10 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   Tool results go back to the model as escaped `<data>` and are never instructions; answers get the same
   claim post-check as drafts. The owner expects more tools later: every new tool, and anything that writes,
   sends or fetches, needs the owner's explicit approval first, written here, and its own injection test.
+- **Projects (0.7.0) live in Callsheet only.** Projects, tasks and notes are stored in `callsheet.db`, never written
+  to Obsidian or any account. Drafted projects and the AI's names and next steps stay "Suggested" until the owner
+  adds them. "Ask about this project" scopes Chat to the project's linked index items: the scope is a filter on
+  the existing read-only tools (`search`, `get_item`, `list_events`), not a new tool.
 - No accounts, secrets or user data in the repo. Never print secrets.
 
 ## Design

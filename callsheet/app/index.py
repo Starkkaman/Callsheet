@@ -409,8 +409,12 @@ class Index:
 
     # --- reads (the interface for 3b/3c) -----------------------------------------------------------------------
     @staticmethod
-    def _filters(source, account, area, people, since, until):
+    def _filters(source, account, area, people, since, until, ids=None):
         where, args = [], []
+        if ids is not None:  # 0.7.0: a project's chat scope (a filter on the existing read-only search)
+            ids = sorted({int(i) for i in ids})[:500]
+            where.append("i.id IN (" + ",".join("?" * len(ids)) + ")" if ids else "0")
+            args += ids
         if source:
             srcs = [s for s in (source if isinstance(source, (list, tuple)) else str(source).split(",")) if s]
             if srcs:
@@ -446,15 +450,15 @@ class Index:
         return out
 
     def search(self, q="", source=None, account=None, area=None, people=None, since=None, until=None, limit=20,
-               offset=0):
+               offset=0, ids=None):
         """Ranked rows for the owner's words (FTS5 bm25: title x8, people x4, body x1; then newest first), or the
         newest rows matching the filters when q is empty. Each row: id, source, account, kind, thread, title, people,
         area, ts, date (UTC ISO), url, snippet (plain text) and highlight ([[text, matched], ...]). 0.6.0: when
         several words match nothing together, the first page is searched again with any of the words (each a prefix)
-        and those rows carry relaxed: true."""
+        and those rows carry relaxed: true. 0.7.0: ids (a set of item ids) keeps only those items."""
         limit = max(1, min(int(limit or 20), MAX_LIMIT))
         offset = max(0, int(offset or 0))
-        where, args = self._filters(source, account, area, people, since, until)
+        where, args = self._filters(source, account, area, people, since, until, ids)
         match = fts_query(q)
         relaxed = False
         with self.lock:

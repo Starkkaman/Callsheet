@@ -32,9 +32,9 @@ WINDOWS = (  # key, label, days (None = the whole history)
     ("5y", "5 years", 5 * 365 + 1),
     ("all", "Entire history", None),
 )
-SOURCE_KEYS = ("gmail", "calendar", "slack", "drive", "obsidian", "signal")
-SECONDS_PER = {"gmail": 0.45, "calendar": 0.02, "slack": 0.03, "drive": 1.0, "obsidian": 0.005, "signal": 0.001}
-BYTES_PER = {"gmail": 19_000, "calendar": 3_000, "slack": 1_500, "drive": 20_000, "obsidian": 12_000, "signal": 800}
+SOURCE_KEYS = ("gmail", "calendar", "slack", "drive", "obsidian", "signal", "github")
+SECONDS_PER = {"gmail": 0.45, "calendar": 0.02, "slack": 0.03, "drive": 1.0, "obsidian": 0.005, "signal": 0.001, "github": 0.02}
+BYTES_PER = {"gmail": 19_000, "calendar": 3_000, "slack": 1_500, "drive": 20_000, "obsidian": 12_000, "signal": 800, "github": 2_000}
 CALL_PAUSE_S = 10 * 60        # no scanning this close to a call time (before or after)
 REFRESH_EVERY_S = 30 * 60
 REFRESH_OVERLAP_S = 2 * 86400
@@ -42,7 +42,7 @@ BACKOFF_MAX_S = 3600
 TICK_S = 1.0
 IDLE_S = 30.0
 ESTIMATE_TTL_S = 15 * 60
-UNIT_WORDS = {"gmail": "emails", "calendar": "events", "slack": "messages", "drive": "files", "obsidian": "notes", "signal": "messages"}
+UNIT_WORDS = {"gmail": "emails", "calendar": "events", "slack": "messages", "drive": "files", "obsidian": "notes", "signal": "messages", "github": "items"}
 
 
 def window(key):

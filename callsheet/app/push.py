@@ -197,6 +197,13 @@ def batch_payload(n):
                     tag="callsheet-more", urgent=True)
 
 
+
+def review_payload(projects, slipped):
+    """0.7.0 weekly review (projects.py): counts only, no project names, no message text."""
+    msg = (f"Your weekly review is ready: {projects} project{'s' if projects != 1 else ''}, "
+           f"{slipped} slipped.")
+    return _payload("Weekly review", msg, tag="callsheet-review")
+
 # --- the urgent rules (pure) -------------------------------------------------------------
 def urgent_words(text):
     """True for "urgent", "emergency" or "asap", or "today" with a separate deadline in the same text."""

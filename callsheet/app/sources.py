@@ -20,6 +20,7 @@ import pathlib
 import re
 import time
 
+import github
 import google
 import index as ix
 import rules
@@ -696,6 +697,9 @@ def parse_note(text, rel, mtime, areas=None):
             links.append(name)
     aliases = fm.get("aliases") if isinstance(fm.get("aliases"), list) else _as_list(fm.get("aliases"))
     hints = links + _as_list(fm.get("people")) + aliases
+    # 0.7.0 projects: a front matter `project:` (any value) or `type`/`kind`/`category: project` marks a project note
+    if "project" in fm or any(str(fm.get(k) or "").strip().lower() == "project" for k in ("type", "kind", "category")):
+        tags.append("project")
     hints += ["#" + t for t in dict.fromkeys(tags)]
     ts = mtime
     for k in ("date", "created", "updated"):
@@ -868,6 +872,70 @@ class SignalSource(Source):
         return items, None
 
 
+# --- GitHub (0.7.0, read-only, owner-approved 2026-11-03) ------------------------------------------------------------
+GH_PHASES = ("commits", "issues", "pulls")
+
+
+class GitHubSource(Source):
+    """Commits, issues and pull requests of the repos the owner follows (Setup, Projects, GitHub), in the scan window.
+    One page per step; github.py holds the allowlist (GET only, api.github.com, five paths)."""
+    key, label, unit = "github", "GitHub", "items"
+
+    def targets(self, ctx):
+        c = github.config(ctx.store)
+        if not c["token"]:
+            return []
+        return [target("github", r, "GitHub · " + r, "", self.unit) for r in c["repos"]]
+
+    def estimate(self, ctx, tgt, since):
+        return None
+
+    def step(self, ctx, tgt, since, until, cursor):
+        c = github.config(ctx.store)
+        repo = tgt["account"]
+        if not c["token"]:
+            raise SourceError(github.NO_TOKEN)
+        if repo not in c["repos"]:
+            return [], None
+        etags = ctx.index.meta("github_etags:" + repo) or {}
+        try:
+            cl = github.Client(c["token"], etags=etags, clock=ctx.clock)
+        except ValueError as e:
+            raise SourceError(str(e)) from None
+        cur = dict(cursor or {"phase": 0, "url": None})
+        kind = GH_PHASES[cur["phase"]]
+        url = cur["url"] or cl.list_url(repo, kind, iso(since) if since else None)
+        try:
+            data, nxt = cl.request(url, repo)
+        except github.RateLimited as e:
+            raise Retry(str(e), int(min(3600, max(60, e.until - ctx.clock())))) from None
+        except github.GitHubError as e:
+            if e.status >= 500 or e.status == 0:
+                raise Retry(str(e), 60) from None
+            raise SourceError(str(e), e.status) from None
+        finally:
+            ctx.index.set_meta("github_etags:" + repo, etags)
+        items, stop = [], False
+        for x in data if isinstance(data, list) else []:
+            if not isinstance(x, dict):
+                continue
+            it = github.commit_item(repo, x) if kind == "commits" else github.issue_item(repo, x, kind == "pulls")
+            if it is None:
+                continue
+            if since and it["ts"] < since:
+                stop = kind != "commits"   # issues and pulls come newest first
+                continue
+            if until and it["ts"] >= until:
+                continue
+            items.append(it)
+        if nxt and not stop and data is not None:
+            return items, {"phase": cur["phase"], "url": nxt}
+        if cur["phase"] + 1 < len(GH_PHASES):
+            return items, {"phase": cur["phase"] + 1, "url": None}
+        return items, None
+
+
 def all_sources():
     """The sources in scan order."""
-    return [GmailSource(), CalendarSource(), SlackSource(), DriveSource(), ObsidianSource(), SignalSource()]
+    return [GmailSource(), CalendarSource(), SlackSource(), DriveSource(), ObsidianSource(), SignalSource(),
+            GitHubSource()]

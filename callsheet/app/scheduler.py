@@ -21,6 +21,7 @@ class Scheduler:
         self.store = store
         self.syncer = syncer
         self.notifier = notifier
+        self.projects = None  # 0.7.0, set by api.App
         self.clock = clock
         self.tick = tick
         self.stop_event = threading.Event()
@@ -80,6 +81,16 @@ class Scheduler:
         except Exception as e:  # noqa: BLE001 (type only, no secrets)
             sys.stderr.write(f"Callsheet urgent check failed: {type(e).__name__}\n")
 
+    def _projects(self, now):
+        """0.7.0: the weekly review's phone notification (projects.py; counts only, once a week)."""
+        pj = getattr(self, "projects", None)
+        if pj is None:
+            return
+        try:
+            pj.tick(now)
+        except Exception as e:  # noqa: BLE001 (type only, no secrets)
+            sys.stderr.write(f"Callsheet review check failed: {type(e).__name__}\n")
+
     def _loop(self):
         if self.startup_due():
             self._sync()
@@ -91,4 +102,5 @@ class Scheduler:
                 self._sync(scheduled=True, kind=kind)
             else:
                 self._urgent(now)
+            self._projects(now)
             last = now
