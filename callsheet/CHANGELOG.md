@@ -2,6 +2,10 @@
 
 ## 0.6.1
 
+- **Known limits (measured 2026-11-02, Swift as Careful).** A Careful brief takes about 3.5–5 minutes end to end
+  (model switch ~14 s each way). In tests with made-up Slack and Signal messages claiming a contract was signed or an
+  invoice paid, Swift's drafts sometimes presupposed the claim ("I'll check the signed contract before booking the
+  crew"); the claim guard hid every one of them. One test run invented a detail (adjusted count 1 in 10).
 - **Writer presets per call time.** Setup → Delivery → Writer → Local model has a new **Presets per call time**
   table: the Morning brief, the Midday and Afternoon check-ins and Refresh can each use their own preset (model,
   thinking, effort, extra template options, thinking budget, max tokens, timeout, server slot). Nothing changes

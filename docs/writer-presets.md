@@ -10,7 +10,7 @@ current writer settings until the owner maps a call time to another preset.
 Each call time (06:30 morning brief, 12:30 and 17:00 check-ins, manual Refresh) can use its own writer preset.
 Example: the morning brief, written while the owner is still asleep, uses the slow, careful preset; check-ins and
 Refresh, when someone is waiting, use Fast. Numbers are from the NAS llama-server (Radeon VII, Vulkan, router mode,
-one model loaded at a time): a swap takes ~7–8 s.
+one model loaded at a time): a swap takes ~14 s (measured 2026-11-02 with Swift ↔ Gemma).
 
 ## Data model (store meta `writer`)
 - `local` (unchanged) is also the built-in **Fast** preset: `model`, `thinking`, `reasoning_budget`, `max_tokens`,
@@ -85,7 +85,7 @@ suggestion filled in and the error, so the owner edits the id.
 
 ## Costs and risks
 - **Wait:** a Swift brief is ~180 s plus a swap; fine at 06:30, too slow for Refresh (keep Refresh on Fast).
-- **Swaps:** two per careful run (there and back), ~7–8 s each; another client during that time waits or hits the
+- **Swaps:** two per careful run (there and back), ~14 s each; another client during that time waits or hits the
   loading retry. Chat questions wait while the brief writer holds the sync lock (as in 0.6.0).
 - **Cache:** each swap loses the other model's prompt cache; the next Fast run pays full prefill.
 - The writer evaluation's contenders are separate and unchanged; its "everyday model" is Fast's model.
