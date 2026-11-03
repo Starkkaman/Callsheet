@@ -8,10 +8,29 @@
   'use strict';
   var app = document.getElementById('app');
   var main = document.getElementById('main');
-  var LOOKS = ['bold', 'clean', 'easy'];
+  /* 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids and names; nothing reads JamDash) */
+  var OWN_LOOKS = ['bold', 'clean', 'easy'];
+  var JAM_LOOKS = ['depth', 'braun', 'nerv', 'lcars', 'olympia', 'transit', 'grid', 'newwave', 'pulsar'];
+  var LOOKS = OWN_LOOKS.concat(JAM_LOOKS);
   var MODES = ['auto', 'light', 'dark'];
-  var LOOKNAME = { bold: 'Bold', clean: 'Clean', easy: 'Easy read' }, MODENAME = { auto: 'Auto', light: 'Light', dark: 'Dark' };
-  var KEY_LOOK = 'callsheet.look', KEY_MODE = 'callsheet.mode';
+  var LOOKNAME = { bold: 'Bold', clean: 'Clean', easy: 'Easy read', depth: 'Depth', braun: 'Braun', nerv: 'NERV', lcars: 'LCARS',
+    olympia: 'Olympia', transit: 'Transit', grid: 'Grid', newwave: 'New Wave', pulsar: 'Pulsar' }, MODENAME = { auto: 'Auto', light: 'Light', dark: 'Dark' };
+  var LOOKDESC = { bold: 'Flat colour, big type', clean: 'Quiet and professional', easy: 'Larger text, strongest contrast',
+    depth: 'Layers and landscape', braun: 'The quiet appliance', nerv: 'The command centre, always dark', lcars: 'The starship console, always dark',
+    olympia: 'After Aicher: the Munich games', transit: 'After Vignelli: the subway sign', grid: 'After Crouwel: the New Alphabet',
+    newwave: 'After Greiman: a desk of sheets', pulsar: 'After Saville: the pulse line' };
+  /* the component family each look borrows (app.css keys its structural overrides on data-base) */
+  var BASE = { bold: 'bold', clean: 'clean', easy: 'easy', depth: 'clean', braun: 'clean', pulsar: 'clean', newwave: 'clean',
+    nerv: 'bold', lcars: 'bold', transit: 'bold', olympia: 'bold', grid: 'bold' };
+  var DARK_ONLY = ['nerv', 'lcars'];
+  /* each look's font files (static/fonts): preloaded for the active look only, the rest load when a look is chosen */
+  var LOOKFONTS = { bold: ['londrina_black.ttf', 'jost.ttf'], clean: ['ibm-plex-sans-latin-400-600.woff2'],
+    easy: ['atkinson-hyperlegible-latin-400.woff2', 'atkinson-hyperlegible-latin-700.woff2'], depth: ['instrument-sans-wdth.woff2'],
+    braun: ['archivo-wdth-wght.woff2'], nerv: ['saira-wght.woff2', 'noto-serif-700-900.woff2', 'share-tech-mono.woff2'],
+    lcars: ['antonio-wght.woff2'], olympia: ['albert-sans-wght.woff2'], transit: ['inter-latin.woff2'], grid: ['hanken-grotesk-wght.woff2'],
+    newwave: ['bricolage-grotesque-latin.woff2', 'silkscreen-400.woff2'], pulsar: ['archivo-wdth-wght.woff2', 'ibm-plex-mono-400.woff2'] };
+  /* per-device prefs, JamDash's shape {look, mode, autoSource} under Callsheet's own key (0.7.1 kept two keys) */
+  var KEY_PREFS = 'callsheet.prefs', KEY_LOOK = 'callsheet.look', KEY_MODE = 'callsheet.mode', KEY_SUN = 'callsheet.sunplace';
   var STEPS = ['About you', 'Areas', 'VIPs', 'Call times', 'Delivery', 'Review'];
   var DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   var DAYNAME = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
@@ -123,20 +142,109 @@
     document.body.style.background = cs.backgroundColor;
     document.documentElement.style.colorScheme = cs.colorScheme;
   }
+  var PREFS = (function () {
+    var p = null;
+    try { p = JSON.parse(load(KEY_PREFS) || 'null'); } catch (e) { p = null; }
+    if (!p || typeof p !== 'object') p = { look: load(KEY_LOOK), mode: load(KEY_MODE) };
+    return { look: LOOKS.indexOf(p.look) >= 0 ? p.look : 'bold', mode: MODES.indexOf(p.mode) >= 0 ? p.mode : 'auto',
+      autoSource: p.autoSource === 'sunset' ? 'sunset' : 'device' };
+  })();
+  function savePrefs() { save(KEY_PREFS, JSON.stringify({ look: PREFS.look, mode: PREFS.mode, autoSource: PREFS.autoSource })); }
+  var fontsAsked = {};
+  function loadFonts(look) {
+    (LOOKFONTS[look] || []).forEach(function (f) {
+      if (fontsAsked[f]) return;
+      fontsAsked[f] = true;
+      var l = document.createElement('link');
+      l.rel = 'preload'; l.as = 'font'; l.type = /\.ttf$/.test(f) ? 'font/ttf' : 'font/woff2'; l.crossOrigin = 'anonymous'; l.href = 'fonts/' + f;
+      document.head.appendChild(l);
+    });
+  }
+  /* sunset (Depth only, optional): worked out on this device from a place the person types in; no lookup, no HA */
+  function sunPlace() {
+    var p = null;
+    try { p = JSON.parse(load(KEY_SUN) || 'null'); } catch (e) { p = null; }
+    return p && isFinite(p.lat) && isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180 ? p : null;
+  }
+  function sunTimes(ms, lat, lon) {   /* the sunrise equation; returns [rise, set] in ms, or 'day' / 'night' near the poles */
+    var r = Math.PI / 180, n = Math.ceil(ms / 864e5 + 2440587.5 - 2451545 + 0.0008), j = n - lon / 360;
+    var m = (357.5291 + 0.98560028 * j) % 360, c = 1.9148 * Math.sin(m * r) + 0.02 * Math.sin(2 * m * r) + 0.0003 * Math.sin(3 * m * r);
+    var l = (m + c + 180 + 102.9372) % 360, jt = 2451545 + j + 0.0053 * Math.sin(m * r) - 0.0069 * Math.sin(2 * l * r);
+    var d = Math.asin(Math.sin(l * r) * Math.sin(23.4397 * r));
+    var w = (Math.sin(-0.833 * r) - Math.sin(lat * r) * Math.sin(d)) / (Math.cos(lat * r) * Math.cos(d));
+    if (w > 1) return 'night';
+    if (w < -1) return 'day';
+    w = Math.acos(w) / r / 360;
+    return [(jt - w - 2440587.5) * 864e5, (jt + w - 2440587.5) * 864e5];
+  }
+  function sunNight() {
+    var p = sunPlace();
+    if (!p) return null;
+    var now = Date.now(), t = sunTimes(now, p.lat, p.lon);
+    if (typeof t === 'string') return t === 'night';
+    return now < t[0] || now > t[1];
+  }
+  function effMode() {
+    if (PREFS.mode === 'auto' && PREFS.look === 'depth' && PREFS.autoSource === 'sunset') {
+      var n = sunNight();
+      if (n != null) return n ? 'dark' : 'light';
+    }
+    return PREFS.mode;
+  }
+  function pressLook() {
+    press('data-set-look', PREFS.look); press('data-set-mode', PREFS.mode); press('data-set-auto', PREFS.autoSource);
+    var dk = DARK_ONLY.indexOf(PREFS.look) >= 0;
+    document.querySelectorAll('[data-set-mode=light]').forEach(function (b) {
+      b.disabled = dk;
+      if (dk) b.title = 'Always dark'; else b.removeAttribute('title');
+    });
+    document.querySelectorAll('.darknote').forEach(function (x) { x.hidden = !dk; });
+  }
+  function sunUi() {
+    var g = document.getElementById('sun-grp');
+    if (!g) return;
+    g.hidden = PREFS.look !== 'depth';
+    var sun = PREFS.autoSource === 'sunset', p = sunPlace();
+    document.getElementById('sun-place').hidden = !sun;
+    var note = document.getElementById('sun-note');
+    note.textContent = !sun ? 'Auto follows the device\'s light or dark setting.'
+      : !p ? 'Type a latitude and longitude. Until then Auto follows the device.'
+      : 'Dark from sunset to sunrise, worked out on this device' + (PREFS.mode === 'auto' ? '.' : ' when Mode is Auto.');
+  }
+  function applyMode() {
+    app.dataset.mode = effMode();
+    document.querySelectorAll('.mini,.lsw').forEach(function (m) { m.dataset.mode = PREFS.mode; });
+    syncBg(); sunUi();
+  }
   function setLook(v, persist) {
     if (LOOKS.indexOf(v) < 0) v = 'bold';
-    app.dataset.look = v; press('data-set-look', v); syncBg();
+    PREFS.look = v; app.dataset.look = v; app.dataset.base = BASE[v];
+    loadFonts(v); pressLook(); applyMode();
     document.querySelectorAll('.wi textarea').forEach(fitTa);   /* the look changes the font size */
-    if (persist) save(KEY_LOOK, v);
+    if (persist) savePrefs();
   }
   function setMode(v, persist) {
     if (MODES.indexOf(v) < 0) v = 'auto';
-    app.dataset.mode = v; press('data-set-mode', v);
-    document.querySelectorAll('.mini').forEach(function (m) { m.dataset.mode = v; });
-    syncBg();
-    if (persist) save(KEY_MODE, v);
+    PREFS.mode = v; pressLook(); applyMode();
+    if (persist) savePrefs();
   }
-  setLook(load(KEY_LOOK)); setMode(load(KEY_MODE));
+  function setAuto(v) {
+    PREFS.autoSource = v === 'sunset' ? 'sunset' : 'device'; pressLook(); applyMode(); savePrefs();
+  }
+  setLook(PREFS.look); setMode(PREFS.mode);
+  setInterval(function () { if (PREFS.autoSource === 'sunset' && PREFS.look === 'depth' && PREFS.mode === 'auto') applyMode(); }, 60000);
+  (function () {
+    var lat = document.getElementById('sun-lat'), lon = document.getElementById('sun-lon'), p = sunPlace();
+    if (!lat || !lon) return;
+    if (p) { lat.value = String(p.lat); lon.value = String(p.lon); }
+    function keep() {
+      var a = parseFloat(lat.value), b = parseFloat(lon.value);
+      if (isFinite(a) && isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180) save(KEY_SUN, JSON.stringify({ lat: a, lon: b }));
+      else { try { window.localStorage.removeItem(KEY_SUN); } catch (e) { /* storage blocked */ } }
+      applyMode();
+    }
+    lat.addEventListener('change', keep); lon.addEventListener('change', keep);
+  })();
   onMedia('(prefers-color-scheme: dark)', syncBg);
   onMedia('(max-width: 700px)', syncBg);
   /* look/mode also live in the server's settings (shared between devices) */
@@ -159,8 +267,9 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('button') : null;
     if (!t || t.disabled) return;
-    if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', app.dataset.look, t); }
-    else if (t.dataset.setMode) { setMode(t.dataset.setMode, true); pushLook('mode', app.dataset.mode, t); }
+    if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', PREFS.look, t); }
+    else if (t.dataset.setMode) { setMode(t.dataset.setMode, true); pushLook('mode', PREFS.mode, t); }
+    else if (t.dataset.setAuto) setAuto(t.dataset.setAuto);
   });
 
   /* ---------- header: route buttons, last refreshed, refresh ---------- */
@@ -1551,9 +1660,9 @@
   function applyServerLook() {
     var st = S && S.settings;
     if (!st) return;
-    if (lookPending) { st.look = app.dataset.look; st.mode = app.dataset.mode; return; }
+    if (lookPending) { st.look = PREFS.look; st.mode = PREFS.mode; return; }
     if (LOOKS.indexOf(st.look) >= 0 && st.look !== app.dataset.look) setLook(st.look, true);
-    if (MODES.indexOf(st.mode) >= 0 && st.mode !== app.dataset.mode) setMode(st.mode, true);
+    if (MODES.indexOf(st.mode) >= 0 && st.mode !== PREFS.mode) setMode(st.mode, true);
   }
   /* ---------- version check: this page's version (the meta that server.py fills in) against the server's ---------- */
   var PAGE_VERSION = (function () {
@@ -1654,7 +1763,7 @@
     foldHelp(sheet.querySelector('.step'), n);  /* 0.7.1: long help behind "?" */
     var cur = rail.querySelector('[aria-current]');
     if (cur && rail.scrollWidth > rail.clientWidth) rail.scrollLeft = Math.max(0, cur.offsetLeft - 16);
-    press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
+    pressLook();
     syncBg();
     main.querySelectorAll('.wi textarea').forEach(fitTa);
     if (focusSel) { var f = main.querySelector(focusSel); if (f) f.focus({ preventScroll: focusSel === '#wiz-title' }); }
@@ -1673,7 +1782,7 @@
   }
   function confirmRow(text, yes, onYes) {
     var err = errBox(), yesB, noB;
-    yesB = btn('btn danger', yes, null, function () { onYes(yesB, noB, err); });
+    yesB = btn('btn danger critical', yes, null, function () { onYes(yesB, noB, err); });
     noB = btn('btn', 'Cancel', { 'data-fk': 'cancel' }, function () { var back = ui.confirm; ui.confirm = null; renderSetup('[data-fk="' + cssq('ask:' + back) + '"]'); });
     return h('div', { class: 'confirm', role: 'group', 'aria-label': text }, [h('p', null, text), h('div', { class: 'btns' }, [yesB, noB]), err]);
   }
@@ -1692,9 +1801,10 @@
     return list;
   }
   function miniTime() { return S && S.settings && S.settings.time_format === '24h' ? '09:30' : '9:30 am'; }
-  function miniCard(look, desc) {
-    return h('button', { type: 'button', class: 'lookcard', 'data-set-look': look, 'aria-pressed': String(app.dataset.look === look) },
-      h('span', { class: 'app mini', 'data-look': look, 'data-mode': app.dataset.mode }, [
+  function miniCard(look) {
+    var desc = LOOKDESC[look];
+    return h('button', { type: 'button', class: 'lookcard', 'data-set-look': look, 'aria-pressed': String(PREFS.look === look) },
+      h('span', { class: 'app mini', 'data-look': look, 'data-base': BASE[look], 'data-mode': PREFS.mode }, [
         h('span', { class: 'm-head' }, [h('span', { class: 'm-word' }, 'Daily Brief'), h('span', { class: 'm-date' }, 'Wed 28 Oct')]),
         h('span', { class: 'm-row' }, [h('span', { class: 'm-time' }, miniTime()), h('span', null, 'Daily stand-up'), h('span', { class: 'm-tag a2' }, 'CO. A')]),
         h('span', { class: 'm-name' }, LOOKNAME[look]), h('span', { class: 'm-desc' }, desc)]));
@@ -1744,14 +1854,16 @@
       h('div', { class: 'lookpick' }, [
         h('div', { class: 'field', role: 'group', 'aria-labelledby': 'lbl-looks', 'data-errhost': '' }, [
           h('span', { class: 'label', id: 'lbl-looks' }, 'Look'),
-          h('div', { class: 'looks' }, [miniCard('bold', 'Flat colour, big type'), miniCard('clean', 'Quiet and professional'),
-            miniCard('easy', 'Larger text, strongest contrast')]), errBox()]),
+          h('h3', { class: 'lookgrp' }, 'Callsheet'), h('div', { class: 'looks' }, OWN_LOOKS.map(miniCard)),
+          h('h3', { class: 'lookgrp' }, 'Jam looks'), h('div', { class: 'looks' }, JAM_LOOKS.map(miniCard)), errBox()]),
         h('div', { class: 'field', role: 'group', 'aria-labelledby': 'lbl-modes', 'data-errhost': '' }, [
           h('span', { class: 'label', id: 'lbl-modes' }, 'Mode'),
           h('div', { class: 'chips' }, MODES.map(function (m) {
-            return h('button', { type: 'button', class: 'chip', 'data-set-mode': m, 'aria-pressed': String(app.dataset.mode === m) }, MODENAME[m]);
+            return h('button', { type: 'button', class: 'chip', 'data-set-mode': m, 'aria-pressed': String(PREFS.mode === m),
+              disabled: m === 'light' && DARK_ONLY.indexOf(PREFS.look) >= 0 }, MODENAME[m]);
           })), errBox(),
-          h('p', { class: 'note' }, 'Auto follows your device.')])])];
+          h('p', { class: 'note darknote', hidden: DARK_ONLY.indexOf(PREFS.look) < 0 }, 'NERV and LCARS are always dark.'),
+          h('p', { class: 'note' }, 'Auto follows your device (Depth can follow sunset: Look, at the top). The look is kept for you and on this device.')])])];
   }
 
   /* step 2: areas */
@@ -2791,7 +2903,7 @@
     var timesSum = [morning ? morning.time + ' brief' + onDays(morning) : 'No morning brief',
       checks.length ? checks.map(function (c) { return c.time + onDays(c); }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') : 'no check-ins'].join(' · ');
     var lines = [
-      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
+      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[PREFS.look] + ', ' + MODENAME[PREFS.mode]].filter(Boolean).join(' · '),
       [S.areas.map(function (a) { return a.name; }).join(', '),
         S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
         nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean).join(' · '),
@@ -3447,7 +3559,7 @@
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
-    press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
+    pressLook();
     syncBg();
     var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
     if (f) f.focus({ preventScroll: !focusSel });
@@ -3718,7 +3830,7 @@
   function knWipe(st) {
     if (!KN.wipe) return btn('tbtn', 'Delete the index', { 'data-fk': 'kn-wipe' }, function () { KN.wipe = true; renderKnow('[data-fk="kn-wipe-no"]'); });
     var err = errBox(), yes, no, text = 'Delete the index? Everything Callsheet read is removed from this box. Your mail, calendars, Slack, Drive and notes are not touched.';
-    yes = btn('btn danger', 'Delete the index', { 'data-fk': 'kn-wipe-yes' }, function () {
+    yes = btn('btn danger critical', 'Delete the index', { 'data-fk': 'kn-wipe-yes' }, function () {
       run([yes, no], err, function () { return api('DELETE', 'api/index', { confirm: st.wipe_token }); }, function () { KN.wipe = false; KN.fresh = true; KN.est = {}; showKnow('[data-fk="kn-start"]'); });
     });
     no = btn('btn', 'Cancel', { 'data-fk': 'kn-wipe-no' }, function () { KN.wipe = false; renderKnow('[data-fk="kn-wipe"]'); });
@@ -3745,7 +3857,7 @@
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
-    press('data-set-look', app.dataset.look); press('data-set-mode', app.dataset.mode);
+    pressLook();
     syncBg();
     var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
     if (f) f.focus({ preventScroll: !!keep });
@@ -4203,7 +4315,7 @@
       })),
       CH.clearAsk ? h('div', { class: 'cclear', role: 'group', 'aria-label': 'Delete all chats' }, [
         h('p', null, 'Delete all chats? They can’t be brought back.'),
-        h('button', { type: 'button', class: 'act', 'data-cclearyes': '1' }, 'Delete all'),
+        h('button', { type: 'button', class: 'act critical', 'data-cclearyes': '1' }, 'Delete all'),
         h('button', { type: 'button', class: 'tbtn', 'data-cclearno': '1' }, 'Cancel')])
         : h('p', { class: 'fine' }, ['Chats stay on this box for ' + ((ov && ov.retention_days) || 30) + ' days. ',
           h('button', { type: 'button', class: 'tbtn', 'data-cclear': '1' }, 'Clear all')])]) : null;
@@ -4510,7 +4622,7 @@
     });
     var clrErr = errBox(), clr;
     if (CHS_CLEAR) {
-      var yes = btn('btn danger', 'Delete all chats', { 'data-fk': 'ch-clryes' }, function () {
+      var yes = btn('btn danger critical', 'Delete all chats', { 'data-fk': 'ch-clryes' }, function () {
         run([yes], clrErr, function () { return api('DELETE', 'api/chat'); }, function () {
           CHS_CLEAR = false; CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.ov = null; CH.items = {};
           chatSetupRender('ch-clr');

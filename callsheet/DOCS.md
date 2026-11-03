@@ -392,6 +392,21 @@ GitHub. Nothing there is written back anywhere: projects, tasks and notes are ke
   reads (`GET`) repos, commits, issues and pull requests; the token is never shown again. **Forget GitHub**
   deletes the token and everything read from it.
 
+## Looks
+
+Pick a look under **Look** in the header or in Setup > About you.
+
+- **Callsheet**: Bold, Clean and Easy read.
+- **Jam looks** (0.7.2), the same as JamDash's: Depth, Braun, NERV, LCARS, Olympia, Transit, Grid, New Wave and
+  Pulsar.
+- **Modes**: Auto follows your device's light or dark setting; Light and Dark fix it. NERV and LCARS are always dark.
+- **Depth at sunset**: with Depth and Auto, "Auto follows" can be set to **Sunset**. Type a latitude and longitude
+  (for example 51.5 and -0.1); sunrise and sunset are worked out on this device, nothing is looked up online.
+- Your look and mode are saved for you on the Callsheet server and on this device (`callsheet.prefs` in the
+  browser's storage; "follows sunset" and the place stay on this device only). Callsheet never reads JamDash's
+  setting.
+- The fonts are bundled (latin letters only) and only the current look's fonts are loaded.
+
 ## Finding your way (0.7.1)
 
 - **Setup** opens on a home page with each part's current settings and an **Edit** button. Small **?** buttons

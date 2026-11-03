@@ -28,7 +28,8 @@ DB_NAME = "callsheet.db"
 
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 READ_KEYS = ("calendar", "mail", "chat", "tasks", "writer")
-LOOKS = ("bold", "clean", "easy")
+# 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids; app.js LOOKS has the same list)
+LOOKS = ("bold", "clean", "easy", "depth", "braun", "nerv", "lcars", "olympia", "transit", "grid", "newwave", "pulsar")
 MODES = ("auto", "light", "dark")
 TIME_FORMATS = ("12h", "24h")
 CALL_LABELS = {"morning": "Morning brief", "midday": "Midday check-in", "afternoon": "Afternoon check-in"}
@@ -283,7 +284,7 @@ class Store:
                 s["skip_checkins_days_off"] = val
             elif key == "look":
                 if val not in LOOKS:
-                    raise InputError("Look must be bold, clean or easy.")
+                    raise InputError("Look must be one of: " + ", ".join(LOOKS) + ".")
                 s["look"] = val
             elif key == "time_format":
                 if val not in TIME_FORMATS:

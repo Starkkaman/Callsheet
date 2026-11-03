@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.2 ("Jam looks")
+
+- **Nine new looks**, the same ones as JamDash: Depth, Braun, NERV, LCARS, Olympia, Transit, Grid, New Wave and
+  Pulsar. Bold, Clean and Easy read are unchanged.
+- **The Look picker** (header **Look** and About you) shows a small colour swatch for each look, in two groups:
+  "Callsheet" and "Jam looks".
+- **Modes**: Auto, Light and Dark as before. NERV and LCARS are always dark, so Light is greyed out for them.
+- **Depth at sunset** (optional): in Depth, Auto can follow sunset instead of your device. Type your latitude and
+  longitude once; the time is worked out on this device, nothing is looked up online.
+- **Your look is remembered** for you (as before) and on this device, under its own Callsheet setting. Callsheet
+  doesn't read or change JamDash.
+- **Fonts** for the new looks are bundled with their licences (latin letters only). Only the fonts of the look you
+  use are loaded.
+- **Movement** is short and follows each look's style; with "reduce motion" on it is switched off.
+- In Braun the buttons that delete for good (Clear memory, Delete all chats, Delete the index) are orange.
+
 ## 0.7.1 ("Quick wins")
 
 - **Setup opens on a home page**: one card per part (About you, Areas, VIPs, Call times, Delivery) with what it's set

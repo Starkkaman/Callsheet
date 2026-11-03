@@ -12,7 +12,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 </head>
 <body>
-<div class="app" id="app" data-look="bold" data-mode="auto">
+<div class="app" id="app" data-look="bold" data-base="bold" data-mode="auto">
 
 <header class="top">
   <div class="topbar">
@@ -28,15 +28,33 @@
     <span class="err" id="refresh-err" role="alert"></span>
   </div>
   <div class="lookpanel" id="look-panel" role="region" aria-label="Look and mode" hidden>
-    <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Look</span>
-      <button type="button" class="chip" data-set-look="bold" aria-pressed="true">Bold</button>
-      <button type="button" class="chip" data-set-look="clean" aria-pressed="false">Clean</button>
-      <button type="button" class="chip" data-set-look="easy" aria-pressed="false">Easy read</button>
+    <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Callsheet</span>
+      <button type="button" class="chip lchip" data-set-look="bold" aria-pressed="true"><span class="app lsw" data-look="bold" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Bold</button>
+      <button type="button" class="chip lchip" data-set-look="clean" aria-pressed="false"><span class="app lsw" data-look="clean" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Clean</button>
+      <button type="button" class="chip lchip" data-set-look="easy" aria-pressed="false"><span class="app lsw" data-look="easy" data-base="easy" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Easy read</button>
+    </div>
+    <div class="grp" role="group" aria-labelledby="lbl-jam"><span class="label" id="lbl-jam">Jam looks</span>
+      <button type="button" class="chip lchip" data-set-look="depth" aria-pressed="false"><span class="app lsw" data-look="depth" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Depth</button>
+      <button type="button" class="chip lchip" data-set-look="braun" aria-pressed="false"><span class="app lsw" data-look="braun" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Braun</button>
+      <button type="button" class="chip lchip" data-set-look="nerv" aria-pressed="false"><span class="app lsw" data-look="nerv" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>NERV</button>
+      <button type="button" class="chip lchip" data-set-look="lcars" aria-pressed="false"><span class="app lsw" data-look="lcars" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>LCARS</button>
+      <button type="button" class="chip lchip" data-set-look="olympia" aria-pressed="false"><span class="app lsw" data-look="olympia" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Olympia</button>
+      <button type="button" class="chip lchip" data-set-look="transit" aria-pressed="false"><span class="app lsw" data-look="transit" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Transit</button>
+      <button type="button" class="chip lchip" data-set-look="grid" aria-pressed="false"><span class="app lsw" data-look="grid" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Grid</button>
+      <button type="button" class="chip lchip" data-set-look="newwave" aria-pressed="false"><span class="app lsw" data-look="newwave" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>New Wave</button>
+      <button type="button" class="chip lchip" data-set-look="pulsar" aria-pressed="false"><span class="app lsw" data-look="pulsar" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Pulsar</button>
     </div>
     <div class="grp" role="group" aria-labelledby="lbl-mode"><span class="label" id="lbl-mode">Mode</span>
       <button type="button" class="chip" data-set-mode="auto" aria-pressed="true">Auto</button>
       <button type="button" class="chip" data-set-mode="light" aria-pressed="false">Light</button>
       <button type="button" class="chip" data-set-mode="dark" aria-pressed="false">Dark</button>
+      <span class="note darknote" hidden>Always dark</span>
+    </div>
+    <div class="grp sungrp" id="sun-grp" role="group" aria-labelledby="lbl-sun" hidden><span class="label" id="lbl-sun">Auto follows</span>
+      <button type="button" class="chip" data-set-auto="device" aria-pressed="true">Device</button>
+      <button type="button" class="chip" data-set-auto="sunset" aria-pressed="false">Sunset</button>
+      <span class="sunplace" id="sun-place" hidden><label>Latitude <input class="inp" id="sun-lat" type="number" step="any" min="-90" max="90" inputmode="decimal"></label><label>Longitude <input class="inp" id="sun-lon" type="number" step="any" min="-180" max="180" inputmode="decimal"></label></span>
+      <span class="note" id="sun-note"></span>
     </div>
     <span class="err" id="look-err" role="alert"></span>
   </div>
