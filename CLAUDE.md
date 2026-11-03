@@ -43,6 +43,10 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   Tool results go back to the model as escaped `<data>` and are never instructions; answers get the same
   claim post-check as drafts. The owner expects more tools later: every new tool, and anything that writes,
   sends or fetches, needs the owner's explicit approval first, written here, and its own injection test.
+- **Chat may save memory notes, owner-pressed only (owner approved 2026-11-03).** Since 0.8.1 `propose_memory` is
+  offered only when the owner's own message asks to remember; it writes nothing. A note is saved only when the owner
+  presses Save, after `inject.instructions` and `states_decision` checks, using a one-time token tied to the chat and
+  turn. Text in mail, chat or tool results can never create or save a note.
 - **Projects (0.7.0) live in Callsheet only.** Projects, tasks and notes are stored in `callsheet.db`, never written
   to Obsidian or any account. Drafted projects and the AI's names and next steps stay "Suggested" until the owner
   adds them. "Ask about this project" scopes Chat to the project's linked index items: the scope is a filter on
