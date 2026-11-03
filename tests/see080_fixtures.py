@@ -102,15 +102,28 @@ def walk_strings(obj):
             yield from walk_strings(v)
 
 
+def _pairs(obj, skip, key=None):
+    if isinstance(obj, str):
+        yield key, obj
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if k not in skip:
+                yield from _pairs(v, skip, k)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _pairs(v, skip, key)
+
+
 BAD = ("<script", "javascript:", "data:", "<img", "‮", "​", "⁦", "onerror")
 
 
 def assert_safe(tc, obj, allow_links=("link", "mail_link")):
     """No markup, script, data: URI or invisible character anywhere in the output; links only in Callsheet's own
-    link fields (Gmail/Calendar on Google's hosts)."""
-    for s in walk_strings({k: v for k, v in obj.items() if k not in allow_links} if isinstance(obj, dict) else obj):
+    link fields (Gmail/Calendar on Google's hosts). A title is the sender's own words kept as literal text (the page
+    renders it with textContent): only invisible characters and live links are checked there."""
+    for k, s in _pairs(obj, allow_links):
         low = s.lower()
-        for b in BAD:
+        for b in (BAD[4:7] if k == "title" else BAD):
             tc.assertNotIn(b, low, s[:80])
         tc.assertNotRegex(low, r"https?://", s[:80])
     if isinstance(obj, dict):
