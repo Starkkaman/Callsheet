@@ -199,5 +199,44 @@ class Offline(unittest.TestCase):
         self.assertNotIn("fonts.googleapis", CSS + JS + HTML)
 
 
+class PhoneTargetsAndContrast(unittest.TestCase):
+    """0.7.2 follow-up: 44 x 44 px phone targets in every look, and the two Bold contrast fixes."""
+
+    def phone_block(self):
+        i = CSS.find("0.7.2: 44 px tap targets on phones")
+        self.assertGreater(i, 0)
+        j = CSS.find("@media (max-width:700px){", i)
+        return CSS[j:CSS.find("\n}", j)]
+
+    def test_hit_area_and_fields(self):
+        b = self.phone_block()
+        self.assertIn("width:max(100%,44px);height:max(100%,44px)", b)
+        self.assertIn(":is(button,a[href],summary,[role=tab])", b)   # every look: no data-look in the selector
+        self.assertNotIn("data-look", b)
+        self.assertRegex(b, r"input:not\(\[type=checkbox\],\[type=radio\],\[type=range\]\),select\)[^{]*\{min-height:44px")
+        for sel in (".ck,.np:not(.wide)){width:44px;height:44px", ".rmain,.bopen,.tline,.dfold){min-height:44px", ".btn{min-height:44px"):
+            self.assertIn(sel, b)
+
+    def test_agenda_rows_are_44_on_phones(self):
+        self.assertIn("H = phone ? 88 : 64", JS)                      # 30 minutes = 44 px
+        self.assertIn("phone ? 44 : 26", JS)
+        self.assertIn("lastPin + (phone ? 46 : 28)", JS)
+
+    def test_bold_contrast_fixes(self):
+        def lum(h):
+            c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            c = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in c]
+            return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]
+
+        def ratio(a, b):
+            x, y = sorted([lum(a), lum(b)])
+            return (y + .05) / (x + .05)
+        tok = {k: v.strip() for k, v in next(b for b in blocks(r"\.app\[data-look=bold\]") if "font-display" in b).items()}
+        self.assertGreaterEqual(ratio(tok["alert"], tok["bg"]), 4.5)        # the Delivery note (syncst.bad)
+        self.assertGreaterEqual(ratio(tok["alert"], tok["surface-2"]), 4.5)
+        self.assertEqual(tok["accent"], "#b52e14")                          # Bold's red itself is unchanged
+        self.assertIn(".app .vnav .badge{color:var(--bg)}", CSS)            # the Projects badge, every look
+
+
 if __name__ == "__main__":
     unittest.main()

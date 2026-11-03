@@ -42,7 +42,7 @@
   --fs-h3:24px;--fs-h2:27px;--fs-h1:67px;--fs-stat:42px;--fs-hero:50px;
   /* colour */
   --bg:#e3d8bd;--surface:#ece2c9;--surface-2:#e0d4b5;--text:#141210;--muted:#5c5446;--rule:#b9ab88;
-  --accent:#b52e14;--on-accent:#f4ecd8;--alert:#b52e14;--ok:#2c7a83;
+  --accent:#b52e14;--on-accent:#f4ecd8;--alert:#ac2c13;--ok:#2c7a83;
   --area-1:#e5a31b;--on-area-1:#141210;--area-2:#b52e14;--on-area-2:#f4ecd8;
   --area-3:#3f9aa5;--on-area-3:#141210;--area-4:#141210;--on-area-4:#f4ecd8;
   --sel:#141210;--on-sel:#ece2c9;
@@ -1940,5 +1940,30 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
 .lookpick .lookgrp{font-size:var(--fs-md);margin:10px 0 6px}
 .lookpick .chip:disabled{opacity:.55;cursor:default}
 @media (max-width:700px){.lookpanel .chip{min-height:44px}.lookpanel .sunplace .inp{min-height:44px}}
-/* 0.7.2: the Projects count badge sits on --alert; in the Jam looks its text is --bg (alert on bg is AA-checked in gen.py) */
-.app:not([data-look=bold],[data-look=clean],[data-look=easy]) .vnav .badge{color:var(--bg)}
+/* 0.7.2: the Projects count badge sits on --alert, so its text is --bg in every look (alert on bg is AA in every look:
+   gen.py checks the Jam looks; Bold light's alert is one deeper step for the same reason) */
+.app .vnav .badge{color:var(--bg)}
+
+/* ================= 0.7.2: 44 px tap targets on phones, every look =================
+   An invisible hit area (::after, or ::before where ::after already draws something) centred on the control,
+   at least 44 x 44 px; the visible size stays. Small controls sit above their row so the area is theirs.
+   Text fields and selects get a real 44 px height. */
+@media (max-width:700px){
+  :where(.app) :where(button,a[href],summary,[role=tab],label.sw,.cchip){position:relative}
+  .app :is(button,a[href],summary,[role=tab]):not(.np,.tbtn,.helpq,.qbtn,.ign .chip)::after,
+  .app :is(.np,.tbtn,.helpq,.qbtn)::before{
+    content:"";position:absolute;left:50%;top:50%;width:max(100%,44px);height:max(100%,44px);transform:translate(-50%,-50%);
+    background:none;border:0;box-shadow:none;clip-path:none;pointer-events:auto}
+  .app :is(.ck,.np,.helpq,.qbtn,.tbtn,.xbtn,.hbtn){z-index:1}
+  .app :is(input:not([type=checkbox],[type=radio],[type=range]),select),.app .ign .chip{min-height:44px}
+  /* stacked or wrapping controls: a hit area can't be 44 px when the rows are closer than that, so these grow */
+  .app.app :is(.chip,.sw,.act,.tbtn,.xbtn,.hbtn){padding-block:calc((44px - 1lh) / 2)}
+  .app .helpq{z-index:2;margin:11px 11px 11px 12px}
+  .app .bv :is(.ck,.np:not(.wide)){width:44px;height:44px}
+  .app .bv .np.wide{min-height:44px}
+  .app .bv :is(.rmain,.bopen,.tline,.dfold){min-height:44px}
+  .app .bv .pin .pm{min-height:44px}
+  .app .hstrip li{min-height:48px}
+  .app .ctdays .chip{min-width:44px}
+  .app .btn{min-height:44px}
+}

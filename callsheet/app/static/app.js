@@ -612,7 +612,7 @@
       hiddenLine(), doneRows()];
   }
   function timeline() {
-    var phone = isPhone(), H = phone ? 56 : 64, evs = events(), now = nowMin();
+    var phone = isPhone(), H = phone ? 88 : 64, evs = events(), now = nowMin();
     var t0 = 7 * 60, t1 = 22 * 60;
     evs.forEach(function (e) { var s = startMin(e), en = endMin(e); if (s == null) return; t0 = Math.min(t0, Math.floor(s / 60) * 60); t1 = Math.max(t1, Math.min(24 * 60, Math.ceil(en / 60) * 60)); });
     function top(m) { return (m - t0) / 60 * H; }
@@ -643,7 +643,7 @@
         cm.style.top = top(c.start) + 'px'; cm.style.height = (top(c.end) - top(c.start)) + 'px'; tc.appendChild(cm);
       }
       c.evs.forEach(function (e) {
-        var hh = Math.max(top(endMin(e)) - top(startMin(e)), 26), cl = n > 1 || !!e.clash, a = areaOf(e.area);
+        var hh = Math.max(top(endMin(e)) - top(startMin(e)), phone ? 44 : 26), cl = n > 1 || !!e.clash, a = areaOf(e.area);
         var sel = U.open && U.open.kind === 'event' && U.open.id === e.id;
         var blk = h('div', { class: 'blk ' + a.cls + (cl ? ' clash' : '') + (sel ? ' sel' : '') }, [
           h('button', { type: 'button', class: 'bopen', 'data-open': 'event:' + e.id,
@@ -662,7 +662,7 @@
     var lastPin = -100, nPins = 0;
     openReplies().map(function (r) { var t = todayTime(r); return t && t[0] >= t0 && t[0] <= t1 ? [t[0], r] : null; }).filter(Boolean)
       .sort(function (a, b) { return a[0] - b[0]; }).forEach(function (p) {
-        var r = p[1], y = Math.max(top(p[0]) - 2, lastPin + 28), rk = reasonOf(r);
+        var r = p[1], y = Math.max(top(p[0]) - 2, lastPin + (phone ? 46 : 28)), rk = reasonOf(r);
         lastPin = y; nPins++;
         var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
         var pin = h('div', { class: 'pin' + (rk && rk[0] === 'due' ? ' due' : '') + (sel ? ' sel' : '') }, [

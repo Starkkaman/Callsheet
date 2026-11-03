@@ -48,7 +48,7 @@
 - `callsheet/app/static/fonts/`: Londrina Solid, Jost (ttf), IBM Plex Sans, Atkinson Hyperlegible (woff2, latin). 0.7.2 (Jam looks, latin woff2): Instrument Sans, Archivo, Antonio, Saira, Noto Serif, Share Tech Mono, Inter, Albert Sans, Hanken Grotesk, Bricolage Grotesque, Silkscreen, IBM Plex Mono.
 - `callsheet/app/static/fonts/OFL-*.txt`: SIL OFL 1.1 licence text for each font family.
 - `tests/test_server.py`: stdlib unittest: routes, headers, versioned assets and ETag/304, app version equals config.yaml, 403 for other clients, relative and offline URLs, no HTML sinks in app.js, the icon template.
-- `tests/test_looks_072.py`: the 0.7.2 looks: look list and ids, the stored prefs shape, CSS tokens per look and mode, dark-only looks, font files with licences, no external URLs.
+- `tests/test_looks_072.py`: the 0.7.2 looks: look list and ids, the stored prefs shape, CSS tokens per look and mode, dark-only looks, font files with licences, no external URLs, the 44 px phone tap-target rules and the two Bold contrast fixes.
 - `tests/fake_google.py`: fake Google HTTP server for tests (token/revoke with PKCE checks, Gmail and Calendar reads; records requests).
 - `tests/fake_google_index.py`: the fake Google plus Gmail list/get(full), profile, Calendar pages, Drive list/export/media (scope-gated) and one-shot injected failures.
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.

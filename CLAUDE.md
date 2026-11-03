@@ -49,10 +49,27 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
 - No accounts, secrets or user data in the repo. Never print secrets.
 
 ## Design
-- Source of truth: `~/project/daily-brief/mockups/daily-brief-v3.html` (brief view) and
-  `mockups/themes.css`, approved 2026-10-28. Desktop = v3 frame A, phone (<=700px) = frame B's order.
-- Looks: Bold, Clean, Easy read; modes Auto/Light/Dark. Components use only the theme tokens at the top
-  of `app.css` (copied verbatim from themes.css; keep them in sync if the design changes).
+- Source of truth: `~/project/daily-brief/harmony/themes-harmony.css` (with `harmony.md`, and `harmony/gen.py`, which
+  generates the Jam looks' tokens and the contrast report) plus JamDash's final CSS (`~/project/jam-dash`, read-only;
+  Callsheet never reads it at runtime). The brief view's layout still follows `mockups/daily-brief-v3.html`:
+  desktop = v3 frame A, phone (<=700px) = frame B's order.
+- Looks (ids in brackets), modes Auto/Light/Dark:
+  - Callsheet: Bold (`bold`), Clean (`clean`), Easy read (`easy`).
+  - Jam looks, JamDash's ids: Depth (`depth`), Braun (`braun`), NERV (`nerv`), LCARS (`lcars`), Olympia (`olympia`),
+    Transit (`transit`), Grid (`grid`), New Wave (`newwave`), Pulsar (`pulsar`). NERV and LCARS are dark only.
+  - Components use only the theme tokens at the top of `app.css`; structure keys on `data-base` (bold|clean|easy).
+- Contrast (the deeper-step rule): text and text-bearing fills meet WCAG AA (4.5:1, 3:1 for large text); where a
+  look's colour falls short, use a deeper step of it for text-bearing fills and keep the original colour for dots,
+  bars, marks and focus wherever it reaches 3:1. Phone targets are at least 44 x 44 px in every look.
+- Design principles (design-audit-2026-11.md), one check each:
+  1. One loud button: one job per screen, one filled button; the rest outlined or plain text.
+  2. Say it once: a heading and at most one sentence; help hides behind "?"; let values speak.
+  3. Defaults first: works before Setup; each setting in one place; rare ones in one closed Advanced drawer.
+  4. Space groups, lines separate: spacing 4, 8, 12, 16, 24, 32 px; rules only where space can't do it.
+  5. Three sizes a screen: display face for the one headline and big numbers, body face for reading, small caps for
+     rare labels; targets 24 px, 44 px on phones.
+  6. Make the end feel good: design the peaks, celebrate once and briefly, never guilt.
+  7. Motion explains: 150 to 350 ms, cause and effect only, nothing loops, reduced motion turns it off, sound opt-in.
 - Plain words in the UI, no film-production jargon (Areas, VIPs, Review).
 
 ## Test

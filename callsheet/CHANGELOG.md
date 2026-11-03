@@ -15,6 +15,11 @@
   use are loaded.
 - **Movement** is short and follows each look's style; with "reduce motion" on it is switched off.
 - In Braun the buttons that delete for good (Clear memory, Delete all chats, Delete the index) are orange.
+- **Easier to tap on phones**, in every look: every button, chip, link and field is at least 44 by 44 pixels to
+  touch. Small controls keep their size and get an invisible touch area; rows, chips, fields and the Agenda's
+  half-hour blocks are a little taller.
+- **Easier to read**: the Projects count badge in Bold dark, and Bold's red warning text on the light background,
+  now have enough contrast.
 
 ## 0.7.1 ("Quick wins")
 
