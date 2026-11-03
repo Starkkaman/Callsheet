@@ -392,6 +392,32 @@ GitHub. Nothing there is written back anywhere: projects, tasks and notes are ke
   reads (`GET`) repos, commits, issues and pull requests; the token is never shown again. **Forget GitHub**
   deletes the token and everything read from it.
 
+## See everything (0.8.0)
+
+Rules only: nothing new goes to the AI writer, and Callsheet never answers, books or sends anything for you.
+
+- **Invites to answer** (Agenda): invites on your calendars you haven't answered (next 60 days) are marked
+  **Invite · not answered**, with **Answer in Google Calendar**. Invites that only reached a mailbox whose calendar
+  Callsheet doesn't read show from the email, dashed and marked **Unverified invite · from email**, with **Answer in
+  Gmail** (Gmail shows Yes, Maybe and No). They never count as booked and never show as a clash; today's ones also
+  sit beside the timeline under "Messages about that time". When Gmail couldn't confirm who sent an invite it says
+  **Sender not verified** and there is no answer button, only **Open the email**. Links inside calendar files are
+  shown as plain text.
+- **Calendar isn't read**: when Callsheet reads an account's mail but not its calendar, Agenda says so and **Read
+  that calendar** takes you to that account in Setup → Areas. There the account shows the same warning with one
+  button: **Choose calendars** opens the calendar ticks, or **Read its calendar** turns the calendar on and opens
+  them.
+- **Security heads-ups** (Briefing): sign-in, verification code, password and payment alerts of the last 3 days
+  always show. A look-alike address is marked "Not from <company>: the address only looks like it", never as the
+  real company. A reply from a stranger using a VIP's name is marked "Uses <name>'s name" and isn't treated as a VIP.
+- **What changed** since your last brief: new, moved and cancelled events, and new threads in your projects.
+- **Coming up**: travel, big events, deadlines, renewals, birthdays, milestones and invites in the next 60 days, in
+  **Heads up today**, **Next 2 weeks** and **Next 2 months** (5 each, then **See all**). **Got it** keeps an item
+  quiet until its next heads-up, **Remind me a week before** adds one, **Not big** keeps it in the list without
+  heads-ups. Each has Undo.
+- **Sorted for you**: Promos, Updates and No reply needed of the last day, with their counts; each opens its whole
+  list with links to Gmail. Nothing is hidden.
+
 ## Looks
 
 Pick a look under **Look** in the header or in Setup > About you.

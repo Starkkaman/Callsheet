@@ -331,7 +331,8 @@
     doneOpen: false, area: null, more: false, drafts: {}, toast: null, busy: false,
     legend: false,         /* 0.7.1: the reason legend unfolded behind its "?" (after first use) */
     keys: null,            /* 0.7.1: the key sheet is open: {from: the element to focus again} */
-    kcur: null             /* 0.7.1: the row J/K last moved to (a reply id) */
+    kcur: null,            /* 0.7.1: the row J/K last moved to (a reply id) */
+    sorted: null, sortAll: false, hzAll: {}   /* 0.8.0: the open Sorted for you list; Coming up's "See all" */
   };
   /* 0.7.1 quick wins, remembered on this device: the legend has been used (first tick), the day the All clear
      moment played, and which Setup help sections are unfolded */
@@ -487,10 +488,10 @@
     return h('div', { class: 'row' + (sel ? ' sel' : '') + (U.kcur === r.id ? ' kcur' : ''), 'data-row': r.id, 'data-kr': r.id }, [
       h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
       h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id, title: reasonWords(r) || null,
-        'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') }, [
+        'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') + (r.uses_name ? ', uses ' + r.uses_name + '’s name' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
-        claimMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
+        claimMark(r), nameMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
   function doneRows() {
@@ -594,11 +595,13 @@
       due[0][1].who + (due.length > 1 ? ' and ' + (due.length - 1) + ' more' : '')]));
     var clashes = evs.filter(function (e) { return e.clash; });
     if (clashes.length) gl.push(h('li', null, [h('span', { class: 'label' }, 'Clash'), h('span', { class: 'disp alert' }, clashes[0].time || ''), clashes[0].short || clashes[0].title]));
+    var ig = invGlance(); if (ig) gl.push(ig);  /* 0.8.0 */
     var nv = vipCount();
     gl.push(h('li', null, [h('span', { class: 'label' }, 'Waiting'), h('span', { class: 'disp' }, String(nRep)),
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
-    return [h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, byArea]), aside])];
+    return [h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
+      changedSection(), comingSection(), sortedSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted */
   }
   function T_replies() {
     var all = openReplies(), nNew = B.previous_at ? all.filter(function (r) { return r.new; }).length : 0;
@@ -616,6 +619,7 @@
     var phone = isPhone(), H = phone ? 88 : 64, evs = events(), now = nowMin();
     var t0 = 7 * 60, t1 = 22 * 60;
     evs.forEach(function (e) { var s = startMin(e), en = endMin(e); if (s == null) return; t0 = Math.min(t0, Math.floor(s / 60) * 60); t1 = Math.max(t1, Math.min(24 * 60, Math.ceil(en / 60) * 60)); });
+    invPins().forEach(function (p) { t0 = Math.min(t0, Math.floor(p[0] / 60) * 60); t1 = Math.max(t1, Math.min(24 * 60, Math.ceil((p[0] + 30) / 60) * 60)); });  /* 0.8.0 */
     function top(m) { return (m - t0) / 60 * H; }
     var height = top(t1);
     var ax = h('div', { class: 'col ax', 'aria-hidden': 'true' }), tc = h('div', { class: 'col tc' }), pc = h('div', { class: 'col pc' });
@@ -673,6 +677,18 @@
         pin.style.top = y + 'px';
         pc.appendChild(pin);
       });
+    /* 0.8.0: invites found only in email, pinned at their time with the messages (never in the calendar column,
+       so they are never booked and never a clash); the pin goes to the invite's card */
+    invPins().filter(function (p) { return p[0] >= t0 && p[0] <= t1; }).sort(function (a, b) { return a[0] - b[0]; }).forEach(function (p) {
+      var v = p[1], y = Math.max(top(p[0]) - 2, lastPin + (phone ? 46 : 28));
+      lastPin = y; nPins++;
+      var pin = h('div', { class: 'pin inv8pin' + (senderFailed(v) ? ' bad' : '') }, [
+        h('button', { type: 'button', class: 'pm', 'data-invgo': v.id, title: (v.when || '') + ' ' + (v.title || ''),
+          'aria-label': 'Unverified invite from email: ' + (v.title || '') + ', ' + (v.when || '') + ' (show it)' }, [
+          h('span', { class: 'ri' }, ico('mail')), h('span', { class: 'who' }, 'Invite in email'), h('span', { class: 'pt' }, v.title || '')])]);
+      pin.style.top = y + 'px';
+      pc.appendChild(pin);
+    });
     var kids = [lines, ax, h('div', { class: 'col' }, [h('div', { class: 'colh label' }, 'Calendar'), tc]),
       nPins ? h('div', { class: 'col' }, [h('div', { class: 'colh label' }, phone ? 'Messages' : 'Messages about that time'), pc]) : null];
     if (now != null && now >= t0 && now <= t1) {
@@ -692,11 +708,260 @@
   function T_agenda() {
     var evs = events();
     return [h('h2', { class: 'sec-h' }, ['Today ', h('span', { class: 'n' }, [B.date_short || '', evs.some(function (e) { return e.clash; }) ? ' · clashes in red' : ''])]),
-      headsStrip(),
-      evs.length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.'),
-      possibleSection()];
+      gapHint(), headsStrip(),  /* 0.8.0: the "calendar isn't read" hint */
+      evs.length || invPins().length ? timeline() : h('p', { class: 'empty' }, 'Nothing on your calendar today.'),
+      invSection(), possibleSection()];  /* 0.8.0: invites to answer */
   }
   function areaCheck(sum, id) { return !!(sum && Array.isArray(sum.areas_check) && sum.areas_check.indexOf(id) >= 0); }
+  /* ---------- 0.8.0 See everything: invites, "calendar isn't read", security heads-ups, What changed, Coming up
+     and Sorted for you. Rules only (gather.py and horizon.py on the server); everything is text through h(), and every
+     link is one the server built (rules.gmail_link for mail, a Calendar event's htmlLink checked by
+     gather.safe_cal_link) and passes gLink() here. Unverified invites (found only in email) never get a Calendar
+     link, never count as booked and never show as a clash. ---------- */
+  /* a link from the server's Google URL builders: https on Google's own hosts. kind 'mail' = Gmail only,
+     'cal' = a Calendar event page (never Gmail). Anything else: no link. */
+  function gLink(u, kind) {
+    var s = safeHttps(u), host = '';
+    if (!s) return null;
+    try { host = new URL(s).hostname.toLowerCase(); } catch (e) { return null; }
+    if (kind === 'mail') return host === 'mail.google.com' ? s : null;
+    return host !== 'mail.google.com' && /(^|\.)google\.com$/.test(host) ? s : null;
+  }
+  function extA(cls, href, label, aria) {
+    return h('a', { class: cls, href: href, target: '_blank', rel: 'noopener noreferrer', 'aria-label': aria || null }, label);
+  }
+  /* a mark ([code, text] from the server, or a code and a text): dashed for unverified, alert for sender doubts */
+  var MK_BAD = ['sender_fail', 'look_alike', 'uses_your_address', 'lure', 'disagree', 'uses_name'];
+  function mk8(code, text) {
+    var cls = code === 'unverified' || code === 'event_file' ? 'unv' : code === 'not_answered' ? 'inv'
+      : MK_BAD.indexOf(code) >= 0 ? 'bad' : '';
+    return h('span', { class: 'mk8' + (cls ? ' ' + cls : '') }, String(text || ''));
+  }
+  function mks(list, skip) {
+    return (Array.isArray(list) ? list : []).filter(function (m) { return Array.isArray(m) && m[1] && (!skip || skip.indexOf(m[0]) < 0); })
+      .map(function (m) { return mk8(m[0], m[1]); });
+  }
+  function hasMark(v, code) { return (v.marks || []).some(function (m) { return Array.isArray(m) ? m[0] === code : m === code; }); }
+  function nameMark(r) { return r && typeof r.uses_name === 'string' && r.uses_name ? mk8('uses_name', 'Uses ' + r.uses_name + '’s name') : null; }
+
+  /* ----- invites ----- */
+  function invites() { return B && Array.isArray(B.invites) ? B.invites.filter(function (v) { return v && typeof v === 'object'; }) : []; }
+  function invById(id) { return invites().filter(function (v) { return v.id === id; })[0] || null; }
+  function isEmailInv(v) { return v.kind !== 'calendar'; }
+  function senderFailed(v) { return v.sender === 'fail' || hasMark(v, 'sender_fail'); }
+  /* the answer link: Gmail for an invite found in email (none when Gmail's sender check failed or it is cancelled),
+     the event page for one on your calendar */
+  function invAnswer(v) {
+    if (isEmailInv(v)) return senderFailed(v) || v.status === 'cancelled' ? null : gLink(v.link, 'mail');
+    return gLink(v.link, 'cal');
+  }
+  function invCard(v) {
+    var email = isEmailInv(v), fail = email && senderFailed(v), ans = invAnswer(v);
+    var open = email && !ans ? gLink(v.mail_link, 'mail') : null;
+    var org = [v.organizer || '', v.org_addr && v.org_addr !== v.organizer ? v.org_addr : ''].filter(Boolean).join(' · ');
+    var lines = [org ? ['Organiser', org] : null, email && v.account ? ['Sent to', v.account] : null,
+      v.location ? ['Where', v.location] : null].filter(Boolean);
+    var note = !email ? null : fail ? 'Gmail couldn’t confirm who sent this. Check with them another way before you answer it or open its links.'
+      : 'Not on a calendar Callsheet reads, so it isn’t counted as booked or for clashes.';
+    return h('div', { class: 'inv8 ' + (email ? 'unv' : 'cal') + (fail ? ' bad' : ''), id: 'inv8-' + v.id, tabindex: '-1' }, [
+      h('div', { class: 'l1' }, [h('span', { class: 'ri' }, ico(email ? 'mail' : 'cal', email ? 'Invite email' : 'Calendar')),
+        h('span', { class: 'w' }, v.title || ''), h('span', { class: 'when' }, v.when || ''), tagOf(v.area)]),
+      h('div', { class: 'mks' }, mks(v.marks)),
+      lines.length ? h('dl', { class: 'ln' }, lines.map(function (l) { return [h('dt', null, l[0]), h('dd', null, l[1])]; })) : null,
+      note ? h('p', { class: 'nt' + (fail ? ' bad' : '') }, note) : null,
+      ans || open ? h('div', { class: 'acts' }, [
+        ans ? extA('act ghost', ans, email ? 'Answer in Gmail' : 'Answer in Google Calendar',
+          (email ? 'Answer in Gmail: ' : 'Answer in Google Calendar: ') + (v.title || '') + ' (opens a new tab)') : null,
+        open ? extA('tbtn', open, 'Open the email', 'Open the email: ' + (v.title || '') + ' (opens Gmail)') : null,
+        ans ? h('span', { class: 'hint' }, email ? 'Gmail shows Yes, Maybe and No. Callsheet never answers for you.' : 'Callsheet only reads.') : null]) : null]);
+  }
+  function invSection() {
+    var vs = invites();
+    if (!vs.length) return null;
+    var ne = vs.filter(isEmailInv).length;
+    return h('section', { class: 'inv8sec', 'aria-labelledby': 'inv8-h' }, [
+      h('h2', { class: 'sec-h', id: 'inv8-h' }, ['Invites to answer ', h('span', { class: 'n' }, vs.length + (ne ? ' · ' + ne + ' only in email' : ''))]),
+      h('div', { class: 'pgrid' }, vs.map(invCard))]);
+  }
+  /* email-only invites today, for the timeline's messages column: [minutes, invite] */
+  function invPins() {
+    var tz = (S && S.settings && S.settings.timezone) || undefined;
+    return invites().filter(function (v) { return isEmailInv(v) && !v.all_day && v.status !== 'cancelled' && B && v.day === B.date; }).map(function (v) {
+      var d = new Date(v.start), hm;
+      if (isNaN(d.getTime())) return null;
+      try { hm = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz }); }
+      catch (e) { hm = pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+      var m = parseClock(hm);
+      return m == null ? null : [m, v];
+    }).filter(Boolean);
+  }
+  function goInvite(id) {
+    var c = main.querySelector('#inv8-' + cssq(id));
+    if (!c) return;
+    c.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    c.focus({ preventScroll: true });
+  }
+
+  /* ----- "calendar isn't read" (the brief's cal_gaps; Setup works it out from the account itself) ----- */
+  function acctByEmail(email) {
+    var out = null;
+    ((S && S.areas) || []).forEach(function (a) { (a.accounts || []).forEach(function (x) { if (!out && x.email === email) out = x; }); });
+    return out;
+  }
+  function gapHint() {
+    var gs = B && Array.isArray(B.cal_gaps) ? B.cal_gaps.filter(function (g) { return g && g.email; }) : [];
+    if (!gs.length) return null;
+    return h('div', { class: 'gap8', role: 'note' }, gs.map(function (g) {
+      return h('div', { class: 'g1' }, [h('p', null, g.text || (g.email + ': its calendar isn’t read, so invites there show only from email.')),
+        h('button', { type: 'button', class: 'act ghost', 'data-gapgo': g.email, 'aria-label': 'Read the calendar of ' + g.email + ' (opens Setup)' }, 'Read that calendar')]);
+    }));
+  }
+  /* mirrors gather.calendar_gaps: 'area' (the area's Calendar is off), 'off' (the account's Calendar switch),
+     'none' (no calendar ticked), or null */
+  function calGap(a, acc) {
+    var reads = a.reads || {}, svc = acc.services || {};
+    if (!(reads.mail && svc.mail)) return null;
+    if (!reads.calendar) return 'area';
+    if (!svc.calendar) return 'off';
+    return (acc.calendars || []).some(function (c) { return c.selected; }) ? null : 'none';
+  }
+  function gapCard(a, acc, err) {
+    var why = calGap(a, acc);
+    if (!why) return null;
+    var fk = 'calgap:' + acc.id, first = '#cal-' + cssq(acc.id) + '-0';
+    var b = btn('btn', why === 'none' ? 'Choose calendars' : 'Read its calendar', { 'data-fk': fk }, function () {
+      ui.openCals[acc.id] = true;
+      if (why === 'none') { renderSetup((acc.calendars || []).length ? first : '[data-fk="' + cssq(fk) + '"]'); return; }
+      run([b], err, function () {
+        if (why === 'area') {
+          var r = a.reads || {};
+          return api('PATCH', 'api/areas/' + encodeURIComponent(a.id), { reads: { calendar: true, mail: !!r.mail, chat: !!r.chat, tasks: !!r.tasks, writer: r.writer !== false } });
+        }
+        return api('PATCH', 'api/accounts/' + encodeURIComponent(acc.id), { services: { calendar: true, mail: !!(acc.services || {}).mail } });
+      }, function () { return reload().then(function () { var f = main.querySelector(first); if (f) f.focus(); }); });
+    });
+    return h('div', { class: 'gap8 acct-gap', role: 'note' }, [h('div', { class: 'g1' }, [
+      h('p', null, why === 'area' ? 'Calendar is off for this area, so invites to this address show only from email.'
+        : why === 'off' ? 'Its calendar isn’t read, so invites there show only from email.'
+          : 'No calendar is ticked, so invites there show only from email.'), b])]);
+  }
+
+  /* ----- Briefing: security heads-ups (always shown) ----- */
+  function secSection() {
+    var ss = B && Array.isArray(B.security) ? B.security.filter(function (s) { return s && typeof s === 'object'; }) : [];
+    if (!ss.length) return null;
+    var n = Math.max(ss.length, parseInt(B.security_n, 10) || 0);
+    return h('section', { class: 's8 sec8', 'aria-labelledby': 's8-sec' }, [
+      h('h2', { class: 'sub-h', id: 's8-sec' }, ['Security heads-ups ', h('span', { class: 'n' }, n + ' · always shown')]),
+      h('ul', { class: 'l8' }, ss.map(function (s) {
+        var link = gLink(s.link, 'mail'), lure = hasMark(s, 'lure');
+        return h('li', { class: lure || hasMark(s, 'sender_fail') ? 'bad' : null }, [h('span', { class: 'ri' }, ico('lock')),
+          h('div', { class: 'tx' }, [h('div', { class: 't' }, [h('b', null, s.who || ''), s.subject ? ' · ' + s.subject : '']),
+            h('div', { class: 'mks' }, [mks(s.marks, ['security']), nameMark(s)])]),
+          h('div', { class: 'r' }, [s.when ? h('span', { class: 'at' }, s.when) : null,
+            link ? extA('tbtn', link, 'Open', 'Open in Gmail: ' + (s.who || '') + (s.subject ? ', ' + s.subject : '')) : null])]);
+      })),
+      n > ss.length ? h('p', { class: 'more8' }, 'And ' + (n - ss.length) + ' more in Gmail.') : null]);
+  }
+
+  /* ----- What changed since the last brief ----- */
+  function changedSection() {
+    var cs = B && Array.isArray(B.changed) ? B.changed.filter(function (c) { return c && c.text; }) : [];
+    if (!cs.length) return null;
+    return h('section', { class: 's8 chg8', 'aria-labelledby': 's8-chg' }, [
+      h('h2', { class: 'sub-h', id: 's8-chg' }, ['What changed ', h('span', { class: 'n' }, B.previous_at ? 'since ' + B.previous_at : 'since your last brief')]),
+      h('ul', { class: 'l8' }, cs.map(function (c) {
+        var cal = c.src === 'cal' || c.by === 'Calendar';
+        return h('li', { class: c.kind === 'cancelled' ? 'gone8' : null }, [h('span', { class: 'ri' }, ico(cal ? 'cal' : 'tasks', cal ? 'Calendar' : 'Projects')),
+          h('div', { class: 'tx' }, h('div', { class: 't' }, c.text)), c.by ? h('div', { class: 'r' }, h('span', { class: 'at' }, c.by)) : null]);
+      }))]);
+  }
+
+  /* ----- Coming up (horizon.build): heads up today, next 2 weeks, next 2 months; Got it, Remind me a week
+     before, Not big (POST api/horizon) ----- */
+  var HZ_DONE = { got: ['Got it.', 'Quiet until the next heads-up.'], week: ['Reminder set.', 'A heads-up a week before.'],
+    notbig: ['Not big.', 'It stays in the list, without heads-ups.'], undo: ['Back as it was.', ''] };
+  function hzRow(x) {
+    var title = x.title || '';
+    function act(a, label, pressed) {
+      return h('button', { type: 'button', class: 'tbtn', 'data-hz': x.key, 'data-hza': a, 'aria-pressed': pressed == null ? null : String(pressed),
+        'aria-label': label + ': ' + title }, label);
+    }
+    return h('li', { class: 'hz8' + (x.heads ? ' heads' : ''), 'data-hzrow': x.key }, [
+      h('div', { class: 'dd', 'aria-hidden': 'true' }, [h('b', null, x.d || ''), h('span', null, x.m || '')]),
+      h('div', { class: 'tx' }, [h('div', { class: 't' }, [title, x.big ? mk8('big', 'Big') : null, x.kind === 'unverified' ? mk8('unverified', 'Unverified invite · from email') : null]),
+        h('div', { class: 's' }, [x.kind_text, x.when, x.rel, x.src].filter(Boolean).join(' · '))]),
+      x.key ? h('div', { class: 'acts' }, [act('got', 'Got it'),
+        x.week ? h('span', { class: 'on8' }, 'Reminder a week before') : act('week', 'Remind me a week before'),
+        x.mark === 'notbig' ? h('span', { class: 'on8' }, 'Not big') : x.big || x.heads ? act('notbig', 'Not big') : null]) : null]);
+  }
+  function hzList(key, label, rows, max) {
+    if (!rows.length) return null;
+    var all = !!(U.hzAll && U.hzAll[key]), shown = all ? rows : rows.slice(0, max);
+    return h('div', { class: 'hzg' }, [h('h3', { class: 'gh8' }, [label + ' ', h('span', { class: 'n' }, String(rows.length))]),
+      h('ul', { class: 'l8 hzl' }, shown.map(hzRow)),
+      rows.length > max ? h('button', { type: 'button', class: 'tbtn', 'data-hzall': key, 'aria-expanded': String(all) }, all ? 'Show fewer' : 'See all ' + rows.length) : null]);
+  }
+  function comingSection() {
+    var cu = B && B.coming_up && typeof B.coming_up === 'object' ? B.coming_up : null;
+    if (!cu) return null;
+    var heads = Array.isArray(cu.heads) ? cu.heads : [], weeks = Array.isArray(cu.weeks) ? cu.weeks : [], months = Array.isArray(cu.months) ? cu.months : [];
+    if (!heads.length && !weeks.length && !months.length) return null;
+    var max = parseInt(cu.list_max, 10) || 5;
+    return h('section', { class: 's8 hz8sec', 'aria-labelledby': 's8-hz' }, [
+      h('h2', { class: 'sub-h', id: 's8-hz' }, ['Coming up ', h('span', { class: 'n' }, 'next 60 days')]),
+      hzList('heads', 'Heads up today', heads, max),
+      h('div', { class: 'hzcols' }, [hzList('weeks', 'Next 2 weeks', weeks, max), hzList('months', 'Next 2 months', months, max)])]);
+  }
+  function hzMark(key, action) {
+    if (!B || B.sample || !key) return;
+    var row = null;
+    var cu = B.coming_up || {};
+    ['heads', 'weeks', 'months'].forEach(function (g) { (cu[g] || []).forEach(function (x) { if (x.key === key) row = x; }); });
+    mutate(function () { return api('POST', 'api/horizon', { key: key, action: action }); }).then(function (res) {
+      if (res && res.coming_up && typeof res.coming_up === 'object') B.coming_up = res.coming_up;
+      var t = HZ_DONE[action] || HZ_DONE.undo;
+      showToast(t[0], (row ? row.title : '') + (t[1] ? ' · ' + t[1] : ''), action === 'undo' ? null : { kind: 'horizon', key: key });
+      renderBrief(action === 'undo' ? '[data-hzrow="' + cssq(key) + '"] [data-hza]' : '[data-undo]');
+    }, function (e) { renderBrief(); failToast(e); });
+  }
+
+  /* ----- Sorted for you: Promos N · Updates N · No reply needed N, each opening its whole list ----- */
+  var SORT_STEP = 30;
+  function sortedSection() {
+    var bs = B && Array.isArray(B.sorted) ? B.sorted.filter(function (b) { return b && b.key; }) : [];
+    if (!bs.length || !bs.some(function (b) { return (parseInt(b.n, 10) || 0) > 0; })) return null;
+    var open = bs.filter(function (b) { return b.key === U.sorted; })[0] || null;
+    var listId = 's8-sorted-list';
+    var bar = h('div', { class: 'srt8', role: 'group', 'aria-label': 'Sorted for you' }, bs.map(function (b) {
+      var n = parseInt(b.n, 10) || 0, on = open === b;
+      return h('button', { type: 'button', class: 'chip', 'data-sorted': b.key, 'aria-expanded': String(on), 'aria-controls': on ? listId : null, disabled: !n },
+        [b.name + ' ', h('b', null, String(n))]);
+    }));
+    var list = null;
+    if (open) {
+      var items = Array.isArray(open.items) ? open.items : [], lim = U.sortAll ? items.length : SORT_STEP, more = parseInt(open.more, 10) || 0;
+      list = h('div', { class: 'srtl', id: listId }, [
+        h('ul', { class: 'l8' }, items.slice(0, lim).map(function (it) {
+          var link = gLink(it.link, 'mail');
+          return h('li', null, [h('div', { class: 'tx' }, h('div', { class: 't' }, [h('b', null, it.who || ''), it.subject ? ' · ' + it.subject : ''])),
+            h('div', { class: 'r' }, [it.when ? h('span', { class: 'at' }, it.when) : null,
+              link ? extA('tbtn', link, 'Open', 'Open in Gmail: ' + (it.who || '') + (it.subject ? ', ' + it.subject : '')) : null])]);
+        })),
+        items.length > lim ? h('button', { type: 'button', class: 'tbtn', 'data-sortall': '1' }, 'Show all ' + items.length) : null,
+        more ? h('p', { class: 'more8' }, 'And ' + more + ' more in Gmail.') : null]);
+    }
+    return h('section', { class: 's8 srt8sec', 'aria-labelledby': 's8-srt' }, [
+      h('h2', { class: 'sub-h', id: 's8-srt' }, ['Sorted for you ', h('span', { class: 'n' }, 'counted, nothing hidden')]), bar, list]);
+  }
+  /* At a glance: invites to answer */
+  function invGlance() {
+    var vs = invites().filter(function (v) { return v.status !== 'cancelled' && v.status !== 'answered'; });
+    if (!vs.length) return null;
+    var ne = vs.filter(isEmailInv).length;
+    return h('li', null, [h('span', { class: 'label' }, 'Answer'), h('span', { class: 'disp' }, plural(vs.length, 'invite', 'invites')),
+      ne ? ne + ' only in email' : 'On your calendars']);
+  }
   /* ---------- 0.7.0 projects: the Projects tab (list, timeline, slipped, weekly review, settings) ----------
      Everything shown comes from api/projects and is rendered as text (h()). Drafted projects stay "Suggested"
      until the owner adds them; nothing here sends anything or writes outside Callsheet. */
@@ -1104,6 +1369,8 @@
       h('span', { class: 's' }, [ico(srcKind(r)), r.source || srcName(r)]), ageOf(r) ? h('span', null, ageOf(r)) : null,
       rk ? h('span', { class: 's' }, [rdot(r), rk[1]]) : null, r.new && B.previous_at ? h('span', { class: 's' }, [newDot(r), 'New']) : null])]),
     r.claim === true ? h('p', { class: 'pflag claim' }, CLAIM_NOTE) : null,
+    r.uses_name ? h('p', { class: 'pflag' }, 'Uses ' + r.uses_name + '’s name, but not the address you saved for that VIP. It isn’t treated as a VIP.') : null,  /* 0.8.0 */
+    r.sender_fail === true ? h('p', { class: 'pflag' }, 'Sender not verified: Gmail couldn’t confirm this sender.') : null,
     h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r)),
     ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
       return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);
@@ -1563,8 +1830,21 @@
       if (u.kind === 'done') unDone(u.id, '[data-open="reply:' + cssq(u.id) + '"]');
       else if (u.kind === 'suppress') unSuppress(u);
       else if (u.kind === 'dismiss') { setDismissed(u.key, false); U.toast = null; renderBrief(); }
+      else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
     }
     else if (d.toastx) { U.toast = null; renderLayer(); }
+    /* 0.8.0 */
+    else if (d.hz && d.hza) hzMark(d.hz, d.hza);
+    else if (d.hzall) { U.hzAll[d.hzall] = !U.hzAll[d.hzall]; renderBrief('[data-hzall="' + cssq(d.hzall) + '"]'); }
+    else if (d.sorted) { U.sorted = U.sorted === d.sorted ? null : d.sorted; U.sortAll = false; renderBrief('[data-sorted="' + cssq(d.sorted) + '"]'); }
+    else if (d.sortall) { U.sortAll = true; renderBrief('[data-sorted="' + cssq(U.sorted || '') + '"]'); }
+    else if (d.invgo) goInvite(d.invgo);
+    else if (d.gapgo) {
+      var ga = acctByEmail(d.gapgo);
+      ui.step = 2; ui.focusNext = ga ? '[data-fk="' + cssq('calgap:' + ga.id) + '"]' : null;
+      if (ga) ui.openCals[ga.id] = true;
+      location.hash = 'setup';
+    }
   });
   document.addEventListener('input', function (e) {
     var t = e.target;
@@ -1942,7 +2222,8 @@
           disc.textContent = 'Calendars (' + want.length + ' of ' + cals.length + ')';
         }).then(function () { if (calErr.textContent) box.checked = !!c.selected; });
       });
-      return h('li', null, [box, h('label', { for: id }, [c.summary || c.id, c.primary ? h('span', { class: 'muted' }, ' · main') : null])]);
+      /* 0.8.0: the box sits inside its label, so the whole row is the tap target ("Choose calendars" leads here) */
+      return h('li', null, h('label', { for: id, class: 'calrow' }, [box, h('span', null, [c.summary || c.id, c.primary ? h('span', { class: 'muted' }, ' · main') : null])]));
     }));
     var key = 'acct:' + acc.id;
     return h('div', { class: 'acct' }, [
@@ -1950,6 +2231,7 @@
       acc.status !== 'connected' && acc.error ? h('p', { class: 'acct-err' }, acc.error) : null,
       acc.status === 'needs_reconnect' ? h('p', { class: 'note' }, 'Use "Connect Google account" below and sign in as this account again.') : null,
       h('div', { class: 'svcs' }, [svcToggle('calendar', 'Calendar'), svcToggle('mail', 'Mail')]),
+      acc.status === 'connected' ? gapCard(a, acc, err) : null,  /* 0.8.0: "calendar isn't read" */
       err,
       h('div', { class: 'acct-f' }, [disc, ui.confirm === key ? null : askBtn(key, 'Disconnect')]),
       list, calErr,

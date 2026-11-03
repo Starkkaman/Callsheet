@@ -1988,3 +1988,94 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
   .app .ctdays .chip{min-width:44px}
   .app .btn{min-height:44px}
 }
+
+/* ================= 0.8.0 See everything (understanding-v1 frames 1 and 3; theme tokens only) =================
+   Marks (.mk8): plain = a fact, dashed = unverified (found only in email), alert = a sender doubt (sender not
+   verified, look-alike, uses a VIP's name). Invite cards on Agenda (.inv8: solid for calendar invites, dashed for
+   email-only ones), the "calendar isn't read" hint (.gap8, also in Setup's account card), and the Briefing's
+   sections (.s8: security heads-ups, What changed, Coming up, Sorted for you). */
+.mk8{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-xs);font-weight:700;line-height:1.35;padding:1px 7px;border-radius:var(--tag-radius);
+  box-shadow:inset 0 0 0 1px var(--rule);color:var(--text);background:var(--surface);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.mk8.unv{box-shadow:none;outline:1.5px dashed var(--muted);outline-offset:-1.5px}
+.mk8.inv::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.mk8.bad{color:var(--alert);box-shadow:inset 0 0 0 1px var(--alert)}
+.bv .rmain .mk8{flex:0 1 auto;max-width:38%}
+.bv .mks{display:flex;flex-wrap:wrap;gap:4px 6px}
+.bv .mks:empty{display:none}
+/* Agenda: invites to answer */
+.bv .inv8sec{margin-top:26px}
+.bv .inv8{border:var(--rule-w) solid var(--rule);border-radius:var(--radius);padding:9px 12px 10px;margin:8px 0;background:var(--surface);color:var(--text);min-width:0;display:grid;gap:6px}
+.bv .inv8.cal{box-shadow:inset 4px 0 0 var(--ok)}
+.bv .inv8.unv{border-style:dashed;border-color:var(--muted)}
+.bv .inv8.bad{border-color:var(--alert)}
+.bv .inv8:focus-visible{outline:var(--focus-w) solid var(--focus)}
+.bv .inv8 .l1{display:flex;align-items:center;gap:4px 8px;flex-wrap:wrap;font-size:var(--fs-md);min-width:0}
+.bv .inv8 .ri{display:inline-grid;place-items:center;color:var(--muted)}
+.bv .inv8 .w{font-weight:700;overflow-wrap:anywhere;min-width:0}
+.bv .inv8 .when{font-family:var(--font-display);font-weight:var(--display-weight);font-variant-numeric:tabular-nums}
+.bv .inv8 .ln{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 12px;margin:0;font-size:var(--fs-sm)}
+.bv .inv8 .ln dt{color:var(--muted);font-weight:700}
+.bv .inv8 .ln dd{margin:0;overflow-wrap:anywhere;min-width:0}
+.bv .inv8 .nt{margin:0;font-size:var(--fs-sm);color:var(--muted)}
+.bv .inv8 .nt.bad{color:var(--alert);font-weight:700}
+.bv .inv8 .acts{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap}
+.bv .inv8 .hint{font-size:var(--fs-xs);color:var(--muted)}
+.bv .pin.inv8pin{border:1.5px dashed var(--muted);border-left-width:3px}
+.bv .pin.inv8pin.bad{border-color:var(--alert)}
+/* "calendar isn't read" */
+.gap8{display:grid;gap:8px;margin:0 0 16px;padding:10px 14px;background:var(--surface-2);color:var(--text);border-left:4px solid var(--alert);border-radius:var(--radius)}
+.app .gap8 .act.ghost{background:var(--surface)}
+.gap8 .g1{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap}
+.gap8 p{margin:0;font-size:var(--fs-md);font-weight:600;flex:1 1 18em;min-width:0;overflow-wrap:anywhere}
+.acct .acct-gap{margin:10px 0 4px}
+.acct .acct-gap p{font-size:var(--fs-sm)}
+/* Briefing sections */
+.bv .s8{margin-top:22px}
+.bv .s8 .sub-h{margin-top:0}
+.bv .l8{list-style:none;margin:0;padding:0;border-bottom:var(--rule-w) solid var(--rule)}
+.bv .l8>li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:8px 0;border-top:var(--rule-w) solid var(--rule);font-size:var(--fs-md)}
+.bv .l8>li .ri{display:inline-grid;place-items:center;color:var(--muted)}
+.bv .l8>li.bad .ri{color:var(--alert)}
+.bv .l8 .tx{min-width:0;display:grid;gap:4px}
+.bv .l8 .t{overflow-wrap:anywhere}
+.bv .l8 .r{display:flex;align-items:center;gap:4px 12px;justify-content:flex-end;flex-wrap:wrap}
+.bv .l8 .at{font-size:var(--fs-sm);color:var(--muted);white-space:nowrap}
+.bv .l8>li.gone8 .t{color:var(--muted)}
+.bv .srtl .l8>li{grid-template-columns:minmax(0,1fr) auto}
+.bv .more8{margin:6px 0 0;font-size:var(--fs-sm);color:var(--muted)}
+/* Coming up */
+.bv .hzcols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}
+.bv .hzg{margin-top:10px;min-width:0}
+.bv .gh8{font-size:var(--fs-md);margin:0 0 6px;display:flex;gap:4px 8px;align-items:baseline}
+.bv .gh8 .n{font-family:var(--font-label,var(--font-body));font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
+.bv .l8>li.hz8{grid-template-columns:48px minmax(0,1fr);align-items:start}
+.bv .hz8 .dd{display:grid;justify-items:center;line-height:1;padding:6px 0;border-radius:var(--radius);background:var(--surface-2);color:var(--text)}
+.bv .hz8 .dd b{font-family:var(--font-display);font-weight:var(--display-weight);font-size:var(--fs-time);font-variant-numeric:tabular-nums}
+.bv .hz8 .dd span{font-size:var(--fs-xs);margin-top:3px}
+.bv .hz8.heads .dd{background:var(--callbox);color:var(--on-callbox)}
+.bv .hz8 .t{font-weight:700;display:flex;gap:4px 8px;flex-wrap:wrap;align-items:center}
+.bv .hz8 .s{font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}
+.bv .hz8 .acts{grid-column:2;display:flex;gap:4px 14px;flex-wrap:wrap;align-items:center}
+.bv .hz8 .on8{font-size:var(--fs-xs);font-weight:700;color:var(--muted);padding:4px 0}
+.bv .hzg>.tbtn{margin-top:4px}
+/* Sorted for you */
+.bv .srt8{display:flex;flex-wrap:wrap;gap:6px}
+.bv .srt8 .chip{box-shadow:inset 0 0 0 1px var(--rule)}
+.bv .srt8 .chip b{margin-left:4px}
+.bv .srt8 .chip[aria-expanded=true]{background:var(--sel);color:var(--on-sel);box-shadow:none}
+.bv .srt8 .chip:disabled{background:transparent;color:var(--muted)}
+.bv .srtl{margin-top:8px}
+@container pane (max-width:640px){.bv .hzcols{grid-template-columns:1fr}.bv .l8>li:not(.hz8){grid-template-columns:22px minmax(0,1fr)}.bv .l8>li:not(.hz8) .r{grid-column:2;justify-content:flex-start}
+  .bv .srtl .l8>li{grid-template-columns:minmax(0,1fr)}.bv .srtl .l8>li .r{grid-column:1}}
+@media (max-width:700px){.bv .hzcols{grid-template-columns:1fr}.bv .l8>li:not(.hz8){grid-template-columns:22px minmax(0,1fr)}.bv .l8>li:not(.hz8) .r{grid-column:2;justify-content:flex-start}
+  .bv .srtl .l8>li{grid-template-columns:minmax(0,1fr)}.bv .srtl .l8>li .r{grid-column:1}.bv .rmain .mk8{display:none}}
+/* Transit: the Briefing's 0.8.0 sections are signs like the other Briefing modules */
+.app[data-look=transit] .bv .s8{
+  --bg:var(--sign);--surface:var(--sign);--surface-2:var(--sign-2);--text:var(--sign-ink);--muted:var(--sign-muted);--rule:var(--sign-rule);
+  --alert:var(--sign-alert);--ok:var(--sign-ok);--sel:var(--sign-ink);--on-sel:var(--sign);
+  color-scheme:dark;background:var(--sign);color:var(--sign-ink);border-top:5px solid var(--sign);padding:14px 16px 12px;
+  box-shadow:inset 0 2px 0 var(--sign-ink),inset 0 0 0 1px var(--sign-hair)}
+.app[data-look=transit] .bv .s8 .l8{border-bottom:0}
+/* 0.8.0: a calendar tick's row is its label (Setup's "Choose calendars" opens this list); 44 px on phones */
+.cals .calrow{display:flex;gap:10px;align-items:center;min-width:0;overflow-wrap:anywhere;cursor:pointer}
+@media (max-width:700px){.cals .calrow{min-height:44px;flex:1}}
