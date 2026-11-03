@@ -199,8 +199,8 @@
   var KEY_TAB = 'callsheet.tab', KEY_DISMISS = 'callsheet.dismissed';
   /* 0.6.0 chat: Chat takes the place of Areas (area summaries are in Briefing, Replies has area chips) */
   var TABS = [['briefing', 'Briefing', 'Brief', 'brief'], ['replies', 'Replies', 'Replies', 'mail'], ['agenda', 'Agenda', 'Agenda', 'cal'],
-    ['chat', 'Chat', 'Chat', 'chat'], ['tasks', 'Tasks', 'Tasks', 'tasks']];
-  var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat'];
+    ['chat', 'Chat', 'Chat', 'chat'], ['projects', 'Projects', 'Projects', 'tasks']];  /* 0.7.0: Projects replaces Tasks */
+  var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat', 'projects'];
   var OLD_TABS = { areas: 'replies' };  /* 0.6.0 chat: a saved tab or #areas link from before opens Replies */
   function tabFromHash(hash) {          /* #briefing, #replies, #agenda, #chat (and the old #areas) open the brief there */
     var t = String(hash || '').replace(/^#/, '');
@@ -434,7 +434,7 @@
     gl.push(h('li', null, [h('span', { class: 'label' }, 'Waiting'), h('span', { class: 'disp' }, String(nRep)),
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
-    return [h('div', { class: 'bf' }, [h('article', null, [head, text, topEl, byArea]), aside])];
+    return [h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, byArea]), aside])];
   }
   function T_replies() {
     var all = openReplies(), nNew = B.previous_at ? all.filter(function (r) { return r.new; }).length : 0;
@@ -530,7 +530,402 @@
       possibleSection()];
   }
   function areaCheck(sum, id) { return !!(sum && Array.isArray(sum.areas_check) && sum.areas_check.indexOf(id) >= 0); }
-  var TFN = { briefing: T_briefing, replies: T_replies, agenda: T_agenda, chat: T_chat };  /* 0.6.0 chat */
+  /* ---------- 0.7.0 projects: the Projects tab (list, timeline, slipped, weekly review, settings) ----------
+     Everything shown comes from api/projects and is rendered as text (h()). Drafted projects stay "Suggested"
+     until the owner adds them; nothing here sends anything or writes outside Callsheet. */
+  var PJ = { d: null, loading: false, err: '', view: 'list', open: null, menu: null, edit: null, form: {}, rv: { step: 'slipped', i: 0 },
+    gh: { repos: null, pick: null, err: '', tok: '' }, timer: null };
+  var PJ_STATUS = { on: 'On track', behind: 'Behind', wait: 'Waiting', paused: 'Paused', sugg: 'Suggested', done: 'Finished' };
+  var PJ_KIND = { late: 'Date passed', quiet: 'Gone quiet', owe: 'You owe a reply' };
+  var PJ_REVIEW_WHEN = { mon_am: 'Monday mornings', fri_pm: 'Friday afternoons', sun_pm: 'Sunday evenings', off: 'Any time you like' };
+  var PJ_SCOPE_SUGG = ['What’s blocking this?', 'What did I promise?', 'Who’s waiting on me?'];
+  function pjLoad() {
+    if (PJ.loading) return;
+    PJ.loading = true;
+    api('GET', 'api/projects').then(function (d) { PJ.loading = false; PJ.d = d; PJ.err = ''; pjPoll(); if (U.tab === 'projects') renderBrief(); },
+      function (e) { PJ.loading = false; PJ.err = e.message; if (U.tab === 'projects') renderBrief(); });
+  }
+  function pjPoll() {
+    clearTimeout(PJ.timer); PJ.timer = null;
+    if (PJ.d && PJ.d.ai && PJ.d.ai.state === 'running') PJ.timer = setTimeout(function () { PJ.loading = false; pjLoad(); }, 2000);
+  }
+  function pjDo(method, path, body, b, after) {
+    if (b) b.disabled = true;
+    return api(method, path, body).then(function (d) {
+      if (d && d.projects) PJ.d = d;
+      PJ.err = ''; PJ.menu = null;
+      if (after) after(d);
+      pjPoll(); renderBrief();
+      return d;
+    }, function (e) { if (b) b.disabled = false; PJ.err = e.message; renderBrief(); });
+  }
+  function pjById(id) { return PJ.d ? PJ.d.projects.filter(function (p) { return p.id === id; })[0] || null : null; }
+  function pjSlip(k) { return PJ.d ? PJ.d.slipped.filter(function (x) { return x.key === k; })[0] || null : null; }
+  function sdot(st) { return h('span', { class: 'sdot ' + st, 'aria-hidden': 'true' }); }
+  function kdot(k) { return h('span', { class: 'kdot ' + k, 'aria-hidden': 'true' }); }
+  function pjGo(view) { PJ.view = view; PJ.open = null; PJ.menu = null; PJ.edit = null; renderBrief(); }
+  function pjOpen(id) { PJ.open = id; PJ.menu = null; PJ.edit = null; renderBrief(); }
+  function pjMenu(key, items) {
+    var open = PJ.menu === key;
+    return h('span', { class: 'pjm' }, [btn('np', ico('note', 'Notes and options'), { 'aria-expanded': String(open), 'aria-haspopup': 'true' },
+      function () { PJ.menu = open ? null : key; renderBrief(); }),
+    open ? h('ul', { class: 'pjpop', role: 'menu' }, items.map(function (it) {
+      return h('li', { role: 'none' }, btn('pjmi', it[0], { role: 'menuitem' }, it[1]));
+    })) : null]);
+  }
+  function projMenu(p) {
+    return pjMenu('p:' + p.id, [['Add a note for Callsheet', function () { PJ.open = p.id; PJ.menu = null; PJ.focusNotes = true; renderBrief(); }],
+      ['Not a project', function (e) { pjDo('POST', 'api/projects/' + p.id + '/not', {}, e.currentTarget); }],
+      ['Pause it', function (e) { pjDo('PATCH', 'api/projects/' + p.id, { status: 'paused' }, e.currentTarget); }],
+      ['Hide from the list', function (e) { pjDo('POST', 'api/projects/' + p.id + '/hidden', {}, e.currentTarget); }]]);
+  }
+  function slipMenu(x) {
+    function mark(a) { return function (e) { pjDo('POST', 'api/projects/slipped/' + x.key, { action: a }, e.currentTarget); }; }
+    return pjMenu('s:' + x.key, [['Add a note for Callsheet', function () { PJ.open = 'slip:' + x.key; PJ.menu = null; PJ.focusNotes = true; renderBrief(); }],
+      ["It's fine, not slipped", mark('fine')], ['Remind me next week', mark('snooze')], ['Dismiss', mark('dismiss')]]);
+  }
+  function pjRow(p) {
+    var sel = PJ.open === p.id;
+    return h('li', { class: 'row pjrow' + (sel ? ' sel' : '') }, [h('span', { class: 'scell', title: PJ_STATUS[p.status] }, sdot(p.status)),
+      btn('rmain', [h('span', { class: 'tx' }, [h('span', { class: 'who' }, p.name), h('span', { class: 'sum' }, p.next_step || (p.state === 'suggested' ? (p.why[0] || '') : 'No next step yet'))]),
+        p.short ? h('span', { class: 'nd' + (p.late ? ' late' : '') }, p.short) : null, tagOf(p.area)],
+        { 'aria-current': sel ? 'true' : null, 'aria-label': p.name + ', ' + PJ_STATUS[p.status] + (p.next_step ? ', next: ' + p.next_step : '') }, function () { pjOpen(p.id); }),
+      projMenu(p)]);
+  }
+  function pjHead() {
+    var d = PJ.d, c = d.counts, act = d.projects.filter(function (p) { return p.state === 'active' && p.set_status !== 'paused' && p.set_status !== 'done'; });
+    var views = [['list', 'List', 'Projects'], ['timeline', 'Timeline', null], ['slipped', 'Slipped', 'Slipped'], ['review', 'Weekly review', 'Review']];
+    return [h('div', { class: 'pjhd' }, [h('h2', { class: 'sec-h' }, ['Projects ', h('span', { class: 'n' }, plural(act.length, 'active', 'active') + (d.today_label ? ' · ' + d.today_label : ''))]),
+      h('span', { class: 'sp' }), btn('tbtn', 'Settings', { 'aria-pressed': String(PJ.view === 'setup') }, function () { pjGo('setup'); })]),
+    h('div', { class: 'live' }, [h('span', { class: 'livedot', 'aria-hidden': 'true' }), 'From your notes, mail, calendar' + (d.github && d.github.repos.length ? ' and GitHub' : '') + '.',
+      d.draft ? h('span', null, ['Found ', h('b', null, String(d.draft.found)), ' ' + (d.draft.found === 1 ? 'project' : 'projects') + ' last time.']) : null]),
+    h('div', { class: 'vnav', role: 'group', 'aria-label': 'Views' }, views.map(function (v) {
+      var on = PJ.view === v[0];
+      return h('button', { type: 'button', class: 'chip' + (v[2] ? '' : ' d-only'), 'aria-pressed': String(on), 'data-pjv': v[0] }, [
+        h('span', { class: 'd-only' }, v[1]), h('span', { class: 'p-only' }, v[2] || v[1]),
+        v[0] === 'slipped' && c.slipped ? h('span', { class: 'badge', 'aria-label': c.slipped + ' slipped' }, String(c.slipped)) : null,
+        v[0] === 'review' && d.review.ready ? h('span', { class: 'badge', 'aria-label': 'ready' }, '1') : null]);
+    }))];
+  }
+  function pjList() {
+    var d = PJ.d, c = d.counts, top = d.slipped.filter(function (x) { return !x.done; })[0];
+    var act = d.projects.filter(function (p) { return p.state === 'active' && p.set_status !== 'paused' && p.set_status !== 'done'; });
+    var sug = d.projects.filter(function (p) { return p.state === 'suggested'; });
+    var paused = d.projects.filter(function (p) { return p.state === 'active' && (p.set_status === 'paused' || p.set_status === 'done'); });
+    var tools = h('div', { class: 'pjtools' }, [btn('act ghost', d.draft ? 'Look for projects again' : 'Find projects', null, function (e) { pjDo('POST', 'api/projects/build', {}, e.currentTarget); }),
+      sug.length ? btn('act ghost', d.ai && d.ai.state === 'running' ? 'Asking the AI…' : 'Suggest names and next steps', { disabled: d.ai && d.ai.state === 'running' }, function (e) { pjDo('POST', 'api/projects/suggest', {}, e.currentTarget); }) : null,
+      btn('act ghost', 'New project', null, function () { PJ.edit = 'new'; PJ.form = { name: '', area: '', status: 'on', next_step: '', next_due: '', people: '' }; PJ.open = null; renderBrief(); })]);
+    var aiNote = d.ai && d.ai.state === 'error' ? h('p', { class: 'err', role: 'alert' }, d.ai.error) : d.ai && d.ai.state === 'done' ?
+      h('p', { class: 'fhint' }, 'Suggestions by ' + (d.ai.by || 'the AI') + ': ' + plural(d.ai.count, 'project', 'projects') + (d.ai.dropped ? ', ' + d.ai.dropped + ' left out (they looked like instructions or links)' : '') + '. Nothing changes until you add it.') : null;
+    return [c.slipped && top ? h('p', { class: 'slipsum' }, [kdot(top.kind), h('b', null, plural(c.slipped, 'thing slipped', 'things slipped')), h('span', { class: 'sp' }, ' · ' + top.title),
+      btn('tbtn', 'See them', null, function () { pjGo('slipped'); })]) : null,
+    tools, aiNote,
+    h('h3', { class: 'grp-h' }, ['Projects ', h('span', { class: 'n' }, act.length + ' active · late first')]),
+    act.length ? h('ul', { class: 'list' }, act.map(pjRow)) : h('p', { class: 'empty' }, sug.length ? 'Add a suggested project below, or make a new one.' : 'No projects yet. Find projects, or make a new one.'),
+    sug.length ? [h('h3', { class: 'grp-h' }, ['Suggested ', h('span', { class: 'n' }, sug.length + ' · found in your notes and threads')]),
+      h('ul', { class: 'list dashed' }, sug.map(pjRow))] : null,
+    paused.length ? [h('h3', { class: 'grp-h' }, ['Paused ', h('span', { class: 'n' }, String(paused.length))]), h('ul', { class: 'list' }, paused.map(pjRow))] : null,
+    d.not.length ? h('p', { class: 'fhint' }, ['Not projects: ', d.not.map(function (n, i) { return [i ? ', ' : '', btn('tbtn', n.name, { title: 'Bring it back' }, function (e) { pjDo('POST', 'api/projects/' + n.id + '/undo', {}, e.currentTarget); })]; })]) : null];
+  }
+  function pjField(label, key, attrs, full) {
+    var a = attrs || {}, el;
+    if (a.options) {
+      el = h('select', { class: 'inp', id: 'pjf-' + key }, a.options.map(function (o) { return h('option', { value: o[0], selected: String(PJ.form[key] || '') === o[0] ? true : null }, o[1]); }));
+    } else {
+      el = h('input', { class: 'inp', id: 'pjf-' + key, type: a.type || 'text', maxlength: a.max || '160', placeholder: a.ph || null });
+      el.value = PJ.form[key] || '';
+    }
+    on(el, 'input', function () { PJ.form[key] = el.value; }); on(el, 'change', function () { PJ.form[key] = el.value; });
+    return h('div', { class: 'ef' + (full ? ' full' : '') }, [h('label', { for: 'pjf-' + key }, label), el]);
+  }
+  function pjEditForm(p) {
+    var areas = [['', 'No area']].concat((B.areas || []).map(function (a) { return [a.id, a.name]; }));
+    var stats = (PJ.d.statuses || []).map(function (s) { return s; });
+    var body = function () {
+      return { name: PJ.form.name, area: PJ.form.area || '', status: PJ.form.status || 'on', next_step: PJ.form.next_step || '', next_due: PJ.form.next_due || '',
+        people: String(PJ.form.people || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean) };
+    };
+    var save = p ? (p.state === 'suggested' ? 'Save and add project' : 'Save') : 'Add project';
+    return h('div', { class: 'pjedit' }, [h('div', { class: 'efg' }, [pjField('Project', 'name', { max: '60' }, true), pjField('Area', 'area', { options: areas }), pjField('Status', 'status', { options: stats }),
+      pjField('Next step', 'next_step', { max: '140' }, true), pjField('By', 'next_due', { type: 'date' }), pjField('People', 'people', { ph: 'Names, separated by commas' })]),
+    h('div', { class: 'eacts' }, [btn('act', save, null, function (e) {
+      var b = body();
+      if (!p) pjDo('POST', 'api/projects', b, e.currentTarget, function () { PJ.edit = null; });
+      else if (p.state === 'suggested') pjDo('POST', 'api/projects/' + p.id + '/accept', b, e.currentTarget, function () { PJ.edit = null; });
+      else pjDo('PATCH', 'api/projects/' + p.id, b, e.currentTarget, function () { PJ.edit = null; });
+    }), btn('tbtn', 'Cancel', null, function () { PJ.edit = null; renderBrief(); })])]);
+  }
+  function pjStartEdit(p) {
+    var ai = p.ai || {};
+    PJ.edit = p.id;
+    PJ.form = { name: p.state === 'suggested' && ai.name && !ai.warning ? ai.name : p.name, area: p.area || '', status: p.set_status === 'paused' && p.state === 'suggested' ? 'on' : p.set_status,
+      next_step: p.state === 'suggested' && ai.next_step && !ai.warning ? ai.next_step : p.next_step, next_due: p.next_due || '', people: (p.people || []).join(', ') };
+    renderBrief();
+  }
+  function pjAsk(p) {
+    clearTimeout(CH.timer); CH.timer = null;
+    CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.input = ''; CH.err = ''; CH.earlier = false; CH.scroll = true;
+    CH.scope = { project: p.id, name: p.name };
+    setTab('chat');
+  }
+  function pjNotes(val, saveFn, label) {
+    var ta = h('textarea', { class: 'inp', id: 'pj-notes', rows: '3', maxlength: '2000', 'aria-label': label || 'Notes' });
+    ta.value = val || '';
+    return [h('h3', { class: 'plab' }, 'Notes'), ta, h('div', { class: 'eacts' }, btn('tbtn', 'Save notes', null, function (e) { saveFn(ta.value, e.currentTarget); }))];
+  }
+  function pjPanel(p) {
+    var sug = p.state === 'suggested', ai = p.ai || null;
+    if (PJ.edit === p.id) return [h('div', { class: 'phd' }, [h('h2', { id: 'pj-ptitle' }, sug ? 'Edit, then add' : 'Edit project')]), pjEditForm(p)];
+    return [h('div', { class: 'phd' }, [h('h2', { id: 'pj-ptitle' }, p.name), h('div', { class: 'pmeta' }, [h('span', { class: 'pjst' }, [sdot(p.status), PJ_STATUS[p.status]]), tagOf(p.area),
+      p.last_label ? h('span', null, 'Last activity ' + p.last_label) : null])]),
+    sug ? h('div', { class: 'sugbox' }, [h('span', { class: 'label' }, 'Suggested by Callsheet, because of'), h('ul', null, p.why.map(function (w) { return h('li', null, w); })),
+      ai ? h('p', { class: 'aisug' }, ['The AI suggests: ', h('b', null, ai.name || p.name), ai.next_step ? ' · Next: ' + ai.next_step : '']) : null,
+      ai && ai.warning ? h('p', { class: 'pflag claim' }, ai.warning) : null,
+      h('div', { class: 'dbtns' }, [btn('act', 'Add project', null, function (e) { pjDo('POST', 'api/projects/' + p.id + '/accept', ai && !ai.warning ? { use_ai: true } : {}, e.currentTarget); }),
+        btn('act ghost', 'Edit first', null, function () { pjStartEdit(p); }),
+        btn('tbtn', 'Not a project', null, function (e) { pjDo('POST', 'api/projects/' + p.id + '/not', {}, e.currentTarget, function () { PJ.open = null; }); })])]) : null,
+    h('div', { class: 'nextb' }, [h('span', { class: 'label' }, 'Next step'), h('span', { class: 'what' }, p.next_step || 'No next step yet'),
+      p.next_label ? h('span', { class: 'when' + (p.late ? ' late' : '') }, p.next_label) : null]),
+    p.milestones.length ? [h('h3', { class: 'plab' }, 'Dates'), h('ul', { class: 'mst' }, p.milestones.map(function (m) {
+      return h('li', { class: m.state || null }, [h('span', { class: 'd' }, m.label), h('span', { class: 'm', 'aria-hidden': 'true' }), h('span', { class: 'w' }, [m.title,
+        m.state === 'missed' ? h('span', { class: 's' }, 'Passed') : m.state === 'next' ? h('span', { class: 's' }, 'Next') : m.state === 'done' ? h('span', { class: 's' }, 'Done') : null])]);
+    }))] : null,
+    h('h3', { class: 'plab' }, 'Tasks'),
+    p.tasks.length ? h('ul', { class: 'tlist list' }, p.tasks.map(function (t) {
+      return h('li', { class: 'row' + (t.done ? ' isdone' : '') }, [btn('ck', h('span', { class: 'bx' }), { 'aria-pressed': String(t.done), 'aria-label': (t.done ? 'Done: ' : 'Mark done: ') + t.text },
+        function (e) { pjDo('PATCH', 'api/projects/' + p.id + '/tasks/' + t.id, { done: !t.done }, e.currentTarget); }),
+      h('span', { class: 'rmain' }, [h('span', { class: 'tx' }, h('span', { class: 'sum' }, t.text)), t.due_label ? h('span', { class: 'nd' + (t.late ? ' late' : '') }, t.due_label) : null]),
+      pjMenu('t:' + t.id, [['Add a note for Callsheet', function () { PJ.menu = null; PJ.focusNotes = true; renderBrief(); }],
+        ['Dismiss', function (e) { pjDo('DELETE', 'api/projects/' + p.id + '/tasks/' + t.id, undefined, e.currentTarget); }]])]);
+    })) : h('p', { class: 'fhint' }, 'No tasks yet.'),
+    p.suggested_tasks.length ? h('div', { class: 'sugbox small' }, [h('span', { class: 'label' }, 'Found in your note'), h('ul', null, p.suggested_tasks.map(function (t) {
+      return h('li', null, [t.text + (t.due_label ? ' · ' + t.due_label : ''), ' ', btn('tbtn', 'Add', { 'aria-label': 'Add task: ' + t.text }, function (e) { pjDo('POST', 'api/projects/' + p.id + '/tasks', { skey: t.skey }, e.currentTarget); })]);
+    }))]) : null,
+    p.state === 'active' ? pjAddTask(p) : null,
+    p.people.length ? [h('h3', { class: 'plab' }, 'People'), h('div', { class: 'ppl' }, p.people.map(function (n) { return h('span', { class: 'pchip' }, n); }))] : null,
+    p.chips.length ? [h('h3', { class: 'plab' }, 'From'), h('div', { class: 'srcl' }, p.chips.map(function (c) {
+      var kids = [ico(SRC_ICON[c.source] || 'note'), h('span', null, c.title), h('small', null, c.small)];
+      var u = safeHttps(c.url);
+      return u ? h('a', { class: 'schip', href: u, target: '_blank', rel: 'noopener noreferrer' }, kids) : h('span', { class: 'schip' }, kids);
+    }))] : null,
+    p.last_week && p.last_week.length ? [h('h3', { class: 'plab' }, 'Last week'), h('ul', { class: 'lastwk' }, p.last_week.map(function (l) {
+      return h('li', null, [h('span', { class: 'ri' }, ico(SRC_ICON[l.source] || 'note')), l.text]);
+    }))] : null,
+    h('div', { class: 'eacts' }, [p.state === 'active' ? btn('act', [ico('chat'), 'Ask about this project'], null, function () { pjAsk(p); }) : null,
+      btn('act ghost', 'Edit', null, function () { pjStartEdit(p); })]),
+    p.state === 'active' ? pjNotes(p.notes, function (v, b) { pjDo('PATCH', 'api/projects/' + p.id, { notes: v }, b); }) : null];
+  }
+  function pjAddTask(p) {
+    var inp = h('input', { class: 'inp', id: 'pj-task', type: 'text', maxlength: '160', placeholder: 'A task for this project' });
+    var due = h('input', { class: 'inp', id: 'pj-task-due', type: 'date', 'aria-label': 'By' });
+    inp.value = PJ.form.task || ''; on(inp, 'input', function () { PJ.form.task = inp.value; });
+    return h('div', { class: 'addt' }, [h('label', { class: 'sr', for: 'pj-task' }, 'New task'), inp, due,
+      btn('act ghost', 'Add a task', null, function (e) { pjDo('POST', 'api/projects/' + p.id + '/tasks', { text: inp.value, due: due.value || '' }, e.currentTarget, function () { PJ.form.task = ''; }); })]);
+  }
+  function slipRow(x) {
+    var sel = PJ.open === 'slip:' + x.key;
+    return h('li', { class: 'row pjrow' + (sel ? ' sel' : '') + (x.done ? ' isdone' : '') }, [h('span', { class: 'scell', title: PJ_KIND[x.kind] }, kdot(x.kind)),
+      btn('rmain', [h('span', { class: 'tx' }, [h('span', { class: 'sum' }, x.title)]), h('span', { class: 'nd' + (x.kind === 'late' ? ' late' : '') }, x.ago), tagOf(x.area)],
+        { 'aria-current': sel ? 'true' : null, 'aria-label': PJ_KIND[x.kind] + ': ' + x.title + ', ' + x.ago }, function () { pjOpen('slip:' + x.key); }),
+      slipMenu(x)]);
+  }
+  function pjSlipped() {
+    var d = PJ.d, xs = d.slipped;
+    var groups = [['late', 'Date passed'], ['quiet', 'Gone quiet'], ['owe', 'You owe a reply']];
+    return [h('div', { class: 'legend' }, groups.map(function (g) { return h('span', null, [kdot(g[0]), g[1]]); })),
+      xs.length ? groups.map(function (g) {
+        var these = xs.filter(function (x) { return x.kind === g[0]; });
+        return these.length ? [h('h3', { class: 'grp-h' }, [g[1] + ' ', h('span', { class: 'n' }, String(these.length))]), h('ul', { class: 'list' }, these.map(slipRow))] : null;
+      }) : h('p', { class: 'empty' }, 'Nothing slipped. Callsheet looks again when your mail, chat and notes update.'),
+      h('p', { class: 'fhint' }, 'Quiet after ' + d.settings.quiet_days + ' days; a reply you owe after ' + plural(d.settings.owe_days, 'day', 'days') + '. Change it in Settings.')];
+  }
+  function slipPanel(x) {
+    var proj = x.project ? pjById(x.project) : null, u = safeHttps(x.url);
+    return [h('div', { class: 'phd' }, [h('h2', { id: 'pj-ptitle' }, x.title), h('div', { class: 'pmeta' }, [h('span', { class: 'pjst' }, [kdot(x.kind), PJ_KIND[x.kind]]), h('span', null, x.ago), tagOf(x.area)])]),
+      x.quote ? [h('h3', { class: 'plab' }, 'Exact words'), h('blockquote', { class: 'quote' }, x.quote), h('p', { class: 'fhint' }, (x.qs || '') + ' · quoted exactly')]
+        : [h('h3', { class: 'plab' }, 'What Callsheet saw'), h('p', null, x.seen || '')],
+      proj ? [h('h3', { class: 'plab' }, 'Project'), btn('pchip', [sdot(proj.status), proj.name], null, function () { PJ.view = 'list'; pjOpen(proj.id); })] : null,
+      h('div', { class: 'eacts' }, [x.done ? btn('act ghost', 'Reopen', null, function (e) { pjDo('POST', 'api/projects/slipped/' + x.key, { action: 'reopen' }, e.currentTarget); })
+        : btn('act', 'Mark done', null, function (e) { pjDo('POST', 'api/projects/slipped/' + x.key, { action: 'done' }, e.currentTarget); }),
+      u ? h('a', { class: 'act ghost', href: u, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + (x.open || 'its app')) : null]),
+      pjNotes(x.note, function (v, b) { pjDo('POST', 'api/projects/slipped/' + x.key, { action: 'note', note: v }, b); }, 'A note about this')];
+  }
+  function pjDay(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? Date.UTC(+p[0], +p[1] - 1, +p[2]) / 864e5 : null; }
+  function pjTimeline() {
+    var d = PJ.d, tl = d.timeline, start = pjDay(tl.start), act = d.projects.filter(function (p) { return p.state === 'active' && p.set_status !== 'done'; });
+    function pos(iso) { var x = pjDay(iso); return x == null ? null : (x - start) / tl.days * 100; }
+    function inside(v) { return v != null && v >= 0 && v <= 100; }
+    var rows = act.map(function (p) {
+      var ms = p.milestones.filter(function (m) { return inside(pos(m.date)); });
+      var ps = ms.map(function (m) { return pos(m.date); }), lo = ps.length ? Math.min.apply(null, ps) : null, hi = ps.length ? Math.max.apply(null, ps) : null;
+      var sel = PJ.open === p.id;
+      return h('div', { class: 'gt-r ' + p.status + (sel ? ' sel' : '') }, [btn('gt-l', [sdot(p.status), h('span', null, p.name)], { 'aria-label': p.name + ', ' + PJ_STATUS[p.status] }, function () { pjOpen(p.id); }),
+        h('div', { class: 'trk' }, [lo != null && hi > lo ? h('span', { class: 'gbar' + (p.set_status === 'paused' ? ' dash' : ''), style: 'left:' + lo.toFixed(2) + '%;width:' + (hi - lo).toFixed(2) + '%' }) : null,
+          ms.map(function (m) {
+            return h('span', { class: 'gms ' + (m.state || ''), style: 'left:' + pos(m.date).toFixed(2) + '%', title: m.label + ': ' + m.title, role: 'img', 'aria-label': m.label + ': ' + m.title + (m.state === 'missed' ? ' (passed)' : '') });
+          })])]);
+    });
+    var nowLeft = (tl.today + 0.5) / tl.days * 100;
+    return [h('h3', { class: 'grp-h' }, ['Next six weeks ', h('span', { class: 'n' }, 'From your notes, mail and calendar')]),
+      h('div', { class: 'legend' }, [h('span', null, [sdot('on'), 'On track']), h('span', null, [sdot('behind'), 'Behind']), h('span', null, [sdot('wait'), 'Waiting']),
+        h('span', null, [sdot('paused'), 'Paused']), h('span', null, [h('span', { class: 'gms lg' }), 'A date']), h('span', null, [h('span', { class: 'gms lg missed' }), 'Missed'])]),
+      act.length ? h('div', { class: 'gt' }, [h('div', { class: 'gt-r h' }, [h('span', { class: 'gt-l' }, ''), h('div', { class: 'trk' }, [
+        h('div', { class: 'wkh' }, tl.weeks.map(function (w, i) { return h('span', null, i === tl.this_week ? 'This week · ' + w : w); })),
+        h('span', { class: 'gnow', style: 'left:' + nowLeft.toFixed(2) + '%', 'aria-hidden': 'true' })])]),
+      rows.map(function (r) { add(r.querySelector('.trk'), h('span', { class: 'gnow', style: 'left:' + nowLeft.toFixed(2) + '%', 'aria-hidden': 'true' })); return r; })])
+        : h('p', { class: 'empty' }, 'Add a project to see its dates here.'),
+      h('p', { class: 'fhint' }, 'Red line: today, ' + d.today_label + '. The week before this one shows the dates you missed.')];
+  }
+  function pjReview() {
+    var d = PJ.d, rv = d.review, order = rv.order.map(pjById).filter(Boolean), R = PJ.rv;
+    var steps = [['slipped', 'Slipped'], ['projects', 'Projects'], ['next', 'Next week'], ['done', 'Done']];
+    var idx = steps.map(function (s) { return s[0]; }).indexOf(R.step);
+    function go(step, i) { PJ.rv = { step: step, i: i || 0 }; renderBrief(); }
+    var stepsEl = h('ol', { class: 'pjsteps', 'aria-label': 'Review steps' }, steps.map(function (s, i) {
+      return h('li', { class: i < idx ? 'done' : i === idx ? 'on' : null, 'aria-current': i === idx ? 'step' : null }, [h('span', { class: 'num' }, String(i + 1)), s[1]]);
+    }));
+    var body;
+    if (R.step === 'slipped') {
+      var xs = d.slipped.filter(function (x) { return !x.done; });
+      body = [h('h3', { class: 'rvq' }, xs.length ? plural(xs.length, 'thing slipped', 'things slipped') + ' since last week' : 'Nothing slipped.'),
+        xs.length ? h('ul', { class: 'list' }, xs.map(function (x) {
+          function mark(a) { return function (e) { pjDo('POST', 'api/projects/slipped/' + x.key, { action: a }, e.currentTarget); }; }
+          return h('li', { class: 'row pjrow rvslip' }, [h('span', { class: 'scell' }, kdot(x.kind)), h('div', { class: 'rmain' }, [h('span', { class: 'tx' }, [h('span', { class: 'sum' }, x.title)]), h('span', { class: 'nd' }, x.ago)]),
+            h('div', { class: 'rvacts' }, [btn('tbtn', 'Done', null, mark('done')), btn('tbtn', 'It’s fine', null, mark('fine')), btn('tbtn', 'Next week', null, mark('snooze'))])]);
+        })) : null,
+        h('div', { class: 'qnav' }, [h('span', { class: 'sp' }), btn('act', 'Next', null, function () { go(order.length ? 'projects' : 'next'); })])];
+    } else if (R.step === 'projects' && order.length) {
+      var i = Math.min(R.i, order.length - 1), p = order[i], f = PJ.form.rv && PJ.form.rv.id === p.id ? PJ.form.rv : (PJ.form.rv = { id: p.id, status: p.set_status, next_step: p.next_step, next_due: p.next_due });
+      var nx = h('input', { class: 'inp', id: 'rv-next', type: 'text', maxlength: '140' }); nx.value = f.next_step || ''; on(nx, 'input', function () { f.next_step = nx.value; });
+      var by = h('input', { class: 'inp', id: 'rv-by', type: 'date' }); by.value = f.next_due || ''; on(by, 'change', function () { f.next_due = by.value; });
+      var last = i === order.length - 1;
+      var next = function (skip) {
+        return function (e) {
+          var b = { action: 'answer', project_id: p.id };
+          if (skip) b.skip = true; else { b.status = f.status; b.next_step = f.next_step || ''; b.next_due = f.next_due || ''; }
+          pjDo('POST', 'api/projects/review', b, e.currentTarget, function () { PJ.form.rv = null; PJ.rv = last ? { step: 'next', i: 0 } : { step: 'projects', i: i + 1 }; });
+        };
+      };
+      body = [h('p', { class: 'qmeta' }, 'Project ' + (i + 1) + ' of ' + order.length), h('h3', { class: 'rvq' }, p.name + ': how is it going?'),
+        p.last_week && p.last_week.length ? [h('span', { class: 'label' }, 'Last week'), h('ul', { class: 'lastwk' }, p.last_week.map(function (l) { return h('li', null, [h('span', { class: 'ri' }, ico(SRC_ICON[l.source] || 'note')), l.text]); }))]
+          : h('p', { class: 'fhint' }, 'Nothing new from its sources last week.'),
+        h('div', { class: 'picks row5', role: 'radiogroup', 'aria-label': 'Status' }, (d.statuses || []).map(function (s) {
+          return h('button', { type: 'button', class: 'pick', role: 'radio', 'aria-checked': String(f.status === s[0]), 'data-rvst': s[0] }, [sdot(s[0]), s[1]]);
+        })),
+        h('div', { class: 'efg' }, [h('div', { class: 'ef full' }, [h('label', { for: 'rv-next' }, 'Next step'), nx]), h('div', { class: 'ef' }, [h('label', { for: 'rv-by' }, 'By'), by])]),
+        h('div', { class: 'qnav' }, [btn('tbtn', 'Back', null, function () { if (i) go('projects', i - 1); else go('slipped'); }), h('span', { class: 'sp' }),
+          btn('act ghost', 'Skip', null, next(true)), btn('act', last ? 'Next' : 'Next project', null, next(false))])];
+    } else if (R.step === 'next' || R.step === 'projects') {
+      body = [h('h3', { class: 'rvq' }, 'Next week'), rv.next_week.length ? h('ul', { class: 'mst' }, rv.next_week.map(function (m) {
+        return h('li', null, [h('span', { class: 'd' }, m.label), h('span', { class: 'm', 'aria-hidden': 'true' }), h('span', { class: 'w' }, [m.title, h('span', { class: 's' }, m.project)])]);
+      })) : h('p', { class: 'fhint' }, 'No dates next week.'),
+      h('div', { class: 'qnav' }, [btn('tbtn', 'Back', null, function () { go(order.length ? 'projects' : 'slipped', Math.max(0, order.length - 1)); }), h('span', { class: 'sp' }),
+        btn('act', 'Finish the review', null, function (e) { pjDo('POST', 'api/projects/review', { action: 'done' }, e.currentTarget, function () { PJ.rv = { step: 'done', i: 0 }; }); })])];
+    } else {
+      body = [h('h3', { class: 'rvq' }, "That's every project."), h('p', null, 'Your answers are saved in the projects. Nothing was sent.'),
+        h('div', { class: 'qnav' }, [btn('tbtn', 'Start again', null, function (e) { pjDo('POST', 'api/projects/review', { action: 'start' }, e.currentTarget, function () { PJ.rv = { step: 'slipped', i: 0 }; }); }), h('span', { class: 'sp' }),
+          btn('act', 'Back to the list', null, function () { pjGo('list'); })])];
+    }
+    var cur = R.step === 'projects' && order.length ? order[Math.min(R.i, order.length - 1)] : null;
+    var rail = h('aside', { class: 'pjrail', 'aria-label': 'This review' }, [h('h3', { class: 'plab' }, 'This review'),
+      h('ul', null, order.map(function (p, i) {
+        var a = rv.answers[p.id];
+        return h('li', { class: cur && cur.id === p.id ? 'on' : null }, [sdot(p.status), h('span', { class: 'nm' }, p.name),
+          cur && cur.id === p.id ? h('span', { class: 'ans' }, 'Reviewing now') : a ? [h('span', { class: 'ans' }, a), btn('tbtn', 'Change', { 'aria-label': 'Change ' + p.name }, function () { go('projects', i); })] : null]);
+      })), h('p', { class: 'fhint' }, PJ_REVIEW_WHEN[rv.setting] + ', or start it any time. Answers update the projects; nothing is sent.')]);
+    return h('div', { class: 'pjrv' }, [h('div', { class: 'pjrv-main' }, [stepsEl, body]), rail]);
+  }
+  function pjSeg(label, key, opts, cur, fmt) {
+    return h('div', { class: 'setrow' }, [h('span', { class: 'sl' }, label), h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, opts.map(function (o) {
+      var v = Array.isArray(o) ? o[0] : o, t = Array.isArray(o) ? o[1] : fmt(o);
+      return h('button', { type: 'button', role: 'radio', 'aria-checked': String(cur === v), 'data-pjset': key, 'data-v': String(v) }, t);
+    }))]);
+  }
+  function pjSetup() {
+    var d = PJ.d, s = d.settings, gh = d.github, G = PJ.gh;
+    var finds = [['notes', 'Obsidian notes'], ['calendar', 'Calendar series'], ['threads', 'Recurring threads'], ['github', 'GitHub repos']];
+    var tok = h('input', { class: 'inp', id: 'gh-token', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'github_pat_…' });
+    var ghEl = !gh.token_set ? [h('p', { class: 'fhint' }, 'Read-only. On GitHub, make a fine-grained token with Contents, Issues and Pull requests set to Read, for the repositories you want. Callsheet only reads; it never writes to GitHub.'),
+      h('div', { class: 'addt' }, [h('label', { class: 'sr', for: 'gh-token' }, 'GitHub token'), tok, btn('act', 'Save token', null, function (e) {
+        var b = e.currentTarget; b.disabled = true;
+        api('PUT', 'api/github/token', { token: tok.value }).then(function () { tok.value = ''; G.err = ''; PJ.loading = false; pjLoad(); }, function (er) { b.disabled = false; G.err = er.message; renderBrief(); });
+      })])]
+      : [h('p', null, ['Token saved ', h('span', { class: 'muted' }, '(hidden; Callsheet never shows it)'), '. Following ' + plural(gh.repos.length, 'repository', 'repositories') + (gh.repos.length ? ': ' + gh.repos.join(', ') : '') + '.']),
+        G.repos ? h('div', { class: 'chips', role: 'group', 'aria-label': 'Repositories' }, G.repos.map(function (r) {
+          var onp = G.pick.indexOf(r.name) >= 0;
+          return h('button', { type: 'button', class: 'chip', 'aria-pressed': String(onp), 'data-ghr': r.name }, r.name + (r.private ? ' · private' : ''));
+        })) : null,
+        h('div', { class: 'eacts' }, [G.repos ? btn('act', 'Save repositories', null, function (e) {
+          var b = e.currentTarget; b.disabled = true;
+          api('PUT', 'api/github/repos', { repos: G.pick }).then(function () { G.repos = null; G.err = ''; PJ.loading = false; pjLoad(); }, function (er) { b.disabled = false; G.err = er.message; renderBrief(); });
+        }) : btn('act ghost', 'Pick repositories', null, function (e) {
+          var b = e.currentTarget; b.disabled = true;
+          api('POST', 'api/github/list', {}).then(function (r) { G.repos = r.repos; G.pick = r.following.slice(); G.err = ''; renderBrief(); }, function (er) { b.disabled = false; G.err = er.message; renderBrief(); });
+        }), btn('tbtn', 'Forget GitHub', null, function (e) {
+          var b = e.currentTarget; b.disabled = true;
+          api('DELETE', 'api/github').then(function () { G.repos = null; PJ.loading = false; pjLoad(); }, function (er) { b.disabled = false; G.err = er.message; renderBrief(); });
+        })]),
+        h('p', { class: 'fhint' }, 'New repositories are read at the next index update (Setup, Memory, Get to know me).')];
+    return [h('h3', { class: 'grp-h' }, 'Find projects in'), h('div', { class: 'chips', role: 'group', 'aria-label': 'Find projects in' }, finds.map(function (f) {
+      return h('button', { type: 'button', class: 'chip', 'aria-pressed': String(!!s.find[f[0]]), 'data-pjfind': f[0] }, f[1]);
+    })), h('p', { class: 'fhint' }, 'New projects always arrive as Suggested. Nothing becomes a project until you add it.'),
+    h('h3', { class: 'grp-h' }, 'Remind me when'),
+    h('div', { class: 'setrow' }, [h('span', { class: 'sl' }, 'A date passes'), h('span', { class: 'muted' }, 'Always')]),
+    pjSeg('A thread goes quiet for', 'quiet_days', d.quiet_choices, s.quiet_days, function (n) { return n + ' days'; }),
+    pjSeg('I owe a reply for', 'owe_days', d.owe_choices, s.owe_days, function (n) { return plural(n, 'day', 'days'); }),
+    h('h3', { class: 'grp-h' }, 'Weekly review'), pjSeg('Weekly review', 'review', d.reviews, s.review),
+    h('p', { class: 'fhint' }, 'A phone notification when it’s ready, if phone alerts are on.'),
+    h('h3', { class: 'grp-h' }, ['GitHub ', h('span', { class: 'n' }, 'read-only')]), ghEl, G.err ? h('p', { class: 'err', role: 'alert' }, G.err) : null,
+    h('div', { class: 'optbox locked' }, [h('span', { class: 'label' }, [ico('lock'), ' What stays where']), h('ul', null, [
+      h('li', null, 'Projects, tasks and notes live in Callsheet only.'),
+      h('li', null, 'Obsidian, mail, Slack, Signal, calendars and GitHub are read, never changed.'),
+      h('li', null, 'The weekly review sends one phone notification with counts only.')])])];
+  }
+  function T_projects() {
+    if (!PJ.d && !PJ.loading && !PJ.err) pjLoad();
+    if (!PJ.d) return [h('h2', { class: 'sec-h' }, 'Projects'), PJ.err ? h('p', { class: 'err', role: 'alert' }, PJ.err) : h('p', { class: 'status', role: 'status' }, 'Loading projects…')];
+    var content = PJ.view === 'timeline' ? pjTimeline() : PJ.view === 'slipped' ? pjSlipped() : PJ.view === 'review' ? pjReview() : PJ.view === 'setup' ? pjSetup() : pjList();
+    var open = null;
+    if (PJ.edit === 'new') open = [h('div', { class: 'phd' }, h('h2', { id: 'pj-ptitle' }, 'New project')), pjEditForm(null)];
+    else if (PJ.open && PJ.open.indexOf('slip:') === 0) { var x = pjSlip(PJ.open.slice(5)); open = x ? slipPanel(x) : null; }
+    else if (PJ.open) { var p = pjById(PJ.open); open = p ? pjPanel(p) : null; }
+    var panel = open ? h('aside', { class: 'pjpanel', 'aria-labelledby': 'pj-ptitle' }, [btn('pclose', ico('close', 'Close'), { 'data-pjclose': '1' }, function () { PJ.open = null; PJ.edit = null; renderBrief(); }), open]) : null;
+    if (PJ.focusNotes) { PJ.focusNotes = false; setTimeout(function () { var n = document.getElementById('pj-notes'); if (n) n.focus(); }, 0); }
+    var phone = isPhone();
+    return [h('div', { class: 'pj' + (panel ? ' open' : '') }, [phone && panel ? null : h('div', { class: 'pjmain' }, [pjHead(), PJ.err ? h('p', { class: 'err', role: 'alert' }, PJ.err) : null, content]), panel])];
+  }
+  /* view chips, setting segments and repo chips (delegated: these buttons carry data-*) */
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest ? e.target.closest('button') : null;
+    if (!t || ui.view !== 'brief' || U.tab !== 'projects') return;
+    var dv = t.dataset;
+    if (dv.pjv) { if (dv.pjv === 'review' && PJ.view !== 'review') PJ.rv = { step: 'slipped', i: 0 }; pjGo(dv.pjv); }
+    else if (dv.pjset) { var v = dv.pjset === 'review' ? dv.v : parseInt(dv.v, 10), b = {}; b[dv.pjset] = v; pjDo('PATCH', 'api/projects/settings', b, t); }
+    else if (dv.pjfind) { var f = {}; f[dv.pjfind] = t.getAttribute('aria-pressed') !== 'true'; pjDo('PATCH', 'api/projects/settings', { find: f }, t); }
+    else if (dv.rvst) { if (PJ.form.rv) PJ.form.rv.status = dv.rvst; renderBrief(); }
+    else if (dv.ghr) { var i = PJ.gh.pick.indexOf(dv.ghr); if (i >= 0) PJ.gh.pick.splice(i, 1); else PJ.gh.pick.push(dv.ghr); renderBrief(); }
+  });
+  /* the Briefing's Slipped line and the weekly review card */
+  function briefProjects() {
+    var bp = B.projects;
+    if (!bp) return null;
+    var line = bp.slipped && bp.top ? h('p', { class: 'slipsum brief-slip' }, [kdot(bp.top.kind), h('b', null, plural(bp.slipped, 'thing slipped', 'things slipped')), h('span', { class: 'sp' }, ' · ' + bp.top.title),
+      btn('tbtn', 'See them', null, function () { PJ.view = 'slipped'; PJ.open = null; PJ.d = null; setTab('projects'); })]) : null;
+    var card = bp.review && bp.review.ready ? h('div', { class: 'rvcard' }, [h('h3', null, 'Weekly review'),
+      h('p', null, plural(bp.review.projects, 'project', 'projects') + ' to look at' + (bp.slipped ? ', ' + bp.slipped + ' slipped' : '') + '. About five minutes.'),
+      btn('act', 'Start the review', null, function () { PJ.view = 'review'; PJ.rv = { step: 'slipped', i: 0 }; PJ.open = null; PJ.d = null; setTab('projects'); })]) : null;
+    return line || card ? h('div', { class: 'bproj' }, [line, card]) : null;
+  }
+  /* 0.7.0: Chat about one project ("Ask about this project"): the server filters the existing read-only tools */
+  function chatScope() { return CH.conv ? (CH.conv.scope || null) : (CH.scope || null); }
+  function chatScopeRow() {
+    var sc = chatScope();
+    if (!sc) return null;
+    return h('div', { class: 'cscope' }, [h('span', { class: 'cchip' }, ['Only about ', h('b', null, sc.name),
+      btn('cx', '×', { 'aria-label': 'Stop: ask about everything' }, function () { chatNew(); })]),
+    btn('tbtn', 'Back to project', null, function () { PJ.view = 'list'; PJ.open = sc.project; PJ.edit = null; setTab('projects'); })]);
+  }
+  var TFN = { briefing: T_briefing, replies: T_replies, agenda: T_agenda, chat: T_chat, projects: T_projects };  /* 0.6.0 chat, 0.7.0 projects */
 
   /* ----- detail panel ----- */
   function panelReply(r) {
@@ -2436,7 +2831,8 @@
   function memoryBlock() {
     if (!MEM.data && !MEM.err && !MEM.loading) loadMemory();
     var m = MEM.data, cap = m && Number(m.cap) || 1500;
-    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory'), knowEntry()]);  /* 0.6.0 index: entry */
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory'), knowEntry(),
+      btn('act ghost', 'Projects and GitHub', null, function () { PJ.view = 'setup'; PJ.open = null; location.hash = 'projects'; })]);  /* 0.7.0: Setup, Projects */  /* 0.6.0 index: entry */
     var intro = h('p', { class: 'note' }, 'Your notes to Callsheet, kept as one Markdown file on this box. Before each brief the writer gets ' +
       'the notes that fit the day (the same people, email domains, area or topic words), up to about ' + fmtNum(cap) + ' characters. ' +
       'Add notes from the notepad icon on any reply, event or briefing paragraph, or write them here.');
@@ -3433,9 +3829,10 @@
     earlier: false, clearAsk: false, scroll: true, keepTop: null
   };
   var CHAT_SUGG = ['What’s waiting on me?', 'When did I last talk to…', 'Summarise this week'];
-  var SRC_ICON = { gmail: 'mail', slack: 'slack', calendar: 'cal', drive: 'drive', obsidian: 'note', signal: 'signal' };
-  var SRC_NAME = { gmail: 'Gmail', slack: 'Slack', calendar: 'Calendar', drive: 'Google Drive', obsidian: 'Obsidian', signal: 'Signal' };
-  var ITEM_KIND = { email: 'Email', sent: 'Sent email', event: 'Event', message: 'Message', note: 'Note' };
+  var SRC_ICON = { gmail: 'mail', slack: 'slack', calendar: 'cal', drive: 'drive', obsidian: 'note', signal: 'signal', github: 'tasks' };
+  var SRC_NAME = { gmail: 'Gmail', slack: 'Slack', calendar: 'Calendar', drive: 'Google Drive', obsidian: 'Obsidian', signal: 'Signal', github: 'GitHub' };
+  var ITEM_KIND = { email: 'Email', sent: 'Sent email', event: 'Event', message: 'Message', note: 'Note', commit: 'Commit', issue_open: 'Open issue',
+    issue_closed: 'Closed issue', pr_open: 'Open pull request', pr_closed: 'Closed pull request', pr_merged: 'Merged pull request' };
 
   function chatLoad() {
     if (CH.loading) return;
@@ -3494,14 +3891,14 @@
     if (!text || chatPending()) return;
     CH.sending = text; CH.err = ''; CH.input = ''; CH.scroll = true;
     chatRender('[data-ask-in]');
-    api('POST', 'api/chat/ask', { conversation_id: CH.conv ? CH.conv.id : null, text: text }).then(function (c) {
+    api('POST', 'api/chat/ask', { conversation_id: CH.conv ? CH.conv.id : null, text: text, project_id: !CH.conv && CH.scope ? CH.scope.project : undefined }).then(function (c) {
       CH.sending = null; CH.conv = c; CH.cid = c.id; save(KEY_CHAT, c.id); CH.scroll = true;
       chatRender('[data-ask-in]'); chatPoll();
     }, function (e) { CH.sending = null; CH.input = text; CH.err = e.message; chatRender('[data-ask-in]'); });
   }
   function chatNew() {
     clearTimeout(CH.timer); CH.timer = null;
-    CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.input = ''; CH.err = ''; CH.earlier = false; CH.scroll = true;
+    CH.conv = null; CH.cid = null; save(KEY_CHAT, ''); CH.input = ''; CH.err = ''; CH.earlier = false; CH.scroll = true; CH.scope = null;
     if (U.open && U.open.kind === 'item') U.open = null;
     chatRender('[data-ask-in]');
     chatOverview();
@@ -3635,11 +4032,11 @@
     if (!ov.ready) return h('div', { class: 'compose' }, [h('p', { class: 'cnote' }, ov.why || 'Set up the chat model first.'),
       h('button', { type: 'button', class: 'act', 'data-csetup': '1' }, 'Set up the chat model')]);
     var inp = h('input', { class: 'inp', id: 'ch-ask', type: 'text', 'data-ask-in': '1', maxlength: '2000', autocomplete: 'off', enterkeyhint: 'send',
-      placeholder: 'Ask about your mail, chat or calendar…' });
+      placeholder: chatScope() ? 'Ask about ' + chatScope().name + '…' : 'Ask about your mail, chat or calendar…' });
     inp.value = CH.input;
     var empty = !(CH.conv && CH.conv.messages && CH.conv.messages.length) && !CH.sending;
     return h('div', { class: 'compose' }, [
-      empty ? h('div', { class: 'sugg', role: 'group', 'aria-label': 'Suggestions' }, CHAT_SUGG.map(function (s) { return h('button', { type: 'button', 'data-csug': s }, s); })) : null,
+      chatScopeRow(), empty ? h('div', { class: 'sugg', role: 'group', 'aria-label': 'Suggestions' }, (chatScope() ? PJ_SCOPE_SUGG : CHAT_SUGG).map(function (s) { return h('button', { type: 'button', 'data-csug': s }, s); })) : null,
       CH.err && CH.ov ? h('p', { class: 'err', role: 'alert' }, CH.err) : null,
       h('div', { class: 'inrow' }, [h('label', { class: 'sr', for: 'ch-ask' }, 'Ask Callsheet'), inp,
         h('button', { type: 'button', class: 'act', 'data-csend': '1', 'aria-label': 'Ask', disabled: chatPending() }, [ico('send'), h('span', { class: 'd-only' }, 'Ask')])]),

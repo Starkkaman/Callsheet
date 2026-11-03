@@ -33,8 +33,8 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
 - Sign-in tokens and the data Callsheet reads are stored only on your own Home Assistant machine, in the
   app's private storage. Home Assistant backups include them, except the Signal keys (after a restore, link
   Signal again).
-- Callsheet talks only to Google's APIs, and to Signal's servers through signal-cli when you link Signal, to
-  read your data. It sends your data to no one else: no analytics,
+- Callsheet talks only to Google's APIs, to GitHub's API when you add a token, and to Signal's servers through
+  signal-cli when you link Signal, to read your data. It sends your data to no one else: no analytics,
   no tracking, no third parties.
 - If you later turn on an AI writer (a cloud model such as Claude, or a local model on your network), only
   the items Callsheet has picked for your brief are sent to the writer you chose. This is off until you turn it on.
@@ -49,6 +49,13 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   can delete them at any time. With a local model, questions and search results stay on your network. If you
   pick Claude for chat, each question, the recent conversation and the index search results it needs are
   sent to Anthropic to answer it. Chats are never added to Callsheet's memory or your brief.
+- Projects (0.7.0) keeps your projects, tasks, notes and slipped marks on your Home Assistant machine only; they
+  are never written to Obsidian or any account. If you ask for suggestions, the AI writer you chose gets only a
+  summary: counts, short titles, people's names and dates.
+- GitHub (0.7.0, optional): with a fine-grained read-only token you provide, Callsheet reads (`GET` only) the
+  repos you pick: repo details, commits, issues and pull requests, from `api.github.com`. It never writes to
+  GitHub. The token is stored in the app's private storage and never shown or logged; "Forget GitHub" deletes it
+  and what was read.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

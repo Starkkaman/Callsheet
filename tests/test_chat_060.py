@@ -787,10 +787,10 @@ class PageTest(unittest.TestCase):
 
     def test_tabs(self):
         m = re.search(r"var TABS = \[(.*?)\];", self.js, re.S)
-        self.assertEqual(re.findall(r"\['(\w+)'", m.group(1)), ["briefing", "replies", "agenda", "chat", "tasks"])
+        self.assertEqual(re.findall(r"\['(\w+)'", m.group(1)), ["briefing", "replies", "agenda", "chat", "projects"])
         self.assertNotIn("T_areas", self.js)
         self.assertNotIn("allareas", self.js)
-        self.assertIn("var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat'];", self.js)
+        self.assertIn("var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat', 'projects'];", self.js)
         self.assertIn("chat: T_chat", self.js)
         for icon in ("chat", "send", "drive"):
             self.assertIn(f'data-i="{icon}"', self.html)

@@ -371,6 +371,27 @@ for example "When did I last talk to Dan?" or "What's waiting on me?". It needs 
   question, earlier turns of the chat and the search results go to Anthropic; with a local model they stay on your
   network.
 
+## Projects (0.7.0)
+
+The **Projects** tab collects what you're working on, drafted from your notes, mail, calendar and (optionally)
+GitHub. Nothing there is written back anywhere: projects, tasks and notes are kept in Callsheet only.
+- **Suggested** projects come from Obsidian notes tagged `#project` or in a Projects folder, threads you wrote in,
+  events that repeat 3 or more times, projects saved in Know me and GitHub repos you follow. **Add** keeps one,
+  **Not a project** hides it for good. Note checkboxes become suggested tasks; `(due 2026-11-12)` gives a date.
+- **List**, **Timeline** (six weeks, missed dates, today) and the detail panel with next step, people, milestones,
+  tasks, notes and sources. **Ask about this project** opens a chat that only looks at the project's items.
+- **Slipped**: a date passed, a thread went quiet (Settings: 3 to 14 days, default 7) or you owe a follow-up
+  (1 to 5 days, default 2). Each shows the exact words and a link. Use the menu to mark it done, fine, snooze it
+  a week or add a note. The Briefing shows the count and the top item.
+- **Weekly review**: Monday morning (default), Friday afternoon, Sunday evening or off. With phone notifications
+  set up you get one notification with counts only.
+- **Suggest names and next steps** sends a summary (counts, short titles, dates, never message text) to your
+  writer in one request. Suggestions stay suggestions until you accept them.
+- **GitHub (optional, read-only)**: in Projects → Settings (or Setup → Memory → Projects and GitHub) paste a
+  fine-grained token with read-only Contents, Issues and Pull requests access and pick repos. Callsheet only
+  reads (`GET`) repos, commits, issues and pull requests; the token is never shown again. **Forget GitHub**
+  deletes the token and everything read from it.
+
 ## Your data
 
 - Everything is stored on this Home Assistant machine in the app's data folder (`callsheet.db`, readable

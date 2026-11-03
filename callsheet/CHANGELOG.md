@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 ("Projects")
+
+- **Projects tab** (replaces "Tasks · coming later"). Callsheet drafts your projects from your Obsidian notes
+  (`#project` tag, a Projects folder or project front matter), threads you wrote in, repeating calendar events,
+  projects saved in Know me and GitHub repos you follow. Drafted projects stay **Suggested** until you add them;
+  "Not a project" is remembered. Projects, tasks and notes live in Callsheet only: nothing is written to Obsidian.
+- **Detail panel** with next step, people, milestones, tasks (from note checkboxes or your own), notes and the
+  sources with links. **Timeline**: six weeks, missed dates and a today line.
+- **Slipped**: dates passed, threads gone quiet (7 days by default) and follow-ups you owe, each with the exact
+  words and a link to the source. Done, fine, snooze a week or add a note from the menu. The Briefing shows a
+  Slipped line (count and top item) linking to Projects.
+- **Weekly review**: Monday morning with the morning brief by default (or Friday afternoon, Sunday evening, off),
+  with a "This review" side column; a phone notification with counts only when notifications are set up.
+- **Suggestions (optional)**: one request to your writer with a summary only (counts, short titles, dates) to
+  suggest better names and next steps. They stay suggestions until you accept them; a suggestion with links or
+  instructions is dropped, and one that states an approval, payment or agreement gets a warning.
+- **Ask about this project**: a chat limited to the project's linked items, using the same read-only tools.
+- **GitHub (optional, read-only)**: a fine-grained read-only token and the repos you pick; commits, issues and
+  pull requests go into the index. Only `GET` requests to five GitHub API paths are allowed; nothing is written.
+
 ## 0.6.1
 
 - **Known limits (measured 2026-11-02, Swift as Careful).** A Careful brief takes about 3.5–5 minutes end to end
