@@ -563,7 +563,8 @@
       B.writing.since ? ' Started ' + B.writing.since + '.' : ''])];
     /* 0.7.1: a reply in Top of the day gets the Replies tick (Done + Undo) and, with a draft, Copy; an event
        keeps its calendar glyph */
-    var topEl = top.length ? [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
+    /* 0.7.2: each block is one module (Transit draws it as a sign panel) */
+    var topEl = top.length ? h('div', { class: 'topw' }, [h('h2', { class: 'sub-h' }, 'Top of the day'), h('ol', { class: 'topl' }, top.slice(0, 5).map(function (t) {
       var isEv = t.kind === 'event', r = isEv ? null : replyById(t.ref), gone = !isEv && !r, dn = gone && doneIds.indexOf(t.ref) >= 0;
       var tt = h('span', { class: 'tt' }, [t.text, checkLabel('span', t.check === true)]);
       var lead = isEv ? h('span', { class: 'ck ri' }, ico('cal', 'Event'))
@@ -575,15 +576,15 @@
           : h('button', { type: 'button', class: 'tline', 'data-open': (isEv ? 'event:' : 'reply:') + t.ref, 'data-anc': r ? 'tp-' + r.id : null,
             'aria-label': r ? t.text + (reasonWords(r) ? ', ' + reasonWords(r) : '') : null, title: r ? reasonWords(r) || null : null }, tt),
         copy]);
-    }))] : null;
+    }))]) : null;
     var areas = sum && sum.areas ? (B.areas || []).filter(function (a) { return sum.areas[a.id] && !isDismissed('ar:' + a.id + ':' + hashOf(sum.areas[a.id])); }) : [];
-    var byArea = areas.length ? [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
+    var byArea = areas.length ? h('div', { class: 'byw' }, [h('h2', { class: 'sub-h' }, 'By area'), h('div', { class: 'paras' }, areas.map(function (a) {
       var chk = areaCheck(sum, a.id);
       return h('div', { class: 'para cn' }, [
         h('button', { type: 'button', class: 'pmain', 'data-goarea': a.id, 'aria-label': a.name + ': ' + sum.areas[a.id] + (chk ? ' ' + CHECK_LABEL : '') + ' (show its replies)' }, [
           h('span', { class: 'ptag' }, tagOf(a.id)), h('span', { class: 'ptext' }, sum.areas[a.id]), checkLabel('span', chk)]),
         npBtn('para', a.id, 'pa-' + a.id)]);
-    }))] : null;
+    }))]) : null;
     /* at a glance: next event, due today, waiting */
     var now = nowMin(), next = null, gl = [];
     evs.forEach(function (e) { var s = startMin(e); if (!next && s != null && (now == null || s >= now)) next = e; });

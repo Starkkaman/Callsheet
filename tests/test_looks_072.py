@@ -163,6 +163,7 @@ class Fonts(unittest.TestCase):
     LICENCE = {"instrument-sans": "instrumentsans", "archivo": "archivo", "antonio": "antonio", "saira": "saira",
                "noto-serif": "notoserif", "share-tech-mono": "sharetechmono", "inter": "inter", "albert-sans": "albertsans",
                "hanken-grotesk": "hankengrotesk", "bricolage": "bricolage-silkscreen", "silkscreen": "bricolage-silkscreen",
+               "vt323": "bricolage-silkscreen",
                "ibm-plex-mono": "ibmplexmono", "ibm-plex-sans": "ibmplexsans", "atkinson": "atkinsonhyperlegible",
                "jost": "jost", "londrina": "londrinasolid"}
 
@@ -236,6 +237,46 @@ class PhoneTargetsAndContrast(unittest.TestCase):
         self.assertGreaterEqual(ratio(tok["alert"], tok["surface-2"]), 4.5)
         self.assertEqual(tok["accent"], "#b52e14")                          # Bold's red itself is unchanged
         self.assertIn(".app .vnav .badge{color:var(--bg)}", CSS)            # the Projects badge, every look
+
+
+class JamDashSpotCheck(unittest.TestCase):
+    """0.7.2: JamDash's fidelity spot-check (jam-dash/docs/callsheet-072-review.md), with the deeper AA steps."""
+
+    def tok(self, look, dark=False):
+        if dark:
+            b = blocks(r"\.app\[data-look=%s\]\[data-mode=dark\]" % look)[0]
+        else:
+            b = next(b for b in blocks(r"\.app\[data-look=%s\]" % look) if "font-display" in b)
+        return {k: v.strip() for k, v in b.items()}
+
+    def test_token_values(self):
+        lc = self.tok("lcars")
+        self.assertEqual((lc["label-weight"], lc["head-weight"]), ("400", "500"))
+        self.assertEqual(self.tok("transit")["ok"], "#0f8040")
+        t = self.tok("transit", True)
+        self.assertEqual((t["surface"], t["surface-2"], t["ok"], t["alert"]), ("#000000", "#0e0e0e", "#13914a", "#e33b31"))
+        self.assertEqual(self.tok("olympia")["fs-h1"], "64px")
+        self.assertRegex(CSS, r"\.app\[data-look=olympia\]\{--fs-h1:48px")
+        o = self.tok("olympia", True)
+        self.assertEqual((o["surface-2"], o["ok"]), ("#0e4549", "#79b94e"))
+        self.assertEqual((self.tok("grid")["ok"], self.tok("grid", True)["ok"]), ("#1d3c9a", "#6d8cf0"))
+        self.assertEqual(self.tok("grid", True)["surface"], "#000000")
+        p, pd = self.tok("pulsar"), self.tok("pulsar", True)
+        self.assertEqual((p["surface"], p["surface-2"], p["track"], p["ok"]), ("#dbd7c8", "#d0cbbd", "#d9d4c5", "#000000"))
+        self.assertEqual((pd["surface"], pd["surface-2"], pd["ok"]), ("#0d0d0d", "#1a1a1a", "#ffffff"))
+        self.assertEqual((p["focus-w"], p["focus-offset"]), ("1px", "4px"))
+        nw = self.tok("newwave", True)
+        self.assertEqual((nw["focus"], nw["surface"]), ("#f5f1ff", "#100c3b"))
+        self.assertIn('"NW VT323"', self.tok("newwave")["font-mono"])
+        self.assertEqual(self.tok("depth", True)["track"], "#191e26")
+        self.assertEqual((self.tok("braun", True)["track"], self.tok("braun", True)["callbox"]), ("#161615", "#cfcbc2"))
+
+    def test_structure(self):
+        self.assertIn(":focus-visible{outline-style:var(--focus-style,solid);outline-offset:var(--focus-offset,2px)}", CSS)
+        self.assertIn("box-shadow:inset 0 2px 0 var(--sign-ink),inset 0 0 0 1px var(--sign-hair)", CSS)     # Transit sign rule
+        self.assertIn("class: 'topw'", JS)
+        self.assertIn(".app[data-look=grid] .tabbar button[aria-selected=true]{background:var(--tab-on)", CSS)
+        self.assertIn(".main>:not(.bv)", CSS)                                # Grid: the module shows behind the page
 
 
 if __name__ == "__main__":

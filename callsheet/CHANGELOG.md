@@ -20,6 +20,11 @@
   half-hour blocks are a little taller.
 - **Easier to read**: the Projects count badge in Bold dark, and Bold's red warning text on the light background,
   now have enough contrast.
+- **Closer to JamDash** (JamDash's spot-check): Transit puts each block on a black sign with a thin white rule;
+  Grid's square grid runs behind the whole page, the selected tab is the orange-red block and "on" marks are blue;
+  Pulsar's panels are a shade darker than the page, its "done" marks use the ink colour and its focus ring is a thin
+  line set a little apart; Olympia's page title is larger; LCARS labels are lighter; smaller colour fixes in Transit,
+  Olympia, New Wave, Depth and Braun dark. Text keeps enough contrast in every look.
 
 ## 0.7.1 ("Quick wins")
 
