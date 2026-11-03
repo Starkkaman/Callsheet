@@ -950,6 +950,31 @@ class Projects:
         d = json.loads(p["draft"] or "{}")
         return {"project": p["id"], "name": p["name"], "status": STATUS_NAMES.get(p["status"], ""), "ids": [int(i) for i in (d.get("sources") or [])][-MAX_SOURCES:]}
 
+    def chat_summary(self, pid):
+        """0.7.1: the project's own summary for a project chat's first lookup (chat.Tools.prefetch): name, status,
+        next step, open tasks (the owner's and the note's not yet added), milestones and the open slipped items of
+        this project only. Entries that came from an index item carry its id as "item" (the chat drops any outside
+        the chat's scope). None when the project is gone."""
+        try:
+            p = self._get(pid)
+        except NotFound:
+            return None
+        today = self._now().date()
+        tasks = self._tasks(p["id"])
+        v = self._project_view(p, today, self.settings(), tasks=tasks, full=True)
+        out = {"name": p["name"], "status": STATUS_NAMES.get(p["status"], ""), "next_step": p["next_step"] or "",
+               "next_due": p["next_due"] or "", "next_label": v.get("next_label") or "", "late": v.get("late")}
+        out["open_tasks"] = [{"text": t["text"], "due": t["due"] or "", "late": t["late"]}
+                             for t in v.get("tasks") or [] if not t["done"]][:10]
+        out["open_tasks"] += [{"text": t["text"], "due": t["due"] or "", "from_note": True}
+                              for t in v.get("suggested_tasks") or []][:max(0, 10 - len(out["open_tasks"]))]
+        out["milestones"] = [{"date": m["date"], "title": m["title"], "state": m["state"], "kind": m["kind"],
+                              "item": m.get("src")} for m in v.get("milestones") or [] if m["state"] != "done"][:8]
+        out["slipped"] = [{"kind": x["kind"], "title": x["title"], "who": x.get("who") or "", "ago": x.get("ago") or "",
+                           "quote": x.get("quote") or "", "date": x.get("date") or "", "item": x.get("item")}
+                          for x in self.slipped() if x.get("project") == p["id"] and not x.get("done")][:5]
+        return out
+
     # slipped ---------------------------------------------------------------------------------------------------------
     def _marks(self):
         with self.store.lock:

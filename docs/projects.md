@@ -73,6 +73,14 @@ characters), `"` turned into `'` and `<` `>` escaped as `\u003c` `\u003e`. Chats
 sentence. A fixed nudge follows in every scoped chat: "For questions about this project, search its items before
 answering." The unscoped prompt is unchanged byte for byte.
 
+**First lookup (0.7.1).** The nudge alone didn't make Gemma search (projinj071: "What should I do next?" made no tool
+call in 10 of 10 and answered "couldn't find any tasks"). So before the model's first request of every question in a
+project chat, Callsheet runs the first lookup itself and sends it as the first `search` call with its `<data>` result:
+the project's own summary (`Projects.chat_summary`: name, status, next step and date, open tasks (the owner's, then
+the note's not yet added), up to 8 open milestones, up to 5 open slipped items of this project) and the top 8 results
+of the same scoped `index.search` for the question (the project's newest linked items when nothing matches). Entries
+that came from an index item outside the scope are dropped. Details and the token cap: `docs/chat.md`.
+
 ## API
 `GET/POST api/projects`, `POST api/projects/build`, `POST api/projects/suggest`, `GET/PATCH api/projects/settings`,
 `POST api/projects/review`, `POST api/projects/slipped/<key>`, `PATCH api/projects/<id>`,

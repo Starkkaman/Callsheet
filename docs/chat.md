@@ -74,6 +74,36 @@ to be reported only as untrusted content and never repeated as advice; drafts ar
 `[placeholders]`; if a message asks to confirm that something is done, say what it claims and that the owner
 will check. The last six turns of the conversation go along (answers cut to 1,500 characters).
 
+## First lookup in a project chat (0.7.1)
+In a project chat ("Ask about this project", see `projects.md`) the model doesn't have to choose to search: before its
+first request of every question, Callsheet runs the first lookup itself (`Tools.prefetch`) and adds it after the
+question as the first tool call and its result. Unscoped chats are unchanged byte for byte (a test pins the first
+request's hash).
+- **What it holds**: `{"tool": "search", "prefetch": true, "note": ..., "project": {...}, "count": n, "items": [...]}`.
+  `project` is the project's live summary (`Projects.chat_summary`, read at each question: name, status, next step
+  and date, `late`, open tasks, open milestones, open slipped items of this project; the scope's name and status
+  when Projects isn't wired or fails). `items` are the top 8 results of the same scoped `index.search` with the
+  question as `q` (`relaxed` noted as usual), or the project's 8 newest linked items when nothing matches (the note
+  says which). The call's arguments are `{"q": "<the question>"}`.
+- **Scope**: the search uses the conversation's scope ids, and summary entries that came from an index item outside
+  them (`item`) are dropped, so neither the question nor a marker word can bring in another project's items.
+- **Same framing and checks**: the result is a `data_block` (escaped `<data>`); items and summary entries carry
+  `"instructions": true` when their item is flagged or (summary entries) their own text trips `inject.instructions`.
+  What was sent counts as seen (citations) and flagged (`instr_seen`, the instruction post-check); flagged summary
+  sentences without an item go to the post-check directly. The claim check is unchanged.
+- **Cap**: at most `PREFETCH_TOKENS` (3,000) tokens, estimated as characters / 4 over the arguments and the block:
+  the lowest-ranked results are dropped down to 3, then snippets are clipped to 120 characters, then the remaining
+  results go, then the summary's lists shrink (slipped, milestones, tasks), and as a last resort only name and status
+  stay. Only what was kept counts as seen or flagged.
+- **Per protocol**: native tools: an assistant message with one `tool_calls` entry (`call_prefetch_1`, `search`) and
+  a `tool` message; JSON fallback: `{"tool": "search", "args": {...}}` as the assistant's reply and `Result of
+  search:` + the block + the usual next-step line as the user's; Claude: a `tool_use` block (`toolu_prefetch_1`) and
+  its `tool_result`. With Claude's thinking on, an assistant turn Callsheet wrote can't open a tool loop (Claude needs
+  its own thinking block there), so the block goes in as a second text block of the question instead.
+- It isn't one of the model's rounds: all tools stay available (`tool_choice` auto) and the 6 rounds are the model's.
+  The page shows the step "Looked up this project and searched it for “…”"; the log line adds "+ first lookup". If
+  the lookup fails, the question goes on without it (logged by exception type only).
+
 ## Protocols
 - **Local, native tools** (OpenAI-compatible `/chat/completions` with `tools`, `tool_choice: auto`). Up to 6
   rounds and 4 calls per round; the last round sends `tool_choice: "none"` plus a note to answer now.

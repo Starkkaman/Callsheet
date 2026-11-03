@@ -86,6 +86,7 @@ class App:
                                               near_call=self.evaluator.near_call,
                                               sync_busy=self.syncer.lock.locked, clock=clock)
         self.scheduler.projects = self.projects
+        self.chat.projects = self.projects  # 0.7.1: the project summary for a project chat's first lookup
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),

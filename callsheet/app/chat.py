@@ -356,6 +356,24 @@ CHAT_SCOPE = "This chat is about one of the owner's projects. " + CHAT_SCOPE_RUL
 CHAT_SCOPE_NAMED = 'This chat is about the project "{name}"{status}: search only finds its linked items.'
 CHAT_SCOPE_STATUS = " (status: {status})"
 CHAT_SCOPE_NUDGE = "For questions about this project, search its items before answering."
+# 0.7.1: in a project chat Callsheet runs the first lookup itself, before the model's first request of each question:
+# the project's summary and the top scoped search results for the question (the newest linked items when nothing
+# matches). It goes in as the first `search` call and its <data> result (Claude with thinking on: a text block after
+# the question, see Chat._claude). Capped at PREFETCH_TOKENS (estimated as characters / 4).
+PREFETCH_TOKENS = 3000
+PREFETCH_CHARS = 4 * PREFETCH_TOKENS
+PREFETCH_ITEMS = 8
+PREFETCH_SNIPPET = 120        # snippets are clipped to this before the last items are dropped
+PREFETCH_CALL = "call_prefetch_1"
+PREFETCH_TOOLU = "toolu_prefetch_1"
+PREFETCH_NOTE = ("Callsheet ran this first lookup before your first step: this project's summary (from Callsheet's "
+                 "project list) and the project's items that best match the question. Search again or use get_item for "
+                 "more.")
+PREFETCH_RECENT = ("Callsheet ran this first lookup before your first step: this project's summary (from Callsheet's "
+                   "project list) and, as no item matched the question's words, the project's most recent items. "
+                   "Search again or use get_item for more.")
+PREFETCH_RELAXED = " No item had all the words; these items match some of them."
+PREFETCH_LABEL = "Looked up this project"
 
 
 def _prompt_text(text, n):
@@ -459,6 +477,7 @@ class Tools:
         self.areas = [{"id": a["id"], "name": a["name"]} for a in areas]
         self.seen = {}
         self.flagged = set()   # 0.6.0: ids of returned items that hold a planted instruction (inject.py)
+        self.flagged_text = []  # 0.7.1: flagged sentences of pre-fetched project entries without an item
         self.calls = 0
 
     def scoped(self):
@@ -559,6 +578,13 @@ class Tools:
 
     def _row(self, r, snippet=True):
         self.seen[int(r["id"])] = self._chip(r)
+        out = self._fmt(r, snippet)
+        if r.get("instructions"):
+            self.flagged.add(int(r["id"]))
+        return out
+
+    def _fmt(self, r, snippet=True):
+        """One item as the model sees it (no side effects; _row also records it as seen and flagged)."""
         out = {"id": int(r["id"]), "source": r.get("source"), "kind": r.get("kind"), "title": _clip(r.get("title"), TITLE),
                "people": _clip(r.get("people"), PEOPLE), "area": self._area_name(r.get("area")),
                "date": self._when(r.get("ts"))}
@@ -566,8 +592,120 @@ class Tools:
             out["snippet"] = _clip(r.get("snippet"), SNIPPET)
         if r.get("instructions"):   # 0.6.0: CHAT_SAFETY says what this mark means
             out["instructions"] = True
-            self.flagged.add(int(r["id"]))
         return out
+
+    # 0.7.1: Callsheet's own first lookup in a project chat ---------------------------------------------------------
+    _SUMMARY_LISTS = (("open_tasks", ("text", "due", "late", "from_note"), 10),
+                      ("milestones", ("date", "title", "state", "kind", "item"), 8),
+                      ("slipped", ("kind", "title", "who", "ago", "quote", "date", "item"), 5))
+
+    def _summary(self, s, chips, flag_ids, flag_text):
+        """The project's summary (Projects.chat_summary, or the scope's name and status) as data for the model:
+        clipped texts; an entry from an index item outside the scope is dropped; an entry is marked
+        "instructions": true when its item holds a planted instruction or its own text does (inject.py)."""
+        s = s if isinstance(s, dict) else {}
+        base = self.project or {}
+        out = {"name": _clip(s.get("name") or base.get("name"), 60), "status": _clip(s.get("status") or base.get("status"), 20)}
+        for k, n in (("next_step", 160), ("next_due", 10), ("next_label", 40)):
+            if isinstance(s.get(k), str) and s[k].strip():
+                out[k] = _clip(s[k], n)
+        if s.get("late") is True:
+            out["late"] = True
+        for key, fields, cap in self._SUMMARY_LISTS:
+            rows = []
+            for e in s.get(key) if isinstance(s.get(key), list) else []:
+                if not isinstance(e, dict):
+                    continue
+                item = e.get("item")
+                if item is not None:
+                    try:
+                        item = int(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if self.scope is None or item not in self.scope:   # strictly the project's own items
+                        continue
+                row = {}
+                for f in fields:
+                    v = e.get(f)
+                    if f == "item" or v in (None, "", False):
+                        continue
+                    row[f] = True if v is True else _clip(v, 240)
+                if not any(row.get(f) for f in ("text", "title", "quote")):
+                    continue
+                text = ". ".join(str(row.get(f) or "") for f in ("text", "title", "quote"))
+                found = inject.instructions(text)
+                r = self.index.get(item) if item is not None else None
+                if r is not None:
+                    row["item"] = item
+                    chips[item] = self._chip(r)
+                    if r.get("instructions"):
+                        flag_ids.add(item)
+                        row["instructions"] = True
+                if found:
+                    row["instructions"] = True
+                    flag_text.append((row, found))
+                rows.append(row)
+                if len(rows) >= cap:
+                    break
+            if rows:
+                out[key] = rows
+        return out
+
+    def prefetch(self, question, summary=None):
+        """0.7.1, project chats only: the first lookup Callsheet runs itself before the model's first request of a
+        question: the project's summary and the top results of the same scoped index.search for the question (the
+        project's newest linked items when nothing matches), at most PREFETCH_CHARS (about PREFETCH_TOKENS tokens:
+        the lowest-ranked items go first, then snippets are clipped, then the summary's lists shrink). Returns
+        (search args, result object, step label), or None outside a project chat."""
+        if self.scope is None or self.index is None:
+            return None
+        q = re.sub(r"[\x00-\x1f\x7f]", " ", str(question or "")).strip()[:200]
+        args = {"q": q}
+        rows = self.index.search(q, limit=PREFETCH_ITEMS, ids=self.scope) if q else []
+        recent = not rows
+        if recent:
+            rows = self.index.search("", limit=PREFETCH_ITEMS, ids=self.scope)
+        rows = [r for r in rows if int(r["id"]) in self.scope]   # the index filter already did this; belt and braces
+        chips, flag_ids, flag_text = {}, set(), []
+        proj = self._summary(summary, chips, flag_ids, flag_text)
+        items = [self._fmt(r) for r in rows]
+        for r in rows:
+            chips[int(r["id"])] = self._chip(r)
+            if r.get("instructions"):
+                flag_ids.add(int(r["id"]))
+        out = {"tool": "search", "prefetch": True,
+               "note": (PREFETCH_RECENT if recent else PREFETCH_NOTE)
+               + (PREFETCH_RELAXED if rows and not recent and rows[0].get("relaxed") else ""),
+               "project": proj, "count": len(items), "items": items}
+
+        def over():
+            out["count"] = len(items)
+            return len(json.dumps(args, ensure_ascii=False)) + len(data_block(out)) > PREFETCH_CHARS
+        while over() and len(items) > 3:
+            items.pop()
+        if over():
+            for it in items:
+                if "snippet" in it:
+                    it["snippet"] = _clip(it["snippet"], PREFETCH_SNIPPET)
+        while over() and items:
+            items.pop()
+        for key in ("slipped", "milestones", "open_tasks"):
+            while over() and proj.get(key):
+                proj[key].pop()
+                if not proj[key]:
+                    del proj[key]
+        if over():
+            out["project"] = proj = {"name": proj["name"], "status": proj["status"]}
+        # what the model was given (and only that) counts as seen (citations) and flagged (the post-check)
+        kept = {it["id"] for it in items}
+        kept |= {e["item"] for k, _, _ in self._SUMMARY_LISTS for e in proj.get(k) or [] if "item" in e}
+        for i in kept:
+            self.seen[i] = chips[i]
+        self.flagged |= flag_ids & kept
+        rows_kept = {id(e) for k, _, _ in self._SUMMARY_LISTS for e in proj.get(k) or []}
+        self.flagged_text += [t for row, found in flag_text if id(row) in rows_kept for t in found]
+        label = PREFETCH_LABEL + (f" and searched it for “{_clip(q, 60)}”" if q and not recent else "")
+        return args, out, label
 
     # the tools
     def _search(self, args):
@@ -769,6 +907,7 @@ class Chat:
         self.thread = None
         self.stopping = False
         self.modes = {}      # (base_url, model) -> monotonic time the server refused `tools` (JSON until expiry)
+        self.projects = None  # 0.7.1: projects.Projects (set by api.App): the project summary for the first lookup
         try:
             self.prune()
         except OSError:
@@ -1064,14 +1203,17 @@ class Chat:
                           scope=sc.get("ids") or [] if sc else None,
                           project={"name": sc.get("name"), "status": sc.get("status")} if sc else None)
             question, history = conv["messages"][-1]["text"], self._history(conv)
+            pre = self._prefetch(tools, sc, question) if sc else None
+            if pre:
+                self._step(job, pre[2])
             if provider == "claude":
-                raw, by = self._claude(job, t0, s["claude"], now, tz, fmt, tools, question, history, stats), \
+                raw, by = self._claude(job, t0, s["claude"], now, tz, fmt, tools, question, history, stats, pre), \
                     writer.label(s["claude"]["model"])
                 mode = "claude tools"
             else:
                 eff = effective_local(self.store, s)
                 raw, mode = self._local(job, t0, dict(s["local"], **eff), now, tz, fmt, tools, question, history,
-                                        stats)
+                                        stats, pre)
                 by = "Local · " + eff["model"][:60]
             raw = raw.strip()[:MAX_ANSWER]
             text, sources = cite(raw, tools.seen)
@@ -1079,11 +1221,12 @@ class Chat:
                 raw, text, sources = "", NO_ANSWER, []
             msg = {"role": "assistant", "text": text, "ctx": raw, "sources": sources, "by": by,
                    "warning": writer.WARNING if writer.states_decision(text, attributed_ok=True) else None,
-                   "instr_warning": inject.LABEL if self._repeats(text, tools.flagged, conv) else None,
+                   "instr_warning": inject.LABEL if self._repeats(text, tools.flagged, conv, tools.flagged_text)
+                   else None,
                    "instr_seen": sorted(tools.flagged)[:50],
                    "steps": list(job["steps"]), "at": self.clock()}
-            self.log(f"Callsheet chat: {provider} ({mode}), {stats['rounds']} rounds, {tools.calls} tool calls, "
-                     f"{len(sources)} sources{', flagged' if msg['warning'] else ''}"
+            self.log(f"Callsheet chat: {provider} ({mode}), {stats['rounds']} rounds, {tools.calls} tool calls"
+                     f"{' + first lookup' if pre else ''}, {len(sources)} sources{', flagged' if msg['warning'] else ''}"
                      f"{', repeats an instruction' if msg['instr_warning'] else ''}, {stats['in']} in / "
                      f"{stats['out']} out tokens, {self.monotonic() - t0:.1f}s{_waits(stats)}")
         except _Stopped:
@@ -1107,10 +1250,26 @@ class Chat:
             conv["updated_at"] = self.clock()
             self._write(conv)
 
-    def _repeats(self, text, flagged, conv):
+    def _prefetch(self, tools, sc, question):
+        """0.7.1: the project chat's first lookup (Tools.prefetch) with the project's live summary; None if it
+        fails (the question then goes on without it)."""
+        summary = None
+        try:
+            if self.projects is not None:
+                summary = self.projects.chat_summary(sc.get("project"))
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Callsheet chat: couldn't read the project summary ({type(e).__name__})")
+        try:
+            return tools.prefetch(question, summary)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Callsheet chat: the first lookup failed ({type(e).__name__})")
+            return None
+
+    def _repeats(self, text, flagged, conv, extra=()):
         """0.6.0 post-check: does the answer quote or paraphrase a planted instruction (inject.repeated) from an
         item a tool returned in this turn, or in one of the earlier turns of this chat (instr_seen)? The flagged
-        sentences are re-read from the index (it stores only their hashes)."""
+        sentences are re-read from the index (it stores only their hashes). 0.7.1: `extra`, flagged sentences of
+        the first lookup's project entries that have no item."""
         ids = set(flagged)
         for m in (conv or {}).get("messages", [])[-2 * HISTORY_TURNS:]:
             if m.get("role") == "assistant" and isinstance(m.get("instr_seen"), list):
@@ -1120,7 +1279,7 @@ class Chat:
             r = self.index.get(i) if self.index is not None else None
             if r is not None:
                 sentences += inject.item_instructions(r.get("title"), r.get("body"))
-        return bool(inject.repeated(text, sentences))
+        return bool(inject.repeated(text, sentences + list(extra)))
 
     def _step(self, job, label):
         if label:
@@ -1144,8 +1303,9 @@ class Chat:
         with self.lock:
             self.modes.clear()
 
-    def _local(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats):
-        """The tool loop against the local server. Returns (raw answer, protocol)."""
+    def _local(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats, pre=None):
+        """The tool loop against the local server. Returns (raw answer, protocol). 0.7.1: `pre` (Tools.prefetch) goes
+        in after the question as the first tool call and its result, in the protocol's own form."""
         base, model, key = cfg["base_url"], cfg["model"], cfg["api_key"]
         auto = cfg["tools"] == "auto"
         mode = self._auto_mode(base, model) if auto else cfg["tools"]
@@ -1158,7 +1318,21 @@ class Chat:
             msgs = [{"role": "system", "content": system_prompt(now, tz, self.store.areas(), fmt, m, sources, tools.scoped())}]
             for q, a in history:
                 msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
-            return msgs + [{"role": "user", "content": question}]
+            msgs.append({"role": "user", "content": question})
+            if pre:
+                args, result, _ = pre
+                if m == "native":
+                    msgs += [{"role": "assistant", "content": "",
+                              "tool_calls": [{"id": PREFETCH_CALL, "type": "function",
+                                              "function": {"name": "search",
+                                                           "arguments": json.dumps(args, ensure_ascii=False)}}]},
+                             {"role": "tool", "tool_call_id": PREFETCH_CALL, "name": "search",
+                              "content": data_block(result)}]
+                else:
+                    msgs += [{"role": "assistant", "content": json.dumps({"tool": "search", "args": args},
+                                                                         ensure_ascii=False)},
+                             {"role": "user", "content": f"Result of search:\n{data_block(result)}\n\n{JSON_NEXT}"}]
+            return msgs
 
         msgs, final, corrected, switched, nudged = start(mode), False, False, False, False
         while True:
@@ -1294,7 +1468,7 @@ class Chat:
             raise writer.WriterError("Claude isn't available in this build.") from None
         return writer._client(sdk, key), sdk  # noqa: SLF001
 
-    def _claude(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats):
+    def _claude(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats, pre=None):
         key = self.store.writer_config()["claude"]["api_key"]
         if not key:
             raise writer.WriterError(NO_KEY)
@@ -1304,6 +1478,19 @@ class Chat:
         for q, a in history:
             msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
         msgs.append({"role": "user", "content": question})
+        if pre:  # 0.7.1: the project chat's first lookup
+            args, result, _ = pre
+            if cfg["thinking"]:
+                # with thinking on, an assistant turn that Claude didn't write can't open a tool loop (it would need
+                # a thinking block): the same <data> result goes in after the question instead
+                msgs[-1] = {"role": "user", "content": [
+                    {"type": "text", "text": question},
+                    {"type": "text", "text": f"Result of search (Callsheet's first lookup):\n{data_block(result)}"}]}
+            else:
+                msgs += [{"role": "assistant", "content": [{"type": "tool_use", "id": PREFETCH_TOOLU, "name": "search",
+                                                            "input": args}]},
+                         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": PREFETCH_TOOLU,
+                                                       "content": data_block(result)}]}]
         kw = dict(model=cfg["model"], max_tokens=CLAUDE_MAX_TOKENS[1 if cfg["thinking"] else 0],
                   system=system_prompt(now, tz, self.store.areas(), fmt, "native", sources, tools.scoped()),
                   tools=claude_tools(sources), output_config={"effort": cfg["effort"]},

@@ -19,6 +19,12 @@
   search the project's items before answering, so "What should I do next?" no longer asks "which project?". The
   name is passed as data (one line, clipped, quotes and angle brackets escaped); chats outside a project are
   unchanged.
+- **Ask about this project looks things up first.** Some models still answered "I couldn't find any tasks" without
+  searching. Now, before the model answers each question in a project chat, Callsheet itself looks up the project
+  (name, status, next step, open tasks, dates and slipped items) and the project's items that best match the
+  question (or its most recent ones), and gives the model that as its first search result. It only ever includes the
+  project's own items, stays short (about 3,000 tokens at most) and is marked and checked like any other search
+  result; the model can still search for more. Chats outside a project are unchanged.
 
 ## 0.7.0 ("Projects")
 
