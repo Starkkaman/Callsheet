@@ -107,21 +107,32 @@ def _calls(settings):
 
 
 def is_day_off(settings, day):
+    """Not one of the workdays. 0.6.2: only the urgent light check (push.check_due, with skip_checkins_days_off)
+    still uses this; call times have their own days (call_days)."""
     return WEEKDAYS[day.weekday()] not in settings.get("workdays", WEEKDAYS)
 
 
+def call_days(settings, c):
+    """0.6.2: the weekdays a call time runs on: its own "days" (Store.settings fills them in), else the rule before
+    0.6.2 (the morning brief every day, check-ins on workdays when skip_checkins_days_off is set)."""
+    days = c.get("days")
+    if isinstance(days, list) and days:
+        return days
+    if c.get("id") != "morning" and settings.get("skip_checkins_days_off"):
+        return settings.get("workdays", WEEKDAYS)
+    return WEEKDAYS
+
+
 def next_call(settings, after):
-    """First enabled call time strictly after `after` (aware datetime). On days off, check-ins
-    (midday, afternoon) are skipped when skip_checkins_days_off is set; the morning brief still runs.
-    Returns (datetime, call) or (None, None)."""
+    """First enabled call time strictly after `after` (aware datetime), on one of its days (call_days) in the
+    settings' time zone. Returns (datetime, call) or (None, None)."""
     tz = tzinfo(settings)
     after = after.astimezone(tz)
     calls = _calls(settings)
     for i in range(9):
         day = after.date() + dt.timedelta(days=i)
-        off = settings.get("skip_checkins_days_off") and is_day_off(settings, day)
         for t, c in calls:
-            if off and c["id"] != "morning":
+            if WEEKDAYS[day.weekday()] not in call_days(settings, c):
                 continue
             when = dt.datetime.combine(day, t, tzinfo=tz)
             if when > after:

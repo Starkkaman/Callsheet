@@ -68,13 +68,23 @@ QUEUED = "One moment: Callsheet is answering another question first."
 NOT_SET = "Set up the chat model in Setup → Delivery → Chat."
 NO_KEY = "Add an Anthropic API key in Setup → Delivery → Writer first."
 TOO_MANY = "Callsheet couldn't finish the search in 6 steps. Try a narrower question."
+# 0.6.2: a busy model server (a shared llama.cpp router: another client's run, a model swap). The page shows SLOW
+# once a request has been out for SLOW_AFTER seconds without an answer, LOADING once when the server said it was
+# loading the model, and a timeout ends with TIMED_OUT and a "Try again" button (the message's retry flag).
+SLOW_AFTER = 20
+SLOW = "Waiting for the model server (it's busy)…"
+LOADING = "Loading the chat model…"
+TIMED_OUT = ("The model server was busy and didn't answer within {n}. Nothing went wrong on your side: try again "
+             "in a moment.")
+UNREACHABLE = "Couldn't reach the chat model's server. Check that it's running, then try again."
 
 # --- settings ------------------------------------------------------------------------------------------------
 # id_slot: the llama.cpp slot chat requests are pinned to (0..writer.ID_SLOT_MAX), always sent. Default 0, so a chat
 # question never takes over the slot the owner gave the brief writer (the writer's own "Server slot for briefs",
 # e.g. 1) and evicts its cached prompt.
 LOCAL_DEFAULTS = {"base_url": "", "model": "", "api_key": None, "thinking": False, "max_tokens": 2048,
-                  "timeout": 120, "tools": "auto", "id_slot": 0}
+                  "timeout": 300, "tools": "auto", "id_slot": 0}
+OLD_TIMEOUT = 120            # 0.6.2: the default until 0.6.1; a saved 120 from before 0.6.2 becomes 300 (load_settings)
 LOCAL_LIMITS = {"max_tokens": (256, 16384), "timeout": (30, 600), "id_slot": (0, writer.ID_SLOT_MAX)}
 # After a server refused `tools`, the JSON protocol is used for that server and model for this long, then native
 # tool calling is tried again (the server may have been restarted with --jinja). A model change forgets it at once.
@@ -96,6 +106,10 @@ def load_settings(store):
     for part in ("local", "claude"):
         if isinstance(saved.get(part), dict):
             s[part].update({k: v for k, v in saved[part].items() if k in s[part]})
+    # 0.6.2: settings saved before 0.6.2 hold the old 120 s default (every save stores the whole set); it becomes the
+    # new default. Saves from 0.6.2 on carry "v062", so a 120 the owner picks later stays.
+    if not saved.get("v062") and s["local"]["timeout"] == OLD_TIMEOUT:
+        s["local"]["timeout"] = LOCAL_DEFAULTS["timeout"]
     return s
 
 
@@ -217,7 +231,7 @@ def update_settings(store, patch):
                         raise InputError(f"claude can't change {str(k)[:40]}.")
             else:
                 raise InputError(f"The chat settings can't change {str(key)[:40]}.")
-        store._set_meta("chat", s)  # noqa: SLF001
+        store._set_meta("chat", dict(s, v062=True))  # noqa: SLF001
     return public_settings(store)
 
 
@@ -605,6 +619,32 @@ def cite(raw, seen):
 
 
 # --- model replies -------------------------------------------------------------------------------------------
+class _Retry(writer.WriterError):
+    """0.6.2: a failure worth one more try (a busy server's timeout, a model still loading): the answer gets
+    retry: true and the page shows "Try again". .log: a plain reason for the log, numbers only."""
+
+    def __init__(self, text, log):
+        super().__init__(text)
+        self.log = log
+
+
+def _secs(n):
+    """300 -> "5 minutes", 90 -> "90 seconds"."""
+    return f"{n // 60} minute{'s' if n // 60 != 1 else ''}" if n % 60 == 0 else f"{n} seconds"
+
+
+def _waits(stats):
+    """0.6.2: ", waited 3.0s for Callsheet's brief, server 41.2s to answer + 0.1s" (numbers only), or ""."""
+    if not any(k in stats for k in ("lock_s", "first_byte_s")):
+        return ""
+    out = ""
+    if stats.get("lock_s"):
+        out += f", waited {stats['lock_s']:.1f}s for Callsheet's own requests"
+    if "first_byte_s" in stats:
+        out += f", server {stats['first_byte_s']:.1f}s to start answering + {stats.get('read_s', 0):.1f}s"
+    return out
+
+
 class _Stopped(Exception):
     pass
 
@@ -757,7 +797,12 @@ class Chat:
             return None
         if self.queue and self.queue[0] != cid:
             return {"state": "queued", "text": QUEUED, "steps": []}
-        return {"state": job["state"], "text": job["text"], "steps": list(job["steps"])}
+        text = job["text"]
+        sent = job.get("sent_at")
+        if job["state"] == "working" and sent is not None and text != LOADING \
+                and self.monotonic() - sent > SLOW_AFTER:
+            text = SLOW  # 0.6.2: no answer after SLOW_AFTER seconds; the server is busy (or the answer is long)
+        return {"state": job["state"], "text": text, "steps": list(job["steps"])}
 
     def overview(self):
         self.prune()
@@ -847,7 +892,8 @@ class Chat:
             conv["messages"].append({"role": "user", "text": text, "at": now})
             conv["updated_at"] = now
             self._write(conv)
-            self.jobs[conv["id"]] = {"state": "queued", "text": "", "steps": [], "cancel": False}
+            self.jobs[conv["id"]] = {"state": "queued", "text": "", "steps": [], "cancel": False, "sent_at": None,
+                                     "paused": 0.0}
             self.queue.append(conv["id"])
             self._start()
             self.lock.notify_all()
@@ -907,9 +953,38 @@ class Chat:
             if self.monotonic() - waited > WAIT_MAX:
                 raise writer.WriterError("Callsheet is still busy writing your brief. Ask again in a few minutes.")
             self.sleep(self.poll)
-        if self.monotonic() - t0 > TURN_DEADLINE:
+        job["paused"] = job.get("paused", 0.0) + (self.monotonic() - waited)  # 0.6.2: waiting isn't answer time
+        if self._used(job, t0) > TURN_DEADLINE:
             raise writer.WriterError("Callsheet took too long to answer. Try a narrower question.")
         job["state"], job["text"] = "working", "Thinking…"
+
+    def _used(self, job, t0):
+        """0.6.2: seconds of this question's own model time (waiting for the brief or Callsheet's lock left out)."""
+        return self.monotonic() - t0 - job.get("paused", 0.0)
+
+    def _notify(self, job):
+        """0.6.2: writer._post's progress callback for one chat request."""
+        state = {"lock": None}
+
+        def notify(event):
+            if job["cancel"] or self.stopping:
+                raise _Stopped()
+            now = self.monotonic()
+            if event == "lock":  # the brief writer or the evaluation is using the local server: not our time
+                if state["lock"] is None:
+                    state["lock"] = now
+                job["state"], job["text"], job["sent_at"] = "waiting", self.busy() or BUSY_BRIEF, None
+            elif event == "sent":
+                if state["lock"] is not None:
+                    job["paused"] = job.get("paused", 0.0) + (now - state["lock"])
+                    state["lock"] = None
+                job["state"], job["text"], job["sent_at"] = "working", job["text"] if job["text"] == LOADING \
+                    else "Thinking…", now
+            elif event == "loading":
+                if job["text"] != LOADING:
+                    self.log("Callsheet chat: the server is loading the chat model")
+                job["text"], job["sent_at"] = LOADING, now
+        return notify
 
     def _history(self, conv):
         """Earlier answered turns: [(question, answer with its [id] markers)], newest last."""
@@ -958,13 +1033,16 @@ class Chat:
             self.log(f"Callsheet chat: {provider} ({mode}), {stats['rounds']} rounds, {tools.calls} tool calls, "
                      f"{len(sources)} sources{', flagged' if msg['warning'] else ''}"
                      f"{', repeats an instruction' if msg['instr_warning'] else ''}, {stats['in']} in / "
-                     f"{stats['out']} out tokens, {self.monotonic() - t0:.1f}s")
+                     f"{stats['out']} out tokens, {self.monotonic() - t0:.1f}s{_waits(stats)}")
         except _Stopped:
             msg = {"role": "assistant", "stopped": True, "text": "", "steps": list(job["steps"]), "at": self.clock()}
             self.log(f"Callsheet chat: stopped, {self.monotonic() - t0:.1f}s")
         except writer.WriterError as e:
             msg = {"role": "assistant", "error": str(e), "text": "", "steps": list(job["steps"]), "at": self.clock()}
-            self.log(f"Callsheet chat: {provider} failed: {e} ({self.monotonic() - t0:.1f}s)")
+            if isinstance(e, _Retry):
+                msg["retry"] = True  # 0.6.2: the page offers "Try again"
+            self.log(f"Callsheet chat: {provider} failed: {e.log if isinstance(e, _Retry) else e} "
+                     f"({self.monotonic() - t0:.1f}s{_waits(stats)})")
         except Exception as e:  # noqa: BLE001 (a chat bug must never kill the worker)
             msg = {"role": "assistant", "error": "Something went wrong inside the chat. Check the app log.",
                    "text": "", "steps": [], "at": self.clock()}
@@ -1021,6 +1099,7 @@ class Chat:
         mode = self._auto_mode(base, model) if auto else cfg["tools"]
         sources = tools.sources()
         opts = {"timeout": cfg["timeout"], "id_slot": cfg.get("id_slot", LOCAL_DEFAULTS["id_slot"])}
+        timing = {}
         log = (lambda line: self.log(line.replace("Callsheet writer:", "Callsheet chat:", 1))) if self.log else None
 
         def start(m):
@@ -1042,8 +1121,23 @@ class Chat:
                 body["tool_choice"] = "none" if final or nudged else "auto"
             writer.with_slot(body, opts)
             try:
-                res = writer._post(base, key, body, opts, log, self.monotonic)  # noqa: SLF001 (holds LOCAL_LOCK)
+                timing.clear()
+                res = writer._post(base, key, body, opts, log, self.monotonic,  # noqa: SLF001 (holds LOCAL_LOCK)
+                                   notify=self._notify(job), timing=timing)
+                job["sent_at"] = None
+                self._timing(timing, stats)
             except writer.WriterError as e:
+                job["sent_at"] = None
+                self._timing(timing, stats)
+                if isinstance(e, writer.LocalTimeout):
+                    raise _Retry(TIMED_OUT.format(n=_secs(cfg["timeout"])),
+                                 f"timed out after {cfg['timeout']} s without an answer, "
+                                 f"{stats.get('lock_s', 0):.1f}s waiting for Callsheet's own requests") from None
+                if isinstance(e, writer._Loading):  # noqa: SLF001 (still loading after the one retry)
+                    raise _Retry("The chat model is still loading on the server. Try again in a moment.",
+                                 "the server was still loading the model") from None
+                if str(e).startswith("Couldn't reach the local model"):
+                    raise _Retry(UNREACHABLE, "couldn't reach the server") from None
                 if mode == "native" and auto and stats["rounds"] == 0 and not switched and _rejects_tools(e):
                     self.log("Callsheet chat: the server refused tools; using the JSON protocol")
                     mode, switched = "json", True
@@ -1116,6 +1210,14 @@ class Chat:
                 if final:
                     raise writer.WriterError(TOO_MANY)
                 final = self._json_round(job, tools, msgs, act, stats, final)
+
+    @staticmethod
+    def _timing(timing, stats):
+        """0.6.2: adds up a request's waits (numbers only, for the log line)."""
+        for k in ("lock_s", "first_byte_s", "read_s"):
+            v = timing.get(k)
+            if isinstance(v, (int, float)):
+                stats[k] = stats.get(k, 0.0) + v
 
     def _json_round(self, job, tools, msgs, act, stats, final):
         """Runs one JSON-protocol tool call and adds the call and its result. Returns whether that was the last."""

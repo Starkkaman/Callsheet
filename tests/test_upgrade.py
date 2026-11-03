@@ -65,7 +65,11 @@ class UpgradeTest(unittest.TestCase):
         self.addCleanup(s.close)
         self.assertEqual(dump(self.dir / store.DB_NAME), self.before)   # opening rewrites nothing
         settings, areas, accounts, vips, client = self.public
-        self.assertEqual(s.settings(), dict(settings, time_format="12h"))  # 0.4.0 default
+        # 0.4.0 default time format; 0.6.2: each call time gets the days it ran on before (morning every day,
+        # check-ins on workdays because skip_checkins_days_off is on)
+        week, work = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], ["mon", "tue", "wed", "thu", "fri"]
+        calls = [dict(c, days=week if c["id"] == "morning" else work) for c in settings["call_times"]]
+        self.assertEqual(s.settings(), dict(settings, time_format="12h", call_times=calls))
         self.assertEqual(s.accounts(), accounts)
         self.assertEqual(s.vips(), vips)
         self.assertEqual(s.google_client(), client)

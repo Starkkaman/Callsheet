@@ -51,8 +51,9 @@ not Refresh). It moves the light check's marker to now and clears held alerts (t
   chose the call times.
 
 ## The light check (`Notifier.check`)
-- Due (`push.check_due`) when urgent alerts are on with at least one phone, not a day off (when "Skip check-ins on
-  days off" is on), outside quiet hours, more than 10 minutes from any enabled call time (before or after), and 10
+- Due (`push.check_due`) when urgent alerts are on with at least one phone, not a day off (a day not in `workdays`,
+  when `skip_checkins_days_off` is on: Setup's "No urgent checks on days off" since 0.6.2; the call times' own
+  days don't change this), outside quiet hours, more than 10 minutes from any enabled call time (before or after), and 10
   minutes after the last check or brief. The scheduler asks every tick (30 s) when no call time is due.
 - Skipped while a sync or a writer evaluation holds the sync lock; the check never takes that lock itself, so
   Refresh never waits for it. Never runs the writer, a model or a sync.

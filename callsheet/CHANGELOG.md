@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.2
+
+- **Chat on a busy model server.** When the local model server is busy (a shared llama.cpp router, a model
+  switch, or Callsheet writing your brief), the chat now says so instead of only spinning: "Callsheet is writing
+  your brief, one moment." while your brief is using the server (that wait no longer counts against the chat's
+  time), "Waiting for the model server (it's busy)…" after 20 seconds without an answer, and "Loading the chat
+  model…" while the server switches models. The chat's default timeout is now 5 minutes (300 s; a saved 120 s,
+  the old default, becomes 300 s). If the server still doesn't answer, the chat says so plainly and shows **Try
+  again**, which asks the same question again with one click. The app log adds how long the chat waited for
+  Callsheet's own requests and for the server (numbers only).
+- **Days for each call time.** Setup → Call times has Mon–Sun buttons under each call time (Morning brief, Midday
+  and Afternoon check-in): Callsheet runs that call time only on the days you pick. Each call time needs at least
+  one day; to stop one, turn it off. Nothing changes until you choose: the Morning brief keeps running every day
+  and the check-ins keep your working days (or every day if you didn't skip check-ins on days off). The switch
+  below is now **No urgent checks on days off**: the urgent check between call times still follows your working
+  days and quiet hours. Refresh always works.
+
 ## 0.6.1
 
 - **Known limits (measured 2026-11-02, Swift as Careful).** A Careful brief takes about 3.5–5 minutes end to end

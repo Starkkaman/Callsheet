@@ -1045,9 +1045,11 @@ def _loading_body(e):
     return "loading" in text or "model limit" in text
 
 
-def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]):
+def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"], timing=None):
     """One request to {base}{path}; only /models (GET) and /chat/completions (POST) are allowed.
-    Raises _Loading for HTTP 500/503 naming model loading or a reset connection (a cold load)."""
+    Raises _Loading for HTTP 500/503 naming model loading or a reset connection (a cold load).
+    0.6.2: `timing` (a dict, optional) gets first_byte_s (until the server's answer started: its queue, a model
+    swap and, without streaming, the generation) and read_s (reading the answer body)."""
     if (method, path) not in (("GET", "/models"), ("POST", "/chat/completions")) or not base:
         raise WriterError("Callsheet doesn't make that request.")
     data = json.dumps(body).encode() if body is not None else None
@@ -1057,9 +1059,14 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
         req.add_header("Content-Type", "application/json")
     if key:
         req.add_header("Authorization", "Bearer " + key)
+    sent = time.monotonic()
     try:
         with _opener.open(req, timeout=timeout) as resp:
+            first = time.monotonic()
             raw = resp.read(4_000_000)
+            if timing is not None:
+                timing["first_byte_s"] = round(first - sent, 1)
+                timing["read_s"] = round(time.monotonic() - first, 1)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             raise WriterError("The local model server refused the API key.") from None
@@ -1143,22 +1150,43 @@ def _log_answer(log, res, wall):
 LOCAL_LOCK = threading.Lock()
 
 
-def _post(base, key, body, opts, log, clock):
-    """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK."""
-    with LOCAL_LOCK:
+def _post(base, key, body, opts, log, clock, notify=None, timing=None):
+    """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK.
+    0.6.2 (chat): `notify(event)` (optional) hears "lock" while another Callsheet request holds LOCAL_LOCK (called
+    again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
+    and "loading" when the server said it is loading the model (before the retry). `timing` (a dict, optional) gets
+    lock_s (waiting for LOCAL_LOCK, not part of the request's timeout), first_byte_s and read_s (see _local).
+    Without notify the lock is taken as before (the brief writer and the evaluation)."""
+    w0 = clock()
+    if notify is None:
+        LOCAL_LOCK.acquire()
+    elif not LOCAL_LOCK.acquire(blocking=False):
+        while True:
+            notify("lock")
+            if LOCAL_LOCK.acquire(timeout=0.2):
+                break
+    try:
+        if timing is not None:
+            timing["lock_s"] = round(clock() - w0, 1)
         t0 = clock()
         try:
+            if notify:
+                notify("sent")
             try:
-                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
+                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
             except _Loading:
                 if log:
                     log(f"Callsheet writer: the local model server was loading the model; trying again in {LOAD_WAIT} s")
+                if notify:
+                    notify("loading")
                 _sleep(LOAD_WAIT)
-                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"])
+                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
         except WriterError:
             if log:
                 log(f"Callsheet writer: local request failed, {clock() - t0:.1f}s")
             raise
+    finally:
+        LOCAL_LOCK.release()
     _log_answer(log, res, clock() - t0)
     return res
 

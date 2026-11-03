@@ -110,9 +110,32 @@ runs, showing "Callsheet is writing your brief, one moment." or the evaluation t
 show "One moment: Callsheet is answering another question first." `writer.LOCAL_LOCK` keeps the brief,
 the evaluation and the chat from sending to the local server at the same time. Stop cancels between steps.
 
+## A busy model server (0.6.2)
+The local server may be shared (a llama.cpp router: another client's run, a model swap, Callsheet's own Careful
+brief). Incident 2026-11-03: a question failed after the 120 s timeout while the router was busy, and the page only
+showed its spinner. Since 0.6.2:
+- **Waiting for Callsheet's own requests isn't answer time.** `writer._post(..., notify=, timing=)`: while the brief
+  writer or the evaluation holds `LOCAL_LOCK`, the question shows "Callsheet is writing your brief, one moment."
+  (or the evaluation text), Stop works, and that wait counts neither against the request timeout (it starts when
+  the request goes out) nor against the 10-minute question limit (`job["paused"]`, as the wait for a running sync).
+- **Server time is measured.** `writer._local(timing=)` records the time until the server's answer started
+  (`first_byte_s`: its queue, a model swap and, without streaming, the generation) and reading the body (`read_s`);
+  the chat's log line adds ", waited Xs for Callsheet's own requests, server Ys to start answering + Zs" (numbers
+  only). The brief writer's log lines are unchanged.
+- **The page says what's happening.** A request out for more than `SLOW_AFTER` (20 s) shows "Waiting for the model
+  server (it's busy)…" instead of "Thinking…". When the server answers "Loading model" (the existing one retry 10 s
+  later), the question shows "Loading the chat model…" and the log notes it once.
+- **Timeouts end plainly.** The default timeout is 300 s. A timeout ends the question with "The model server was
+  busy and didn't answer within 5 minutes. Nothing went wrong on your side: try again in a moment." and
+  `retry: true`; a model still loading after the retry and an unreachable server do too. The page then shows **Try
+  again** under the latest answer, which asks the same question again in the same chat with one click. Other errors
+  (a refused key, a bad address) have no retry. The page stops polling as soon as nothing is pending (an answer or
+  an error), and after 5 failed polls.
+
 ## Settings (`meta` key `chat`, Setup → Delivery → Chat)
 `provider` local or claude. Local: `base_url` (empty = the writer's server, model and key), `model` (picked
-from `/v1/models`), `api_key`, `thinking`, `max_tokens` 256..16384 (2048), `timeout` 30..600 s (120), `tools`,
+from `/v1/models`), `api_key`, `thinking`, `max_tokens` 256..16384 (2048), `timeout` 30..600 s (300 since 0.6.2; a
+120 saved before 0.6.2, the old default, becomes 300, and saves from 0.6.2 on carry `v062` so a chosen 120 stays), `tools`,
 `id_slot` 0..63 (0; sent as `id_slot` with every local chat request, so a question doesn't evict the brief writer's
 llama.cpp slot, which is the writer's own `local.id_slot`, "Server slot for briefs", not sent when empty).
 Claude: `model`, `effort` low/medium/high, `thinking`; it uses the writer's saved Anthropic key and never

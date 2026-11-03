@@ -1640,12 +1640,24 @@
           t.setAttribute('aria-pressed', String(!!now.enabled)); box.classList.toggle('off', !now.enabled);
         });
       });
+      /* 0.6.2: the call time's own days (at least one; to stop it, turn it off) */
+      var days = h('div', { class: 'chips ctdays', role: 'group', 'aria-label': label + ' days' }, DAYS.map(function (d) {
+        var b = btn('chip', DAYNAME[d], { 'aria-pressed': String((ct.days || DAYS).indexOf(d) >= 0), 'data-ctday': ct.id + ':' + d, 'data-fk': 'ctday:' + ct.id + ':' + d }, function () {
+          var cur = (cts.filter(function (x) { return x.id === ct.id; })[0] || ct).days || DAYS;
+          var want = cur.indexOf(d) >= 0 ? cur.filter(function (x) { return x !== d; }) : cur.concat([d]);
+          if (!want.length) { err.textContent = 'Pick at least one day. To stop the ' + label + ', turn it off.'; return; }
+          save(ct, { days: DAYS.filter(function (x) { return want.indexOf(x) >= 0; }) }, err, [b], function (now) {
+            days.querySelectorAll('button').forEach(function (y) { y.setAttribute('aria-pressed', String((now.days || []).indexOf(y.getAttribute('data-ctday').split(':')[1]) >= 0)); });
+          });
+        });
+        return b;
+      }));
       box = h('div', { class: 'tb' + (ct.id === 'morning' ? ' lead' : '') + (ct.enabled ? '' : ' off') }, [
         h('div', { class: 'label' }, label), disp,
-        h('div', { class: 'row' }, [h('label', { class: 'sr', for: id }, label + ' time'), inp, t]), err]);
+        h('div', { class: 'row' }, [h('label', { class: 'sr', for: id }, label + ' time'), inp, t]), days, err]);
       return box;
     });
-    var skip = sw(st.skip_checkins_days_off, 'Skip check-ins on days off', function () {
+    var skip = sw(st.skip_checkins_days_off, 'No urgent checks on days off', function () {
       patchSettings(function () { return { skip_checkins_days_off: !st.skip_checkins_days_off }; }, skipErr, [skip], function (sent) {
         skip.setAttribute('aria-pressed', String(sent.skip_checkins_days_off));
       });
@@ -1653,8 +1665,8 @@
     return [
       h('p', { class: 'intro' }, 'Times are ' + (st.timezone || 'your time zone').replace(/_/g, ' ') + '.'),
       h('div', { class: 'times' }, blocks),
-      h('div', { class: 'swrow' }, [skip, h('span', { 'aria-hidden': 'true' }, 'Skip check-ins on days off')]), skipErr,
-      h('p', { class: 'note' }, 'Callsheet refreshes at these times.')];
+      h('div', { class: 'swrow' }, [skip, h('span', { 'aria-hidden': 'true' }, 'No urgent checks on days off')]), skipErr,
+      h('p', { class: 'note' }, 'Callsheet refreshes at these times, on the days picked under each. Days off are the ones not in your working days. Refresh always works.')];
   }
 
   /* step 5: delivery (fixed facts in this version) */
@@ -2138,9 +2150,9 @@
     S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
     var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
     var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
-    var timesSum = [morning ? morning.time + ' brief' : 'No morning brief',
-      checks.length ? checks.map(function (c) { return c.time; }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') +
-        (st.skip_checkins_days_off ? ', skipped on days off' : '') : 'no check-ins'].join(' · ');
+    function onDays(c) { var d = DAYS.filter(function (x) { return (c.days || DAYS).indexOf(x) >= 0; }); return d.length === 7 ? '' : ' (' + daysSummary(d) + ')'; }  /* 0.6.2 */
+    var timesSum = [morning ? morning.time + ' brief' + onDays(morning) : 'No morning brief',
+      checks.length ? checks.map(function (c) { return c.time + onDays(c); }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') : 'no check-ins'].join(' · ');
     var lines = [
       [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[app.dataset.look] + ', ' + MODENAME[app.dataset.mode]].filter(Boolean).join(' · '),
       [S.areas.map(function (a) { return a.name; }).join(', '),
@@ -3611,7 +3623,13 @@
   }
   function chatAnswer(m, i) {
     var kids = [h('span', { class: 'label' }, ['Callsheet', m.by ? h('span', { class: 'by' }, ' · ' + m.by) : null])];
-    if (m.error) kids.push(h('p', { class: 'err' }, m.error));
+    if (m.error) {
+      kids.push(h('p', { class: 'err' }, m.error));
+      /* 0.6.2: a busy or loading server: one click asks the same question again (only on the latest answer) */
+      var msgs = (CH.conv && CH.conv.messages) || [], q = msgs[i - 1];
+      if (m.retry && i === msgs.length - 1 && q && q.role === 'user' && !chatPending())
+        kids.push(h('button', { type: 'button', class: 'act ghost cretry', 'data-cretry': String(i - 1) }, 'Try again'));
+    }
     else if (m.stopped) kids.push(h('p', { class: 'muted' }, 'Stopped.'));
     else {
       if (m.warning) kids.push(h('p', { class: 'err sugwarn' }, m.warning));
@@ -3722,6 +3740,7 @@
     }
     else if (d.cnew) chatNew();
     else if (d.cstop) chatStop(t);
+    else if (d.cretry) { var rq = CH.conv && CH.conv.messages && CH.conv.messages[Number(d.cretry)]; if (rq && rq.role === 'user') { t.disabled = true; chatAsk(rq.text); } }  /* 0.6.2 */
     else if (d.ccopy) chatCopy(t, parseInt(d.ccopy, 10));
     else if (d.cearlier) { CH.earlier = !CH.earlier; CH.clearAsk = false; chatRender('[data-cearlier]'); }
     else if (d.cconv) chatOpen(d.cconv);
