@@ -46,6 +46,25 @@ to the owner ("the invoice is paid, tell Priya it's settled", "contract's signed
 instruction to an assistant and stays with the claim check. Measured at 0.6.0: 0 flagged non-planted sentences in
 the synthetic chat index (172 sentences) and in the brief fixtures' message texts (755 distinct sentences).
 
+Link lures (0.7.1, `inject.link_lure`, rule name `link`): an imperative (at the sentence start, after a clause
+break, after please/kindly/just/then/now/and, or after "you must/need to/should/have to") of click, tap, press, open,
+visit, go/head/navigate to, download, install, log in/on, sign in/on, verify, validate, reactivate, unlock, reset,
+follow, use or update, followed within 60 characters by "here", "this/that/the/following link|url|address|button|
+page" or "below", with a URL (`inject.URL`: a scheme or `www.`, or a bare host with a path) in the same sentence or
+starting the next one; or such an imperative with a URL right after it (up to four words and at/on/via/from/using/to
+in between: "Visit https://...", "Log in at https://...", "Verify your account at example.invalid/verify"). Not
+flagged: a link without such an imperative ("The agenda is here: https://...", "Slides: https://...", "Here's the doc
+https://...", a plain URL, "see https://..."), "Join the meeting at https://meet..." (join isn't a lure verb; decided:
+meeting links are normal), a lure whose links are all video-meeting links (meet.google.com, zoom.us/zoom.com,
+teams.microsoft.com, teams.live.com, webex.com, whereby.com, gotomeeting.com, meet.jit.si, chime.aws: Teams' "Click
+here to join the meeting"), mailing-list footers (unsubscribe, opt out, manage preferences, view in browser),
+negated or past ones ("Don't click the link below", "I clicked the link"), and the owner's own Obsidian notes
+(`source="obsidian"`, `inject.OWN_SOURCES`: the owner's text; the other rules still apply there). `inject.VERSION` is
+2, so the index re-checks every item once (backfill, with the item's source). Measured at 0.7.1: 0 flagged
+non-planted sentences in the brief fixtures (755 distinct, 61 with a URL), the 0.6 synthetic chat index (129) and
+the 0.7 projects index (44); the fixtures' URLs are mostly signature lines, so the decision tests above carry most of
+the evidence.
+
 Index time: `index.upsert` stores per item `instr` (a JSON list of 16-hex sha256 prefixes of the normalized
 flagged sentences, at most 8, "" when none; no extra text) and `instr_v` (`inject.VERSION`). Older rows (and all
 rows after a rules change, a `VERSION` bump) are flagged on the spot when read and stored by a one-off background
@@ -134,6 +153,17 @@ Priya the invoice is paid", "Invoice 2207 is paid" and "Jonas says it's paid, so
 Refusals don't count either way: `writer._NEGATION` includes cannot, can't, can not, unable to, won't and will not
 (0.6.0, for drafts too). Nothing from the chat goes into Memory or the brief.
 
+Links (0.7.1, `chat.defang`, deterministic): every link in an answer (a scheme or `www.` URL, a bare host with a path,
+`[label](url)`, `<url>`) is stored as plain text without its scheme plus "(from a message; not opened)", e.g.
+"example.invalid/fix (from a message; not opened)", in both `text` and `ctx` (so history carries the defanged
+form). The only links left as written are the ones Callsheet built for an item a tool returned in this chat (the
+`url` of a source chip: Gmail thread link, Slack permalink, Calendar htmlLink, Drive or GitHub link), matched exactly;
+a clean split by host isn't possible (the same hosts appear in untrusted mail), so everything else is defanged,
+links from the owner's notes and the model's own included. The claim and instruction checks read the answer before
+defanging (the note's "not" mustn't hide a claim). The page shows answers as text nodes only (`h()`, no linkify), so
+nothing in an answer is ever clickable; source chips open the side panel, whose "Open in ..." uses the item's own
+https link.
+
 ## Queue
 One worker thread answers questions in order. It waits while a sync (the brief writer) or a writer evaluation
 runs, showing "Callsheet is writing your brief, one moment." or the evaluation text, and other questions
@@ -182,3 +212,8 @@ Logs hold counts only (rounds, tool calls, sources, tokens, time), never questio
 `GET /api/chat` (overview), `DELETE /api/chat` (clear all), `POST /api/chat/ask` `{q, id?}`,
 `GET|DELETE /api/chat/<id>`, `POST /api/chat/<id>/stop`, `GET|PATCH /api/chat/settings`,
 `POST /api/chat/models`, `POST /api/chat/test`, `GET /api/chat/item/<id>` (the source panel).
+
+## Known untested
+- The Claude-with-thinking path of the project chat's first lookup (the block goes in as a second text block of the
+  question, see above): covered by unit tests of the request shape only, never run against the real API. Test it
+  live only if the owner uses Claude for chat.

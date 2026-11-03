@@ -167,9 +167,10 @@ def _segments(marked):
     return out
 
 
-def _instr(title, body):
-    """The stored flag: a JSON list of the flagged sentences' short hashes, "" when there are none."""
-    ks = inject.keys(title, body)
+def _instr(title, body, source=None):
+    """The stored flag: a JSON list of the flagged sentences' short hashes, "" when there are none. 0.7.1: `source`
+    (the owner's own Obsidian notes get no link-lure rule, inject.OWN_SOURCES)."""
+    ks = inject.keys(title, body, source)
     return json.dumps(ks) if ks else ""
 
 
@@ -180,7 +181,7 @@ def _flagged(r):
     if "instr_v" in keys and r["instr_v"] == inject.VERSION:
         return bool(r["instr"])
     if "body" in keys:
-        return bool(inject.keys(r["title"], r["body"]))
+        return bool(inject.keys(r["title"], r["body"], r["source"] if "source" in keys else None))
     return False
 
 
@@ -292,7 +293,7 @@ class Index:
             old = self.db.execute("SELECT id, hash, instr_v FROM items WHERE source=? AND account=? AND source_id=?",
                                   (row["source"], row["account"], row["source_id"])).fetchone()
             if old is None or old["hash"] != h or old["instr_v"] != inject.VERSION:
-                instr = _instr(row["title"], row["body"])
+                instr = _instr(row["title"], row["body"], row["source"])
             if old is None:
                 self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v) VALUES "
                                 f"({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?)",
@@ -336,7 +337,7 @@ class Index:
         done = 0
         while True:
             with self.lock:
-                rows = self.db.execute("SELECT id, title, body FROM items WHERE instr_v<>? LIMIT ?",
+                rows = self.db.execute("SELECT id, source, title, body FROM items WHERE instr_v<>? LIMIT ?",
                                        (inject.VERSION, int(batch))).fetchall()
                 if not rows:
                     return done
@@ -344,7 +345,7 @@ class Index:
                 try:
                     for r in rows:
                         self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
-                                        (_instr(r["title"], r["body"]), inject.VERSION, r["id"]))
+                                        (_instr(r["title"], r["body"], r["source"]), inject.VERSION, r["id"]))
                     self.db.execute("COMMIT")
                 except BaseException:
                     self.db.execute("ROLLBACK")

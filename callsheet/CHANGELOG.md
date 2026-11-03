@@ -25,6 +25,16 @@
   question (or its most recent ones), and gives the model that as its first search result. It only ever includes the
   project's own items, stays short (about 3,000 tokens at most) and is marked and checked like any other search
   result; the model can still search for more. Chats outside a project are unchanged.
+- **Link lures are marked.** A message, event or file that tells you to click, open, visit, download, log in,
+  sign in or verify "here" / "this link" / "below" together with a link, or a link right after such an instruction,
+  now gets the "contains instructions" mark like other planted instructions, and a chat answer that repeats it gets
+  the instruction label. Plain links ("The agenda is here: ...", "Slides: ...", "Join the meeting at ..."), meeting
+  links, unsubscribe footers and your own Obsidian notes aren't marked. Existing items are re-checked once in the
+  background.
+- **Links in chat answers can't be opened.** Any link in an answer is shown as plain text without "https://" and with
+  "(from a message; not opened)", for example "example.invalid/fix (from a message; not opened)", and saved that way.
+  Only the links Callsheet made itself for the answer's sources (the Gmail thread, the Slack message, the calendar
+  event, the Drive or GitHub item) stay as they are; the source chips keep their links.
 
 ## 0.7.0 ("Projects")
 

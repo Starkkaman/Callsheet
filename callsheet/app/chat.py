@@ -15,6 +15,8 @@ reports from a named source with a reporting verb doesn't count); citations ([12
 id came back from a tool in this turn. Chat text never goes into the owner's memory (memory.md).
 0.6.0: items that hold a planted instruction (inject.py, flagged at index time) carry "instructions": true in tool
 results and chips; an answer that quotes or paraphrases one gets inject.LABEL (instr_warning) besides any warning.
+0.7.1: links in answers are defanged (defang): plain text without the scheme plus "(from a message; not opened)",
+except the links Callsheet built for the items a tool returned (the source chips keep theirs).
 
 Conversations: $CALLSHEET_DATA/chat/<id>.json (dir 0700, files 0600), kept RETENTION_DAYS after the last
 message, Clear deletes them all. One question at a time (a worker thread); while a sync (the brief writer) or the
@@ -800,6 +802,55 @@ def cite(raw, seen):
     return text, [seen[i] for i in order][:MAX_SOURCES]
 
 
+# --- 0.7.1: links in answers ----------------------------------------------------------------------------------
+DEFANG_NOTE = "(from a message; not opened)"
+_MD_LINK = re.compile(r"\[([^\[\]\n]{0,300})\]\(\s*<?([^\s()<>]+(?:\([^\s()<>]*\)[^\s()<>]*)*)>?\s*\)")
+_ANGLE = re.compile(r"<\s*((?:https?|hxxps?|ftp)://[^\s<>]+|www\.[^\s<>]+)\s*>", re.I)
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+
+
+def _trim(u):
+    while u and u[-1] in ".,;:!?)]}*_>'\"":
+        if u[-1] == ")" and u.count("(") >= u.count(")"):
+            break
+        u = u[:-1]
+    return u
+
+
+def defang(text, keep=()):
+    """0.7.1: every link in an answer becomes plain text without its scheme plus DEFANG_NOTE ("example.invalid/fix
+    (from a message; not opened)"), except a link Callsheet built itself for an item a tool returned (`keep`: the
+    source chips' Gmail thread, Slack permalink, Calendar htmlLink, Drive or GitHub link, matched exactly). Markdown
+    links [label](url) become "label: <defanged url>", <url> loses its brackets. Idempotent. The page shows answers
+    as text only, so nothing in an answer is ever clickable; this keeps a planted link from looking like one."""
+    keep = {k for k in keep if isinstance(k, str) and k}
+    if not text:
+        return text
+
+    def shown(u):
+        return u if u in keep else _SCHEME.sub("", u) + " " + DEFANG_NOTE
+
+    def md(m):
+        label, u = m.group(1).strip(), _trim(m.group(2))
+        if u != m.group(2) or not inject.URL.fullmatch(u):
+            return m.group(0)
+        out = shown(u)
+        if re.fullmatch(r"\d{1,12}", label):     # "[12](url)": a citation followed by a link
+            return f"[{label}] {out}"
+        same = _SCHEME.sub("", label).rstrip("/").lower() == _SCHEME.sub("", u).rstrip("/").lower()
+        return out if not label or same else f"{label}: {out}"
+
+    def bare(m):
+        u = _trim(m.group(0))
+        rest = m.string[m.start() + len(u):]
+        if not u or rest.startswith(" " + DEFANG_NOTE):
+            return m.group(0)
+        return shown(u) + m.group(0)[len(u):]
+    text = _MD_LINK.sub(md, text)
+    text = _ANGLE.sub(lambda m: m.group(1), text)
+    return inject.URL.sub(bare, text)
+
+
 # --- model replies -------------------------------------------------------------------------------------------
 class _Retry(writer.WriterError):
     """0.6.2: a failure worth one more try (a busy server's timeout, a model still loading): the answer gets
@@ -1216,13 +1267,20 @@ class Chat:
                                         stats, pre)
                 by = "Local · " + eff["model"][:60]
             raw = raw.strip()[:MAX_ANSWER]
+            # 0.7.1: links in the answer are defanged (stored that way, history included), except the links Callsheet
+            # built for items a tool returned in this chat (the source chips' own links)
+            keep = {c.get("url") for c in tools.seen.values()} | {
+                c.get("url") for m in conv["messages"] if m.get("role") == "assistant"
+                for c in (m.get("sources") if isinstance(m.get("sources"), list) else []) if isinstance(c, dict)}
             text, sources = cite(raw, tools.seen)
             if not text.strip():  # never a blank answer (and nothing blank goes back as history)
                 raw, text, sources = "", NO_ANSWER, []
-            msg = {"role": "assistant", "text": text, "ctx": raw, "sources": sources, "by": by,
-                   "warning": writer.WARNING if writer.states_decision(text, attributed_ok=True) else None,
-                   "instr_warning": inject.LABEL if self._repeats(text, tools.flagged, conv, tools.flagged_text)
-                   else None,
+            # the checks read the answer as the model wrote it (the defang note's "not" mustn't hide a claim)
+            warned = writer.states_decision(text, attributed_ok=True)
+            repeats = self._repeats(text, tools.flagged, conv, tools.flagged_text)
+            msg = {"role": "assistant", "text": defang(text, keep), "ctx": defang(raw, keep), "sources": sources,
+                   "by": by, "warning": writer.WARNING if warned else None,
+                   "instr_warning": inject.LABEL if repeats else None,
                    "instr_seen": sorted(tools.flagged)[:50],
                    "steps": list(job["steps"]), "at": self.clock()}
             self.log(f"Callsheet chat: {provider} ({mode}), {stats['rounds']} rounds, {tools.calls} tool calls"
@@ -1278,7 +1336,7 @@ class Chat:
         for i in sorted(ids)[:50]:
             r = self.index.get(i) if self.index is not None else None
             if r is not None:
-                sentences += inject.item_instructions(r.get("title"), r.get("body"))
+                sentences += inject.item_instructions(r.get("title"), r.get("body"), r.get("source"))
         return bool(inject.repeated(text, sentences + list(extra)))
 
     def _step(self, job, label):

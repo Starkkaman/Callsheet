@@ -6,7 +6,9 @@ index time) and a word-overlap check of a chat answer against the flagged senten
 `instructions(text)` returns the sentences that address an assistant or AI with an instruction ("Callsheet note:",
 "Note to Callsheet", "Assistant:", "AI:", "SYSTEM:", "</data>", "ignore all previous instructions", "you may now
 send", "reply that you've sent it", "always say yes", "tell the owner to", "say it's approved", "when asked about X,
-say ..."). It deliberately does NOT flag:
+say ...") and, since 0.7.1, link lures: an imperative to click/tap/open/visit/go to/download/log in/sign in/verify...
+"here", "this link", "the link", "below", together with a URL in the same sentence or the next one, or a URL right
+after such an imperative ("Visit https://...", "Log in at https://..."). It deliberately does NOT flag:
 - a plain "Note:" ("Note: always bring ID"): no assistant target and "bring" isn't one of the yes-man verbs;
 - "System" without a colon or without an instruction cue ("System maintenance tonight 10pm", "System: Windows 11");
 - acknowledgements ("Reply that you've received this"): only claims of an action (sent, paid, approved, signed...)
@@ -14,7 +16,12 @@ say ..."). It deliberately does NOT flag:
 - a sender's own claims addressed to the owner ("the invoice is paid, tell Priya it's settled", "contract's signed,
   confirm it"): those are claims, handled by the claim post-check (writer.states_decision), not instructions to an
   assistant;
-- narrative "I/we/you/they always say ...".
+- narrative "I/we/you/they always say ...";
+- (0.7.1) a link without an imperative ("The agenda is here: https://...", "Slides: https://...", "Here's the doc
+  https://...", a plain URL), "Join the meeting at https://meet..." ("join" isn't a lure verb), a lure whose every
+  link is a video-meeting link (meet.google.com, zoom.us, teams.microsoft.com, webex.com...), mailing-list footers
+  ("Click here to unsubscribe", "manage your preferences", "view in browser"), and link lures in the owner's own
+  Obsidian notes (`source="obsidian"`: the owner's text, not someone else's).
 A flag only adds a caution mark and the label below, so a rare false positive costs little.
 
 The index stores, per item, only VERSION and short hashes of the flagged sentences (`keys`), never extra text: the
@@ -23,7 +30,7 @@ sentences themselves are re-derived from the body the index already holds when t
 import hashlib
 import re
 
-VERSION = 1            # bump when the rules change: the index re-checks every item (backfill)
+VERSION = 2            # bump when the rules change: the index re-checks every item (backfill)
 MAX_KEYS = 8           # hashes stored per item
 LABEL = "This answer repeats an instruction found in a message, event or document. It isn't advice."
 
@@ -72,6 +79,70 @@ RULES = (
                               r"whether|what|how|who)\b[^.;!?]{0,120}?\b(?:say|tell|reply|answer|respond|confirm)\b",
                               re.I)),
 )
+# 0.7.1 link lures ----------------------------------------------------------------------------------------------
+OWN_SOURCES = frozenset({"obsidian"})   # the owner's own text: link lures there aren't someone else's instruction
+URL = re.compile(r"(?:\b(?:https?|hxxps?|ftp)://|\bwww\.)[^\s<>\"'`]+"
+                 r"|\b[a-z0-9](?:[a-z0-9-]{0,62}\.)+[a-z]{2,24}/[^\s<>\"'`]*", re.I)
+# where an imperative starts: the sentence's start, after a clause break, "please/kindly/just/simply/then/now/and/or",
+# or "you must/need to/should/have to"
+_IMP = (r"(?:^[\W_]{0,4}|[,;:(\u2013\u2014-]\s*|\b(?:please|pls|kindly|just|simply|then|now|and|or|so|first|asap)\s+|"
+        r"\byou\s+(?:must|need\s+to|should|have\s+to|will\s+need\s+to|'ll\s+need\s+to)\s+)")
+_LURE_VERB = (r"(?:click(?:\s+on)?|tap(?:\s+on)?|press|open|visit|go\s+to|head\s+(?:over\s+)?to|navigate\s+to|"
+              r"download|install|log\s*-?\s*(?:in|on)(?:\s+to)?|login|sign\s*-?\s*(?:in|on)(?:\s+to)?|signin|"
+              r"verify|validate|re-?activate|unlock|reset|follow|use|update)")
+_DEICTIC = (r"(?:\bhere\b(?!'s)|\b(?:this|that|the|following|attached)\s+(?:link|url|address|button|page)\b|"
+            r"\bbelow\b|\b(?:link|button)\s+(?:below|above)\b)")
+_LURE_HERE = re.compile(_IMP + _LURE_VERB + r"\b[^.!?]{0,60}?" + _DEICTIC, re.I)
+_LURE_URL = re.compile(_IMP + _LURE_VERB + r"\b\s*:?\s*(?:(?!https?:|www\.)[^\s.!?:]+\s+){0,4}?"
+                       r"(?:(?:at|on|via|from|using|with|to|here|through)\s*)?:?\s*(?=" + URL.pattern + ")", re.I)
+_MEETING = re.compile(r"^(?:[a-z0-9-]+\.)*(?:meet\.google\.com|zoom\.us|zoom\.com|teams\.microsoft\.com|"
+                      r"teams\.live\.com|webex\.com|whereby\.com|gotomeeting\.com|meet\.jit\.si|"
+                      r"chime\.aws)$", re.I)
+_FOOTER = re.compile(r"\b(?:unsubscribe|opt[\s-]?out|(?:manage|update)\s+(?:your\s+)?(?:email\s+|notification\s+|"
+                     r"subscription\s+|communication\s+)?(?:preferences|settings|subscriptions?)|view\s+(?:this\s+|"
+                     r"the\s+)?(?:email|message|newsletter|it)?\s*(?:in\s+(?:your\s+|a\s+)?browser|online|"
+                     r"on\s+the\s+web))\b", re.I)
+
+
+def urls(text):
+    """The links in a text (scheme or www., or a bare host with a path), trailing punctuation removed."""
+    out = []
+    for m in URL.finditer(_plain(text)):
+        u = m.group(0)
+        while u and u[-1] in ".,;:!?)]}*_>":
+            if u[-1] == ")" and u.count("(") >= u.count(")"):
+                break
+            u = u[:-1]
+        if u:
+            out.append(u)
+    return out
+
+
+def host(url):
+    """The lower-case host of a link ("" when there is none)."""
+    u = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(url or ""), flags=re.I)
+    u = re.split(r"[/?#]", u, maxsplit=1)[0].rsplit("@", 1)[-1]
+    return re.sub(r":\d+$", "", u).strip(".").lower()
+
+
+def link_lure(sentence, following=""):
+    """0.7.1: does the sentence push the reader to a link: an imperative lure verb with "here"/"this link"/"below"
+    and a URL in this sentence or the next one, or a URL right after the imperative? Not when every link is a
+    video-meeting link, nor in a mailing-list footer (unsubscribe, preferences, view in browser)."""
+    s = _plain(sentence)
+    links = urls(s)
+    nxt = _plain(following).strip()
+    if not links and nxt and URL.match(nxt.lstrip("<([")):
+        links = urls(nxt)[:1]
+    if not links:
+        return False
+    if not (_LURE_URL.search(s) or _LURE_HERE.search(s)):
+        return False
+    if all(_MEETING.match(host(u)) for u in links):
+        return False
+    return not _FOOTER.search(s)
+
+
 # "I always say", "we always agree", "you always confirm": a habit, not an order
 _NARRATIVE = re.compile(r"\b(?:i|we|you|they|he|she|it|who|one|people|everyone|everybody|someone)\s+(?:do\s+|don't\s+|"
                         r"would\s+|will\s+)?$", re.I)
@@ -94,8 +165,9 @@ def sentences(text):
     return out
 
 
-def rules_hit(sentence):
-    """Names of the rules a sentence matches (empty: not an instruction)."""
+def rules_hit(sentence, following="", source=None):
+    """Names of the rules a sentence matches (empty: not an instruction). `following`: the next sentence (a link
+    lure's URL may stand there); `source`: the item's source (no link-lure rule for the owner's own notes)."""
     s = _plain(sentence)
     hits = []
     for name, rx in RULES:
@@ -104,23 +176,27 @@ def rules_hit(sentence):
                 continue
             hits.append(name)
             break
+    if source not in OWN_SOURCES and link_lure(s, following):
+        hits.append("link")
     return hits
 
 
-def instructions(text):
-    """The sentences of `text` that hold an instruction addressed to an assistant, in order, without repeats."""
+def instructions(text, source=None):
+    """The sentences of `text` that hold an instruction addressed to an assistant (or, 0.7.1, a link lure), in
+    order, without repeats. `source`: the item's source when known (see rules_hit)."""
     out, seen = [], set()
-    for s in sentences(text):
+    ss = sentences(text)
+    for i, s in enumerate(ss):
         k = norm(s)
-        if k not in seen and rules_hit(s):
+        if k not in seen and rules_hit(s, ss[i + 1] if i + 1 < len(ss) else "", source):
             seen.add(k)
             out.append(s)
     return out
 
 
-def item_instructions(title, body):
+def item_instructions(title, body, source=None):
     """instructions() over an item's title and body (what index.py stores keys for)."""
-    return instructions(str(title or "") + "\n" + str(body or ""))
+    return instructions(str(title or "") + "\n" + str(body or ""), source)
 
 
 def norm(sentence):
@@ -132,8 +208,8 @@ def key(sentence):
     return hashlib.sha256(norm(sentence).encode("utf-8")).hexdigest()[:16]
 
 
-def keys(title, body):
-    return [key(s) for s in item_instructions(title, body)][:MAX_KEYS]
+def keys(title, body, source=None):
+    return [key(s) for s in item_instructions(title, body, source)][:MAX_KEYS]
 
 
 # --- the answer post-check -----------------------------------------------------------------------------------
