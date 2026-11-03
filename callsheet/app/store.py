@@ -1258,6 +1258,23 @@ class Store:
             if left != done:
                 self._set_meta("done", left)
 
+    # --- 0.8.0: See everything (gather caches, calendar snapshots, Coming up marks) -----------------------------
+    SEE_KEYS = ("see_ics", "see_promos", "see_snapshots", "horizon_marks")
+
+    def see_meta(self, key):
+        """0.8.0 JSON state in meta: see_ics (parsed invite mail per message id), see_promos (promotion headers per
+        thread id), see_snapshots ({"base", "last"} calendar snapshots for What changed), horizon_marks (Coming up
+        actions per item key). Always a dict."""
+        if key not in self.SEE_KEYS:
+            raise KeyError(key)
+        v = self._get_meta(key, {})
+        return v if isinstance(v, dict) else {}
+
+    def set_see_meta(self, key, value):
+        if key not in self.SEE_KEYS:
+            raise KeyError(key)
+        self._set_meta(key, value)
+
     # --- new since, row refs ----------------------------------------------------
     def seen_day(self):
         """{date, keys: [row keys of every brief written that day], briefs: [ISO times]}."""

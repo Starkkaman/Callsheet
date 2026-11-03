@@ -12,6 +12,8 @@ import time
 
 import dates
 import evaluate
+import gather
+import horizon
 import memory
 import presets
 import writer
@@ -37,7 +39,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.8.0"
 
 
 class MethodNotAllowed(Exception):
@@ -136,6 +138,7 @@ class App:
             + self._profile_routes()
         self.routes += self._chat_routes()  # 0.6.0 chat
         self.routes += projects_mod.ProjectsApi(self.projects).routes()  # 0.7.0 projects
+        self.routes += [("POST", r"horizon", self.horizon_mark)]  # 0.8.0 Coming up
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -190,6 +193,7 @@ class App:
                                     self.store.has_sources(), now,
                                     writer_on=self.store.writer_config()["provider"] != "off")
         self._brief_050(brief, cache, s)
+        self._brief_080(brief, cache, s, now)
         self._brief_writing(brief, cache, s, now)
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
@@ -226,6 +230,69 @@ class App:
             if ref and nid and e["section"] == "Notes" and ref not in marks:
                 marks[ref] = {"id": nid, "text": e["text"]}
         brief["notes"] = marks
+
+    # --- 0.8.0: See everything (gather.py, horizon.py; rules only, nothing reaches the writer) -----------------
+    def _see_parts(self, cache, settings, now):
+        tz = rules.tzinfo(settings)
+        today = now.date()
+        since = (cache or {}).get("changed_since")
+        try:
+            since_ts = dt.datetime.fromisoformat(since).timestamp() if since else None
+        except (TypeError, ValueError):
+            since_ts = None
+        try:
+            milestones, threads = self.projects.see_080(since_ts)
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            sys.stderr.write(f"Callsheet coming up: projects skipped ({type(e).__name__})\n")
+            milestones, threads = [], []
+        notes = []
+        for e in self.memory.entries():
+            if e["section"] != "Notes":
+                continue
+            for d in dates.find(e["text"], today)[:1]:
+                day = d.get("date") if isinstance(d, dict) else None
+                if day:
+                    notes.append({"key": "note:" + str(e["meta"].get("id") or e["text"][:40]), "date": day,
+                                  "title": rules._clip(e["text"], 120)})
+        cands = horizon.items((cache or {}).get("upcoming"), (cache or {}).get("invites"), milestones, notes, today,
+                              tz)
+        return cands, threads
+
+    def _brief_080(self, brief, cache, settings, now):
+        """Adds the 0.8.0 fields to a live brief: invites (+ marks as text), cal_gaps, security, sorted, changed and
+        coming_up (horizon.build over the cached 60-day events, invites, project milestones, dated notes and the
+        owner's marks). The sample brief gets none."""
+        if brief.get("sample") or not cache:
+            return
+        tz, fmt, today = rules.tzinfo(settings), rules.time_format(settings), now.date()
+        try:
+            brief["invites"] = gather.invites_for_page(cache.get("invites") or [], tz, fmt, today)
+            brief["cal_gaps"] = [dict(g, text=gather.gap_text(g)) for g in cache.get("cal_gaps") or []]
+            brief["security"] = gather.security_for_page(cache.get("security") or [], tz, fmt, today)
+            brief["security_n"] = int(cache.get("security_n") or 0)
+            brief["sorted"] = gather.sorted_for_page(cache.get("sorted") or {}, tz, fmt, today)
+            cands, threads = self._see_parts(cache, settings, now)
+            brief["changed"] = gather.changes_for_page(cache.get("changed") or [], tz, fmt, today) + \
+                [{"kind": "thread", "text": f"New in {t['project']}: {t['title']}"} for t in threads]
+            brief["coming_up"] = horizon.build(cands, self.store.see_meta("horizon_marks"), today)
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            sys.stderr.write(f"Callsheet see-everything: page fields skipped ({type(e).__name__})\n")
+
+    def horizon_mark(self, body):
+        """POST api/horizon {key, action}: Got it, Remind me a week before, Not big, Big or undo on a Coming up item."""
+        b = _obj(body)
+        s = self.store.settings()
+        now = dt.datetime.fromtimestamp(self.clock(), rules.tzinfo(s))
+        cands, _ = self._see_parts(self.store.cached_brief(), s, now)
+        try:
+            marks = horizon.apply_mark(self.store.see_meta("horizon_marks"), b.get("key"), b.get("action"), cands,
+                                       now.date())
+        except ValueError:
+            raise InputError("That isn't something Coming up can do.")
+        except KeyError:
+            raise NotFound("That item isn't coming up any more.")
+        self.store.set_see_meta("horizon_marks", marks)
+        return {"ok": True, "coming_up": horizon.build(cands, marks, now.date())}
 
     def _memory_routes(self):
         return [("GET", r"memory", self.get_memory),

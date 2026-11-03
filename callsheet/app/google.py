@@ -26,7 +26,7 @@ CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"  # 0.6.0: only asked for by "Grant Drive access"
 REDIRECT_URI = "http://127.0.0.1:8765/"
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date", "List-Id", "List-Unsubscribe", "Precedence",
-                    "Auto-Submitted", "Reply-To")
+                    "Auto-Submitted", "Reply-To", "Authentication-Results")  # 0.8.0: Gmail's sender check
 TIMEOUT = 15
 
 
@@ -283,6 +283,20 @@ def calendar_events(token, calendar_id, time_min, time_max, tz):
         if not page:
             break
     return items
+
+
+def calendar_event_by_uid(token, calendar_id, ical_uid):
+    """0.8.0: is an invite found in mail on this calendar? events.list with iCalUID (a GET under /calendar/v3/)."""
+    res = request("GET", api_base() + "/calendar/v3/calendars/" + _q(calendar_id) + "/events", token=token,
+                  params={"iCalUID": ical_uid, "showDeleted": "false", "maxResults": 5})
+    return res.get("items", [])
+
+
+def gmail_attachment(token, message_id, attachment_id):
+    """0.8.0: one attachment of a message (a calendar file, at most gather.MAX_ATTACHMENT bytes; the caller checks
+    the part's size first). users.messages.attachments.get: a GET under /gmail/v1/users/me/, read-only."""
+    return request("GET", api_base() + "/gmail/v1/users/me/messages/" + _q(message_id) + "/attachments/" +
+                   _q(attachment_id), token=token)
 
 
 # --- 0.6.0: Know me index reads (GET only; paged by the caller so a scan can resume) ----------------------

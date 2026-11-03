@@ -21,6 +21,7 @@ import time
 
 import dates
 import facts
+import gather
 import google
 import memory
 import presets
@@ -30,6 +31,8 @@ import writer
 
 MAIL_QUERY = "in:inbox -category:promotions -category:social -category:forums newer_than:14d"
 DEADLINE_S = 50  # keeps POST api/sync under ~60 s
+ICS_TTL_S = 20 * 3600        # 0.8.0: an invite mail is read again after this (its next instances move on)
+ICS_EMPTY_TTL_S = 30 * 86400  # a mail without a calendar file is not read again
 RECONNECT_CODES = ("invalid_grant", "invalid_client", "unauthorized_client")
 
 
@@ -333,10 +336,16 @@ class Syncer:
         vips = {v["email"].lower(): v["name"] for v in self.store.vips()}
         client = self.store.google_client()
 
-        # 0.5.0: the calendars are read LOOKAHEAD_DAYS ahead in the same request, for the possible events'
-        # already-on-calendar check; only today's events go into the schedule (upcoming is never stored)
-        look_end = rules.day_bounds(day + dt.timedelta(days=dates.LOOKAHEAD_DAYS - 1), tz)[1]
+        # 0.5.0: the calendars are read ahead in the same request, for the possible events' already-on-calendar
+        # check; only today's events go into the schedule. 0.8.0: 60 days ahead (gather.LOOKAHEAD_DAYS) for Coming
+        # up, invites to answer and What changed (a compact copy of the upcoming events is cached for Coming up)
+        look_end = rules.day_bounds(day + dt.timedelta(days=gather.LOOKAHEAD_DAYS - 1), tz)[1]
         events, upcoming, threads, errors = [], [], [], []
+        accounts = self.store.accounts()
+        owners = {a["email"].lower() for a in accounts}
+        see = {"found": [], "promos": [], "promo_more": [], "keep": set(), "keep_p": set(), "compact": [],
+               "cal_read": {}, "ics_cache": self.store.see_meta("see_ics"),
+               "promo_cache": self.store.see_meta("see_promos")}
         n = {"accounts": 0, "ok": 0, "failed": 0, "calendars": 0, "events": 0, "threads": 0}
         stopped = False
         for pub in self.store.accounts():
@@ -371,6 +380,9 @@ class Syncer:
                             items = self._call(acc, client, google.calendar_events, cal["id"],
                                                day_start.isoformat(), look_end.isoformat(), str(tz))
                             n["calendars"] += 1
+                            see["cal_read"][acc["id"] + "|" + cal["id"]] = items
+                            see["compact"] += [c for c in (gather.compact_event(ev, cal, acc["email"], tz)
+                                                           for ev in items) if c]
                             for ev in items:
                                 (events if _today(ev, tz, day, day_start, day_end) else upcoming).append(
                                     (ev, area["id"]))
@@ -383,6 +395,12 @@ class Syncer:
                             full = self._call(acc, client, google.gmail_thread, t["id"])
                             n["threads"] += 1
                             threads.append((full, acc["email"], area["id"], acc["id"]))
+                        try:  # 0.8.0: invites in mail and the promotions (a failure here is not the account's)
+                            self._see_mail(acc, client, area["id"], tz, now, owners, see, t0)
+                        except google.GoogleError as e:
+                            if e.code in RECONNECT_CODES:
+                                raise
+                            errors.append(f"Couldn't look for invites in {acc['email']}: {e}")
                 except _Stop:
                     stopped = True
                     break
@@ -453,6 +471,7 @@ class Syncer:
             row["gist"] = rules.fallback_gist(row)
             refs[row["id"]] = ref
         possible = self._possible(replies, refs, inbound, events + upcoming, areas, tz, day)
+        seen = self._see(threads, refs, events + upcoming, see, accounts, areas, owners, client, tz, now, t0, live)
         heads_up = [f"All day: {title}" for title in all_day] + slack_heads + signal_heads + errors
         written = now.isoformat(timespec="seconds")
         mailboxes = sum(1 for a in self.store.accounts() if a["services"].get("mail"))
@@ -466,7 +485,7 @@ class Syncer:
         brief = {
             "date": day.isoformat(), "written_at": written, "kind": rules.kind_for(settings, now),
             "schedule": schedule, "replies": replies, "heads_up": heads_up, "sources": sources,
-            "sources_tail": tail, "hidden": hidden, "done": [], "possible": possible}
+            "sources_tail": tail, "hidden": hidden, "done": [], "possible": possible, **seen}
         self._apply_done(brief, refs, tz, live)
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
                 "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
@@ -497,6 +516,124 @@ class Syncer:
         except Exception as e:  # noqa: BLE001 (a rule bug must never break the brief)
             self.log(f"Callsheet sync: possible events skipped ({type(e).__name__})")
             return []
+
+    # --- 0.8.0: See everything ---------------------------------------------------------------------------------
+    def _see_mail(self, acc, client, area_id, tz, now, owners, see, t0):
+        """One account's invite mail (gather.INVITE_QUERY: messages with a calendar file or an invite subject; each
+        new one read once with format=full, its small calendar attachments with the attachment GET) and its
+        promotions of the last day (counted; headers of new ones read, MAX_PROMO_READS a sync)."""
+        cache = see["ics_cache"]
+        res = self._call(acc, client, google.gmail_messages, gather.INVITE_QUERY, None, gather.MAX_INVITE_MAILS)
+        for m in (res.get("messages") or [])[:gather.MAX_INVITE_MAILS]:
+            mid = m.get("id")
+            if not isinstance(mid, str) or not mid:
+                continue
+            key = acc["id"] + ":" + mid
+            ent = cache.get(key)
+            age = t0 - float((ent or {}).get("at") or 0)
+            see["keep"].add(key)
+            if ent and (age < ICS_TTL_S or (not ent.get("found") and age < ICS_EMPTY_TTL_S)):
+                see["found"] += ent.get("found") or []
+                continue
+            full = self._call(acc, client, google.gmail_message_full, mid)
+
+            def fetch(aid, mid=mid):
+                try:
+                    return (self._call(acc, client, google.gmail_attachment, mid, aid) or {}).get("data")
+                except google.GoogleError:
+                    return None
+            found = gather.message_invites(full, acc["email"], owners, tz, now, fetch)
+            cache[key] = {"at": t0, "found": found}
+            see["found"] += found
+        listing = self._call(acc, client, google.gmail_threads, gather.PROMO_QUERY, 50)
+        pc, reads = see["promo_cache"], 0
+        for t in listing.get("threads") or []:
+            tid = t.get("id")
+            if not isinstance(tid, str) or not tid:
+                continue
+            key = acc["id"] + ":" + tid
+            see["keep_p"].add(key)
+            if key in pc:
+                see["promos"].append(pc[key])
+                continue
+            if reads >= gather.MAX_PROMO_READS:  # counted now, read at the next sync
+                see["promo_more"].append({"who": "Not read yet", "subject": "", "at": t0, "area": area_id,
+                                          "link": rules.gmail_link(acc["email"], tid)})
+                continue
+            reads += 1
+            _, item = gather.mail_item(self._call(acc, client, google.gmail_thread, tid), acc["email"], area_id)
+            if item:
+                pc[key] = item
+                see["promos"].append(item)
+
+    def _see(self, threads, refs, cal_events, see, accounts, areas, owners, client, tz, now, t0, live):
+        """The 0.8.0 brief fields: invites (calendar invites to answer and invites found only in email), cal_gaps,
+        security, sorted, changed (+ changed_since) and upcoming (compact events for Coming up). Rules only; a rule
+        bug leaves these empty and never breaks the brief."""
+        out = {"invites": [], "cal_gaps": [], "security": [], "security_n": 0, "sorted": {}, "changed": [],
+               "changed_since": None, "upcoming": []}
+        try:
+            out["cal_gaps"] = gather.calendar_gaps(accounts, areas)
+            shown = {(r.get("acc"), r.get("thread_id")) for r in refs.values() if r.get("source") == "mail"}
+            items = [gather.mail_item(th, addr, area_id)[1] for th, addr, area_id, acc_id in threads
+                     if (acc_id, th.get("id")) not in shown]
+            sm = gather.sort_mail(items + see["promos"], t0, see["promo_more"])
+            out.update(security=sm["security"], security_n=sm["security_n"], sorted=sm["sorted"])
+            cal_uids = {ev.get("iCalUID") for ev, _ in cal_events if ev.get("iCalUID")}
+            merged = gather.merge_invites(see["found"], cal_uids, now)
+            other = self._uid_lookups(merged, accounts, areas, client, tz)
+            found_uids = {u for u, _ in other}
+            merged = [f for f in merged if f["ev"]["uid"] not in found_uids]
+            areas_of = {a["email"]: a["area_id"] for a in accounts}
+            rows = gather.calendar_invite_rows(cal_events, tz, now) + \
+                gather.calendar_invite_rows([e for _, e in other], tz, now, other=True) + \
+                gather.email_invite_rows(merged, owners, areas_of)
+            rows.sort(key=lambda r: r["start"])
+            out["invites"] = rows[:gather.MAX_INVITES]
+            snaps = self.store.see_meta("see_snapshots")
+            snap = gather.snapshot(see["cal_read"], tz, now)
+            last = snaps.get("last")
+            base = snaps.get("base")
+            if isinstance(last, dict) and str(last.get("at", ""))[:10] < now.date().isoformat():
+                base = last
+            out["changed"] = gather.changes(base, snap, tz, now)
+            out["changed_since"] = base.get("at") if isinstance(base, dict) else None
+            out["upcoming"] = sorted(see["compact"], key=lambda c: c["start"])[:400]
+            if live:
+                if isinstance(last, dict):  # a calendar that couldn't be read this time keeps its last copy
+                    for ck, evs in (last.get("cals") or {}).items():
+                        snap["cals"].setdefault(ck, evs)
+                self.store.set_see_meta("see_snapshots", {"base": base, "last": snap})
+                self.store.set_see_meta("see_ics", {k: v for k, v in see["ics_cache"].items() if k in see["keep"]})
+                self.store.set_see_meta("see_promos", {k: v for k, v in see["promo_cache"].items()
+                                                       if k in see["keep_p"]})
+        except Exception as e:  # noqa: BLE001 (a rule bug must never break the brief)
+            self.log(f"Callsheet sync: see-everything skipped ({type(e).__name__})")
+        return out
+
+    def _uid_lookups(self, merged, accounts, areas, client, tz):
+        """Invites found in mail and not on a calendar Callsheet reads: is the event on the account's primary
+        calendar anyway (events.list iCalUID, a GET)? Only for accounts whose calendar reading is on; at most
+        MAX_UID_LOOKUPS. Returns [(uid, (event, area id))]."""
+        by_email = {a["email"]: a for a in accounts}
+        out, n = [], 0
+        for f in merged:
+            a = by_email.get(f["acc_email"])
+            area = areas.get((a or {}).get("area_id"))
+            if not a or not area or not (area["reads"].get("calendar") and a["services"].get("calendar")):
+                continue
+            if n >= gather.MAX_UID_LOOKUPS:
+                break
+            n += 1
+            try:
+                acc = self.store.account_secret(a["id"])
+                items = self._call(acc, client, google.calendar_event_by_uid, "primary", f["ev"]["uid"])
+            except (google.GoogleError, _Stop):
+                continue
+            for ev in items[:1]:
+                if ev.get("status") != "cancelled":
+                    out.append((f["ev"]["uid"], (ev, a["area_id"])))
+        return out
 
     def _read_slack(self, areas, vips, t0, tz, errors, live):
         """Every connected Slack workspace whose area reads chat. Returns (rows, heads_up, workspaces read).
@@ -624,7 +761,8 @@ class Syncer:
         self.store.set_last_sync(last)
         self.log(f"Callsheet sync: {n['accounts']} accounts ({n['ok']} ok, {n['failed']} failed), "
                  f"{n['calendars']} calendars, {n['events']} events, {n['threads']} threads, {n['slack']} Slack, "
-                 f"{len(schedule)} on schedule, {len(replies)} need a reply, {self.clock() - t0:.1f}s")
+                 f"{len(schedule)} on schedule, {len(replies)} need a reply, {len(brief.get('invites') or [])} invites, "
+                 f"{brief.get('security_n') or 0} security, {self.clock() - t0:.1f}s")
         return last, job
 
     def writer_data(self, wcfg):

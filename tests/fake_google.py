@@ -107,7 +107,8 @@ class FakeGoogle:
             "calendars": calendars if calendars is not None else [
                 {"id": email, "summary": email, "primary": True},
                 {"id": "family@group.calendar.google.com", "summary": "Family"}],
-            "events": events or {}, "threads": threads or [], "fail": None}
+            "events": events or {}, "threads": threads or [], "fail": None,
+            "messages": [], "attachments": {}}  # 0.8.0: invite mail (format=full) and attachment bodies
         return self.users[email]
 
     def approve(self, auth_url, email, scope=None):
@@ -161,6 +162,21 @@ class FakeGoogle:
             return self._send(h, user["fail"], {"error": {"code": user["fail"], "status": "INTERNAL"}})
         if path == "/gmail/v1/users/me/profile":
             return self._send(h, 200, {"emailAddress": email})
+        if path == "/gmail/v1/users/me/threads" and "category:promotions" in (query.get("q") or [""])[0] \
+                and "-category:promotions" not in (query.get("q") or [""])[0]:  # 0.8.0 Sorted for you
+            return self._send(h, 200, {"threads": [{"id": t["id"]} for t in user["threads"]
+                                                   if "CATEGORY_PROMOTIONS" in t["messages"][-1].get("labelIds", [])]})
+        if path == "/gmail/v1/users/me/messages":  # 0.8.0 invite search: the invite mails (users[..]["messages"])
+            return self._send(h, 200, {"messages": [{"id": m["id"], "threadId": m.get("threadId", m["id"])}
+                                                    for m in user["messages"]]})
+        if path.startswith("/gmail/v1/users/me/messages/"):
+            rest = [urllib.parse.unquote(x) for x in path[len("/gmail/v1/users/me/messages/"):].split("/")]
+            if len(rest) == 3 and rest[1] == "attachments" and rest[2] in user["attachments"]:
+                return self._send(h, 200, {"data": user["attachments"][rest[2]]})
+            for m in user["messages"]:
+                if len(rest) == 1 and m["id"] == rest[0]:
+                    return self._send(h, 200, m)
+            return self._send(h, 404, {"error": {"code": 404}})
         if path == "/gmail/v1/users/me/threads":
             return self._send(h, 200, {"threads": [{"id": t["id"], "snippet": ""} for t in user["threads"]]})
         if path.startswith("/gmail/v1/users/me/threads/"):
@@ -177,7 +193,12 @@ class FakeGoogle:
             return self._send(h, 200, {"items": user["calendars"]})
         if path.startswith("/calendar/v3/calendars/") and path.endswith("/events"):
             cal = urllib.parse.unquote(path[len("/calendar/v3/calendars/"):-len("/events")])
-            return self._send(h, 200, {"items": user["events"].get(cal, [])})
+            if cal == "primary":
+                cal = next((c["id"] for c in user["calendars"] if c.get("primary")), email)
+            items = user["events"].get(cal, [])
+            if query.get("iCalUID"):  # 0.8.0: "is this invite on the calendar?"
+                items = [e for e in items if e.get("iCalUID") == query["iCalUID"][0]]
+            return self._send(h, 200, {"items": items})
         return self._send(h, 404, {"error": {"code": 404}})
 
     def _token(self, h, form):

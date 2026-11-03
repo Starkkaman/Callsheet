@@ -283,6 +283,141 @@ def _addressed(hdr, names, me):
     return any(a.lower() == me for _, a in email.utils.getaddresses([hdr.get(n, "") for n in names]))
 
 
+# --- 0.8.0: sender checks and security heads-ups -------------------------------------------------------------
+# Security, bank and 2FA mail always surfaces (a heads-up that no rule, category or suppression hides).
+SECURITY = re.compile(
+    r"\b(?:verification\s+code|security\s+code|one[-\s]?time\s+(?:pass)?code|one[-\s]?time\s+password|\bOTP\b|"
+    r"2-?step|two[-\s]?(?:step|factor)|\b2FA\b|sign[-\s]?in\s+attempt|new\s+sign[-\s]?in|signed\s+in\s+(?:to|on|from)|"
+    r"new\s+(?:device|login|log[-\s]?in)|login\s+attempt|unusual\s+(?:sign[-\s]?in|activity|login)|"
+    r"suspicious\s+(?:activity|sign[-\s]?in|login|transaction)|password\s+(?:reset|change[ds]?|was\s+changed)|"
+    r"reset\s+your\s+password|security\s+alert|critical\s+security|account\s+(?:locked|suspended|disabled|"
+    r"compromised|on\s+hold)|payment\s+(?:failed|declined|was\s+declined|unsuccessful)|card\s+(?:was\s+)?declined|"
+    r"\bfraud|overdra(?:wn|ft)|insufficient\s+funds|confirm\s+it'?s\s+you|is\s+your\s+(?:verification\s+)?code)",
+    re.I)
+# Senders whose security mail is genuine when the address is theirs (or a subdomain) and Gmail checked it.
+SECURITY_DOMAINS = {
+    "google.com": "Google", "accounts.google.com": "Google", "apple.com": "Apple", "microsoft.com": "Microsoft",
+    "live.com": "Microsoft", "paypal.com": "PayPal", "amazon.com": "Amazon", "github.com": "GitHub",
+    "slack.com": "Slack", "stripe.com": "Stripe", "wise.com": "Wise", "chase.com": "Chase",
+    "bankofamerica.com": "Bank of America", "wellsfargo.com": "Wells Fargo", "capitalone.com": "Capital One",
+    "americanexpress.com": "American Express", "citi.com": "Citi", "discover.com": "Discover",
+    "usbank.com": "U.S. Bank", "schwab.com": "Schwab", "fidelity.com": "Fidelity", "venmo.com": "Venmo",
+    "coinbase.com": "Coinbase", "dropbox.com": "Dropbox", "facebookmail.com": "Facebook", "instagram.com": "Instagram"}
+# look-alike letters folded before comparing a domain with the brands above (digits, Cyrillic and Greek letters)
+_CONFUSABLE = str.maketrans({"0": "o", "1": "l", "3": "e", "5": "s", "4": "a", "7": "t", "8": "b", "9": "g",
+                             "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i",
+                             "ј": "j", "ѕ": "s", "ԁ": "d", "ɡ": "g", "ⅼ": "l", "ο": "o", "α": "a", "ε": "e",
+                             "ι": "i", "κ": "k", "ν": "v", "ρ": "p", "τ": "t", "υ": "u", "χ": "x"})
+
+
+def auth_level(headers):
+    """Gmail's verdict on the sender: "pass" | "fail" | "none". headers: [(name, value)] in message order, or a
+    {lowercase name: value} dict. Only the topmost Authentication-Results (else ARC-Authentication-Results) from
+    mx.google.com counts: a header further down could be written by the sender. "fail" when DMARC fails, or SPF
+    fails (fail/softfail) and DMARC didn't pass; "pass" when DMARC passes, or SPF or DKIM passes with no failure."""
+    if isinstance(headers, dict):
+        items = [(k, v) for k, v in headers.items()]
+    else:
+        items = list(headers or [])
+    res = None
+    for want in ("authentication-results", "arc-authentication-results"):
+        for name, value in items:
+            if str(name).lower() == want:
+                res = str(value)
+                break
+        if res is not None:
+            break
+    if res is None:
+        return "none"
+    v = " ".join(res.split()).lower()
+    authserv = re.sub(r"^i=\d+;\s*", "", v).split(";", 1)[0].strip()
+    if not authserv.startswith("mx.google.com"):
+        return "none"
+
+    def result(method):
+        m = re.search(r"(?:^|[;\s])" + method + r"=([a-z]+)", v)
+        return m.group(1) if m else None
+    dmarc, spf, dkim = result("dmarc"), result("spf"), result("dkim")
+    if dmarc == "pass":
+        return "pass"
+    if dmarc == "fail" or spf in ("fail", "softfail"):
+        return "fail"
+    if spf == "pass" or dkim == "pass":
+        return "pass" if dkim != "fail" else "fail"
+    return "none"
+
+
+def _skeleton(domain):
+    d = (domain or "").lower().strip(".")
+    try:
+        d = ".".join(lb.encode("ascii").decode("idna") if lb.startswith("xn--") else lb for lb in d.split("."))
+    except (UnicodeError, ValueError):
+        pass
+    return d.translate(_CONFUSABLE).replace("rn", "m").replace("vv", "w")
+
+
+def genuine_domain(domain):
+    """The brand name when domain is one of SECURITY_DOMAINS or a subdomain of one, else None."""
+    d = (domain or "").lower().strip(".")
+    for known, brand in SECURITY_DOMAINS.items():
+        if d == known or d.endswith("." + known):
+            return brand
+    return None
+
+
+def look_alike(domain):
+    """The brand a domain imitates without being it (paypa1.com, chase-secure-login.net, xn--pypal-4ve.com,
+    google.com.account-check.io), else None."""
+    d = (domain or "").lower().strip(".")
+    if not d or genuine_domain(d):
+        return None
+    sk = _skeleton(d)
+    labels = [x for x in re.split(r"[.-]", sk) if x]
+    for known, brand in SECURITY_DOMAINS.items():
+        name = known.split(".")[-2]
+        if len(name) < 4:
+            continue
+        if sk == known or any(lb == name or (len(name) >= 5 and name in lb) for lb in labels) or \
+                known in sk:
+            return brand
+    if d.startswith("xn--") or ".xn--" in d or any(ord(c) > 127 for c in d):
+        return "a known sender"
+    return None
+
+
+def security_alert(hdr, addr, subject, snippet, auth="none"):
+    """0.8.0: a security, bank or 2FA alert (the SECURITY words in the subject or snippet), whoever sent it:
+    {"marks": [...], "brand": the genuine sender's name or None}, or None. Marks: "checked" (a known sender's own
+    domain and Gmail checked it), "lure" (a look-alike of a known sender: never marked as that sender),
+    "sender_fail" (Gmail couldn't confirm the sender). The alert surfaces in every case."""
+    text = f"{subject}\n{snippet}"
+    if not SECURITY.search(text):
+        return None
+    domain = addr.rsplit("@", 1)[1] if "@" in addr else ""
+    marks, brand = [], None
+    lure = look_alike(domain)
+    if auth == "fail":
+        marks.append("sender_fail")
+    if lure:
+        marks.append("lure")
+    elif genuine_domain(domain) and auth == "pass":
+        brand = genuine_domain(domain)
+        marks.append("checked")
+    return {"marks": marks, "brand": brand, "lure": lure}
+
+
+def vip_name_of(name, vips):
+    """The VIP whose name a display name uses ("Priya Nair <priya@elsewhere.example>"), or None. vips: {email:
+    name}. Matching is on the whole name, case and spacing folded; only a VIP's own address makes a VIP."""
+    n = " ".join(str(name or "").replace('"', " ").split()).casefold()
+    if len(n) < 3:
+        return None
+    for v in vips.values():
+        if v and " ".join(str(v).split()).casefold() == n:
+            return v
+    return None
+
+
 def gmail_link(account_email, thread_id, message_id=""):
     """Direct link to a message in the right Gmail account, in the format Gmail's own view links use:
     /mail/u/?authuser=<email>#all/thread-f:<id>|msg-f:<id>, with the API's hex ids written in decimal.
@@ -313,7 +448,10 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     me = account_email.lower()
     if "SENT" in (last.get("labelIds") or []) or (addr and addr == me):
         return None
-    vip = addr in vips
+    auth = auth_level(last_headers(last))
+    # 0.8.0: a VIP only by their own address that Gmail didn't reject; a display name alone never makes a VIP
+    vip = addr in vips and auth != "fail"
+    spoof = None if vip else vip_name_of(name, vips)
     if not vip and is_automated(hdr, addr):
         return None
     if not vip and any(lb in NO_REPLY_CATEGORIES for lb in last.get("labelIds") or []):
@@ -339,7 +477,7 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     who = name.strip() or vips.get(addr) or addr or "Unknown sender"
     link = gmail_link(account_email, thread.get("id", ""), last.get("id", ""))
     domain = addr.rsplit("@", 1)[1] if "@" in addr else ""
-    return {"who": _clip(who, 60), "area": area, "source": "Mail", "via": "mail", "text": text,
+    row = {"who": _clip(who, 60), "area": area, "source": "Mail", "via": "mail", "text": text,
             "short": _clip(text, 40), "age": f"{age_days}d" if age_days >= 1 else f"{max(1, int(age_s // 3600))}h",
             "reasons": reasons, "vip": vip, "action": "Open", "link": link, "_age_s": age_s,
             "_last": int(last.get("internalDate") or 0) / 1000,
@@ -357,6 +495,17 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
             # snippet, and the subject unless it is a reply or forward (then an earlier writer, maybe the owner,
             # chose it)
             "_inbound": ("" if _REPLY_SUBJECT.match(subject) else subject) + "\n" + snippet}
+    # 0.8.0 marks (only when they apply, so other rows stay as they were)
+    if spoof:
+        row["uses_name"] = _clip(spoof, 60)
+    if auth == "fail" and addr in vips:
+        row["sender_fail"] = True
+    return row
+
+
+def last_headers(msg):
+    """[(name, value)] of a message in order (auth_level needs the topmost Authentication-Results)."""
+    return [(h.get("name", ""), h.get("value", "")) for h in (msg.get("payload") or {}).get("headers", [])]
 
 
 _REPLY_SUBJECT = re.compile(r"\s*(?:re|fwd?|aw|wg|sv)\s*(?:\[\d+\])?\s*:", re.I)

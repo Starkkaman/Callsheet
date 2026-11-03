@@ -1251,6 +1251,28 @@ class Projects:
         return payload
 
     # the briefing line ----------------------------------------------------------------------------------------------
+    def see_080(self, since_ts=None):
+        """0.8.0 (rules only): the active projects' milestones and due dates for Coming up ([{key, date, title,
+        project}]) and, for What changed, the linked threads that are new since since_ts ([{project, title}])."""
+        s = self.settings()
+        today = self._now().date()
+        ms, new = [], []
+        for p in self._rows(" WHERE state='active' ORDER BY updated DESC LIMIT 60"):
+            v = self._project_view(p, today, s)
+            for m in v.get("milestones") or []:
+                if m["state"] != "done":
+                    ms.append({"key": "pm:" + p["id"] + ":" + str(m["date"]) + ":" + str(m["title"])[:40],
+                               "date": m["date"], "title": m["title"], "project": p["name"]})
+            if since_ts and self.index is not None:
+                for iid in (json.loads(p["draft"] or "{}").get("sources") or [])[-60:]:
+                    try:
+                        it = self.index.get(int(iid))
+                    except Exception:  # noqa: BLE001 (an index item that is gone)
+                        it = None
+                    if it and it.get("kind") in ("thread", "mail", None) and float(it.get("ts") or 0) > since_ts:
+                        new.append({"project": p["name"], "title": str(it.get("title") or "")[:120]})
+        return ms[:200], new[:8]
+
     def brief_line(self):
         sl = [x for x in self.slipped() if not x.get("done")]
         rv = self.review_view(projects=[self._project_view(p, self._now().date(), self.settings(), tasks=[])
