@@ -344,6 +344,9 @@ steps, shown at the top of the page: Sources, Scan, Check, Questions, Done.
 Only what you save or answer goes into Memory (`memory.md`); the draft itself stays in the index. The index
 (`index.db`) is not in Home Assistant backups (it can be read again) and can be deleted from the page.
 
+When you write or edit a note in Memory by hand and it reads like an instruction or a claim copied from a message
+("the invoice has been paid"), Callsheet asks "… Save anyway?" first (0.8.2). It's only a warning.
+
 ## Chat (0.6.0, optional)
 
 The **Chat** tab (next to Agenda) answers questions about your own mail, Slack, Signal, calendar, Drive and notes,
@@ -417,6 +420,21 @@ Rules only: nothing new goes to the AI writer, and Callsheet never answers, book
   heads-ups. Each has Undo.
 - **Sorted for you**: Promos, Updates and No reply needed of the last day, with their counts; each opens its whole
   list with links to Gmail. Nothing is hidden.
+
+## People (0.8.2)
+
+Callsheet knows that two addresses, a Slack user and a Signal contact can be one person. Open **Setup → People**.
+
+- **Same person?** shows two people and why Callsheet thinks they're one ("Their Slack profile email is …", "The
+  signature in mail from … lists …"). Answer **Same person**, **Different people** (never asked again) or **Later**
+  (asked again in a week). The same card shows on Get to know me and in a reply's panel when the sender is a likely
+  match. Nothing is merged until you answer, and shared addresses (info@, team@) and first names alone are never
+  suggested.
+- **You** lists your own addresses: only your connected accounts add to it. **Read my Gmail "send as" addresses**
+  adds Gmail's own list (read-only). **Names people use for you** marks mail that uses your name from an address
+  that isn't yours. Nothing a message says can add an address to you.
+- **Everyone**: search by name or address, turn **VIP** on or off for a person (all their addresses, Slack and Signal
+  count), and **Split** a merge. **History** lists merges and splits.
 
 ## Looks
 

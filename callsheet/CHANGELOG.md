@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.2 ("People")
+
+- **People**: Callsheet now knows that an email address, a second address, a Slack user and a Signal contact can be
+  one person. People come from your VIPs, Get to know me and your mail, Slack and Signal contacts; nothing is merged
+  until you say so.
+- **Same person?** cards (Setup → People, Get to know me, and in a reply's panel when the sender is a likely match)
+  show both people and why Callsheet thinks so, in plain sentences: an address written two ways, a Slack profile
+  email, a signature listing the other address, the same full name at the same company, a Slack or Signal name.
+  Answer **Same person**, **Different people** (never asked again) or **Later** (asked again in a week). Shared
+  addresses (info@, team@), first names on their own and you are never suggested.
+- **Split** undoes a merge; Setup → People keeps the history of merges and splits.
+- **Everywhere**: a VIP is a person, so all their addresses, their Slack user and their Signal contact count. Notes
+  about a person apply to mail from any of their addresses and to their Slack and Signal messages. Replies show the
+  name of a person you confirmed. Chat's search and Projects use people.
+- **You** come only from your connected accounts (Google accounts, your Slack user, your linked Signal) and, when you
+  press **Read my Gmail "send as" addresses**, Gmail's own list (read-only, no new permission). Nothing a message says
+  ("I'm Isaac's other email", a signature, a display name) can add an address to you. Mail that uses your name from
+  an address that isn't yours is marked "Uses your name; not from your accounts."
+- **Memory paste warning**: when you write or edit a note by hand (Setup → Memory, or a note on a brief item) and it
+  reads like an instruction or a claim copied from a message ("the invoice has been paid"), Callsheet asks "This looks
+  like an instruction / a claim copied from a message. Save anyway?" before saving. It's a warning, not a refusal.
+
 ## 0.8.1 ("Remember")
 
 - **Remember from Chat**: say "remember that…", "note that…", "don't forget…" or "keep in mind…" in Chat and a
