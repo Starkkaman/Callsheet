@@ -470,12 +470,16 @@ class RowsTest(TempStore):
         self.assertEqual(rows[0]["who"], "Dan")
 
     def test_vip_and_ignore(self):
+        import people
         self.add(dm_env("thanks", self.at(1), name="Alice Example"), self.now)
-        rows = self.rows(vips={"alice@example.com": "Alice Example"})[0]
+        self.assertEqual(self.rows(vips={"alice@example.com": "Alice Example"})[0], [])  # 0.8.2: a name is no VIP
+        vips = people.VipMap({"alice@example.com": "Alice Example"})
+        vips.signal = frozenset([self.store.signal_recent(0)[0]["messages"][0]["sender"].lower()])  # a VIP person's
+        rows = self.rows(vips=vips)[0]
         self.assertEqual(rows[0]["reasons"], ["VIP"])
         self.assertTrue(rows[0]["vip"])
         chat = self.store.signal_chat_list()[0]["id"]
-        self.assertEqual(self.rows(vips={"alice@example.com": "Alice Example"}, ignored=[chat])[0], [])
+        self.assertEqual(self.rows(vips=vips, ignored=[chat])[0], [])
 
     def test_busy_group_heads_up(self):
         for i in range(26):

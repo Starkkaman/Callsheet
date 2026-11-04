@@ -391,7 +391,9 @@ class VipTest(Base):
     def merge_all(self):
         for _ in range(4):
             for c in self.pp.proposals():
-                self.pp.decide(c["id"], "same")
+                out = self.pp.decide(c["id"], "same")
+                if out.get("needs_confirm"):  # into a VIP: the second step (test_people_adversarial_082)
+                    self.pp.decide(c["id"], "same", out["confirm"])
 
     def test_vip_covers_every_handle_after_merge(self):
         v = pp.vip_map(self.store, self.pp)
@@ -406,7 +408,7 @@ class VipTest(Base):
         priya = self.pid("email", "priya@acme.com")
         self.assertEqual(self.pid("slack", "u07pn"), priya)
         self.assertNotEqual(self.pid("signal", "s123"), priya)
-        self.pp.merge(priya, sig)  # as the owner would, with stronger evidence
+        self.pp.merge(priya, sig, confirm=self.pp.merge(priya, sig)["confirm"])  # as the owner would, confirmed
         self.assertEqual(self.pid("signal", "s123"), priya)
         v = pp.vip_map(self.store, self.pp)
         self.assertIn("u07pn", v.slack)

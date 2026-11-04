@@ -24,7 +24,8 @@ Keep it working:
 ### Choose what shows up
 - **Signal rows go to**: the area whose brief gets the Signal rows (Personal by default). That area must read chat.
 - **Ignore chats**: tap a chat to stop its rows (and its Heads up line). Tap again to undo.
-- VIPs work by name, the "doesn't need a reply" menu works per chat and sender, and Done hides a row until a newer
+- VIPs work by person (0.8.2: a Signal contact merged into a VIP in People; a name alone is only marked "Uses
+  <name>'s name"), the "doesn't need a reply" menu works per chat and sender, and Done hides a row until a newer
   message arrives, as for Slack.
 
 ### Unlink

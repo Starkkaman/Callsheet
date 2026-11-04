@@ -258,7 +258,8 @@ class UrgentRulesTest(unittest.TestCase):
     def test_vip_slack_users(self):
         users = {"U1": {"name": "Tom", "email": "tom@x.com"}, "U2": {"name": "Ana Costa", "email": ""},
                  "U3": {"name": "Bob", "email": "bob@x.com"}}
-        self.assertEqual(push.vip_slack_users(users, {"tom@x.com": "Tom", "ana@y.com": "Ana Costa"}), ["U1", "U2"])
+        # 0.8.2: by email or a VIP person's Slack user only; a name alone (U2) is never a VIP
+        self.assertEqual(push.vip_slack_users(users, {"tom@x.com": "Tom", "ana@y.com": "Ana Costa"}), ["U1"])
 
 
 # --- rate limit and batching --------------------------------------------------------------------

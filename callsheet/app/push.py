@@ -269,18 +269,15 @@ def mail_item(thread, account_email, acc_id, vips, suppress, since_ms):
 
 
 def vip_slack_users(users, vips):
-    """Slack user ids in the saved workspace state that are VIPs (by email, else by name, as rules.slack_rows)."""
-    names = {n.strip().lower() for n in vips.values() if n}
+    """Slack user ids in the saved workspace state that are VIPs: a VIP person's Slack user or a VIP's address as the
+    profile email, as rules.slack_rows (0.8.2: a name alone never makes a VIP)."""
     out = []
     for uid, u in (users or {}).items():
         if not isinstance(u, dict):
             continue
         if str(uid).lower() in getattr(vips, "slack", ()):  # 0.8.2: a VIP person's Slack user
             out.append(uid)
-        elif u.get("email"):
-            if u["email"].lower() in vips:
-                out.append(uid)
-        elif any(n and n.strip().lower() in names for n in (u.get("name"), u.get("real_name"))):
+        elif u.get("email") and u["email"].lower() in vips:
             out.append(uid)
     return sorted(out)
 

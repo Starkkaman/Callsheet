@@ -214,10 +214,12 @@ class RulesTest(SlackBase):
         self.assertNotIn("Slack · #launch Ana Costa", self.rows(b))
         self.assertEqual([h for h in b["heads_up"] if h.startswith("@channel")], [])  # not new any more
 
-    def test_vip_by_display_name_without_email(self):
+    def test_vip_display_name_without_email_is_marked_not_vip(self):
+        # 0.8.2: a name alone never makes a VIP (a VIP person's Slack user does, see test_people_082); it is marked
         self.ok("POST", "/api/vips", {"name": "ana costa", "email": "ana@elsewhere.example", "area_id": "personal"})
         b = self.sync_brief()
-        self.assertTrue(self.rows(b)["Slack · DM Ana Costa"]["vip"])
+        row = self.rows(b)["Slack · DM Ana Costa"]
+        self.assertEqual((row["vip"], row["uses_name"]), (False, "ana costa"))
 
     def test_rate_limit_waits_retry_after(self):
         self.sl.limit = {"conversations.history": 1}

@@ -69,7 +69,8 @@ not Refresh). It moves the light check's marker to now and clears held alerts (t
 
 ## Urgent rules (rules only)
 `urgent_reason(vip, subject, snippet, inbound)`:
-1. `vip`: the sender is a VIP (by email; Slack by email, else name, like the brief).
+1. `vip`: the sender is a VIP (by email; Slack by profile email or a VIP person's Slack user, like the brief; 0.8.2:
+   never by name alone).
 2. `urgent`: subject + snippet has "urgent"/"urgently", "emergency" or "asap"/"a.s.a.p." (whole words), or "today"
    together with a separate deadline: `rules.DEADLINE` ("due", "deadline", "by Friday", "by 5", "by end of day") or "today",
    "tonight", "EOD", "end of day", "this morning/afternoon/evening", "within the hour", "right away",

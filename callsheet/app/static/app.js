@@ -4210,7 +4210,8 @@
   }
 
   /* ---------- 0.8.2 People (#people): Same person? cards, You, Everyone, History ----------
-     GET api/people; answers POST api/people/proposals/<id> {answer: same|different|later}; Split POST
+     GET api/people; answers POST api/people/proposals/<id> {answer: same|different|later} (into a VIP: needs_confirm
+     with the evidence first, then {answer: same, confirm: token}); Split POST
      api/people/merges/<id>/split; VIP PATCH api/people/<id>; names people use for you PATCH api/people/me.
      Only the owner merges; nothing ever merges with "You". Data is text (h()). */
   var PP = { v: null, seq: 0, q: '', said: '', err: null, timer: null };
@@ -4223,22 +4224,38 @@
       p.more ? h('p', { class: 'ppsub' }, '+ ' + p.more + ' more') : null]);
   }
   /* one "Same person?" card: both people, why, and the owner's three answers. o.compact: the reply panel's version */
+  function sigList(list) {
+    return h('ul', { class: 'sigs' }, (list || []).map(function (s) { return h('li', null, [h('b', null, s.strength), h('span', null, s.why)]); }));
+  }
   function sameCard(c, o) {
-    var err = errBox(), yes, no, later;
-    function answer(a) {
-      run([yes, no, later], err, function () { return api('POST', 'api/people/proposals/' + encodeURIComponent(c.id), { answer: a }); },
-        function (r) { if (o.done) o.done(a, r); });
+    var err = errBox(), yes, no, later, row, conf = null;
+    function answer(a, token) {
+      var body = token ? { answer: a, confirm: token } : { answer: a };
+      run(conf ? [].slice.call(conf.querySelectorAll('button')) : [yes, no, later], err, function () { return api('POST', 'api/people/proposals/' + encodeURIComponent(c.id), body); },
+        function (r) { if (r && r.needs_confirm) { askConfirm(r); return; } if (o.done) o.done(a, r); });
+    }
+    /* 0.8.2: a merge into a VIP takes a second step that shows the evidence again; only "Yes, merge" sends the token */
+    function askConfirm(r) {
+      var go = btn(o.compact ? 'act ghost' : 'btn primary', 'Yes, merge', { 'data-fk': 'sameok:' + c.id }, function () { answer('same', r.confirm); });
+      var back = btn('tbtn', 'Cancel', { 'data-fk': 'sameno:' + c.id }, function () { conf.replaceWith(row); conf = null; yes.focus(); });
+      var hd = h('h4', { class: 'label', tabindex: '-1' }, 'Merge into a VIP?');
+      var el = h('div', { class: 'sconfirm', role: 'group', 'aria-label': 'Merge into a VIP? ' + (r.names || '') }, [hd,
+        h('p', { class: 'note' }, (r.vip || 'One of them') + ' is a VIP: every address of the merged person will count as VIP.'),
+        h('h4', { class: 'label' }, 'Evidence'), sigList(r.evidence),
+        r.caution ? h('p', { class: 'scaution' }, r.caution) : null,
+        h('div', { class: 'btns' }, [go, back])]);
+      (conf || row).replaceWith(el); conf = el; hd.focus();
     }
     yes = btn(o.compact ? 'act ghost' : 'btn primary', 'Same person',  /* in a reply's panel, Open in Gmail stays the loud one */ { 'data-fk': 'same:' + c.id }, function () { answer('same'); });
     no = btn(o.compact ? 'act ghost' : 'btn', 'Different people', { 'data-fk': 'diff:' + c.id }, function () { answer('different'); });
     later = btn('tbtn', 'Later', { 'data-fk': 'later:' + c.id }, function () { answer('later'); });
+    row = h('div', { class: 'btns' }, [yes, no, later]);
     return h('div', { class: 'same' + (o.compact ? ' compact' : ''), role: 'group', 'aria-label': 'Same person? ' + c.a.name + ' and ' + c.b.name }, [
       o.compact ? h('h3', { class: 'plab' }, 'Same person?') : null,
       h('div', { class: 'pair' }, [ppCard(c.a), h('span', { class: 'or' }, 'and'), ppCard(c.b)]),
-      h('div', { class: 'swhy' }, [h('h4', { class: 'label' }, 'Why Callsheet thinks so'),
-        h('ul', { class: 'sigs' }, (c.signals || []).map(function (s) { return h('li', null, [h('b', null, s.strength), h('span', null, s.why)]); })),
+      h('div', { class: 'swhy' }, [h('h4', { class: 'label' }, 'Why Callsheet thinks so'), sigList(c.signals),
         c.caution ? h('p', { class: 'scaution' }, c.caution) : null]),  /* a signature the sender wrote is the only evidence */
-      h('div', { class: 'btns' }, [yes, no, later]), err]);
+      row, err]);
   }
   function ppAnswered(a, r) {
     return a === 'same' ? ((r.person && r.person.name) || 'They') + ' is one person now.' : a === 'different' ? 'Kept apart. Callsheet won’t ask about these two again.' : 'Callsheet will ask again next week.';

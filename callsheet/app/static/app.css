@@ -2142,6 +2142,9 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
 .sigs li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;align-items:baseline}
 .sigs li b{font-size:var(--fs-xs);letter-spacing:var(--label-track);text-transform:var(--label-case)}
 .same .scaution{margin:0;color:var(--alert);font-weight:700;font-size:var(--fs-md)}
+.same .sconfirm{display:grid;gap:8px}
+.same .sconfirm h4{margin:0}
+.same .sconfirm .note{margin:0}
 .same>.btns{gap:8px 16px}
 .same.compact{gap:12px;margin-top:16px}
 .same.compact .plab{margin:0}

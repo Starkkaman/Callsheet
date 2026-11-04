@@ -12,14 +12,21 @@
   addresses (info@, team@), first names on their own and you are never suggested. A signature is never strong
   evidence for a VIP or a verified contact: such a card says "Only evidence: a signature in a message from …; check
   before merging", and a name alone never suggests a VIP.
-- **Split** undoes a merge; Setup → People keeps the history of merges and splits.
+- **Merging into a VIP takes a second step**: after **Same person**, the card shows the evidence again and asks
+  "Merge into a VIP?"; only **Yes, merge** merges. **Split** undoes a merge and puts both people back exactly as they
+  were (VIP, names, area, addresses, notes, other suggestions); Setup → People keeps the history of merges and splits.
+- **A name alone is never a VIP**: a Slack user or Signal sender who only shows a VIP's name is no longer treated as
+  that VIP (in replies and phone alerts); the row is marked "Uses <name>'s name" instead. Merge their Slack user or
+  Signal contact into the VIP in People to make it count. Mail "from" your own address that Gmail's sender check
+  rejects is shown and marked "Sender not verified", never treated as yours.
 - **Everywhere**: a VIP is a person, so all their addresses, their Slack user and their Signal contact count. Notes
   about a person apply to mail from any of their addresses and to their Slack and Signal messages. Replies show the
   name of a person you confirmed. Chat's search and Projects use people.
 - **You** come only from your connected accounts (Google accounts, your Slack user, your linked Signal) and, when you
   press **Read my Gmail "send as" addresses**, Gmail's own list (read-only, no new permission). Nothing a message says
   ("I'm Isaac's other email", a signature, a display name) can add an address to you. Mail that uses your name from
-  an address that isn't yours is marked "Uses your name; not from your accounts."
+  an address that isn't yours (and Slack or Signal messages from someone else's account) is marked "Uses your name;
+  not from your accounts."
 - **Memory paste warning**: when you write or edit a note by hand (Setup → Memory, or a note on a brief item) and it
   reads like an instruction or a claim copied from a message ("the invoice has been paid"), Callsheet asks "This looks
   like an instruction / a claim copied from a message. Save anyway?" before saving. It's a warning, not a refusal.

@@ -294,7 +294,10 @@ class App:
         return dict(self.people.view(), errors=errors)
 
     def people_decide(self, body, prop_id):
-        out = self._ppl(self.people.decide, prop_id, _obj(body).get("answer"))
+        """{answer, confirm?}. A Same person into a VIP answers needs_confirm with the evidence and a one-time token
+        first (nothing changes); the same answer with {confirm: token} merges."""
+        b = _obj(body)
+        out = self._ppl(self.people.decide, prop_id, b.get("answer"), b.get("confirm"))
         return dict(out, open=len(self.people.proposals()))
 
     def people_split(self, _body, audit_id):
@@ -306,7 +309,8 @@ class App:
     def _brief_people(self, brief):
         """0.8.2: reply rows show the person's name when the owner confirmed the person (by the sender's address, Slack
         user or Signal id, never a display name); a row whose sender is in an open "Same person?" pair carries the
-        card; mail whose From name is one of the owner's names, from an address that isn't the owner's, is marked."""
+        card; mail, Slack or Signal that shows one of the owner's names from an address or account that isn't the owner's
+        is marked."""
         if brief.get("sample") or not brief.get("replies"):
             return
         try:
@@ -321,12 +325,17 @@ class App:
                 sender = str(ref.get("sender") or "").lower()
                 if not kind or not sender:
                     continue
-                if kind == "email" and (kind, sender) not in mine and people_mod.norm_name(r.get("who")) in own:
-                    r["uses_your_name"] = True
                 p = d.person_of(kind, sender)
+                if (kind, sender) not in mine:  # mail, Slack or Signal that shows the owner's name from elsewhere
+                    shown = {people_mod.norm_name(r.get("who"))}
+                    if p is not None and kind != "email":  # the Slack real name or Signal contact name too
+                        shown |= {people_mod.norm_name(n) for n in p["names"]}
+                    if shown & own:
+                        r["uses_your_name"] = True
                 if p is None or p["state"] == people_mod.ME:
                     continue
-                if p["state"] == "confirmed" and p["name"] and not r.get("sender_fail") and not r.get("uses_name"):
+                if p["state"] == "confirmed" and p["name"] and not r.get("sender_fail") and not r.get("uses_name") \
+                        and not r.get("uses_your_name"):
                     r["who"] = p["name"][:60]
                 if cards < 3:
                     props = self.people.proposals(person=p["id"], limit=1)

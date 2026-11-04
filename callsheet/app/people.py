@@ -13,11 +13,14 @@ Rules (design 4 and 6.1):
   addresses read with the owner's button, each Slack workspace's own user id, and the linked Signal account. Message
   content (names, signatures, "I'm Isaac's other email") never adds to "me", and no proposal or merge involves "me".
 - Role and automated addresses and first-name-only matches never propose; neither do names the owner uses.
+- A merge into a VIP takes a second step: the first Same person returns needs_confirm with the evidence and a one-time
+  token; only a second answer with that token merges. Split ("Undo merge") restores both people exactly.
 """
 import collections
 import hashlib
 import json
 import re
+import secrets
 import threading
 import time
 import unicodedata
@@ -42,6 +45,8 @@ PAIR_SCORE = 0.5
 MAX_OPEN = 50
 AUDIT_SHOW = 50
 LIST_MAX = 300
+CONFIRM_S = 600          # a merge-into-a-VIP confirmation token lasts ten minutes
+CONFIRM_MAX = 50
 
 WEIGHTS = {"slack_email": 1.0, "email_same": 1.0, "signature": 0.9, "name_domain": 0.7, "name": 0.5,
            "slack_name": 0.5, "signal_name": 0.5, "unique_name": 0.3}
@@ -385,6 +390,7 @@ class People:
         self.lock = threading.RLock()
         self._ver = 0
         self._dir = None
+        self._confirms = {}  # one-time tokens for a merge into a VIP: {token: (pair key, until)}
         with store.lock:
             store.db.executescript(_SCHEMA)
             if store.db.execute("SELECT 1 FROM people WHERE id=?", (ME,)).fetchone() is None:
@@ -741,10 +747,14 @@ class People:
             raise Gone("That suggestion isn't open any more. Reload the page.")
         return dict(r, signals=json.loads(r["signals"] or "[]"))
 
-    def decide(self, prop_id, answer):
-        """The owner's answer to a "Same person?" card: same (merge), different (never asked again) or later (a week)."""
+    def decide(self, prop_id, answer, confirm=None):
+        """The owner's answer to a "Same person?" card: same (merge), different (never asked again) or later (a week).
+        "same" into a VIP needs a second step: without a valid confirm token it returns needs_confirm (nothing
+        changes) with the evidence and a one-time token; the same answer with that token merges."""
         if answer not in ("same", "different", "later"):
             raise PeopleError("Answer same, different or later.")
+        if confirm is not None and not isinstance(confirm, str):
+            raise PeopleError("confirm must be the token from the first answer.")
         with self.lock:
             p = self._proposal(prop_id)
             if p["state"] not in ("open", "later"):
@@ -753,7 +763,7 @@ class People:
                 raise PeopleError("Nothing is ever merged with you.")
             now = self.clock()
             if answer == "same":
-                out = self.merge(p["a"], p["b"], prop_id)
+                out = self.merge(p["a"], p["b"], prop_id, confirm=confirm)
                 return out
             a, b = self._row(p["a"]), self._row(p["b"])
             with self.store.lock:
@@ -766,15 +776,66 @@ class People:
             self._touch()
             return {"ok": True, "state": answer}
 
-    def merge(self, a_id, b_id, prop_id=None):
-        """Merges b into a (the owner pressed Same person). The owner record never merges. Every handle b had moves
-        to a; the audit entry keeps what moved, so Split can put it back."""
+    # the second step for a merge into a VIP ----------------------------------------------------------------------
+    def _is_vip(self, row):
+        """A VIP person: the VIP flag, or one of their addresses is on the VIP list."""
+        if row["vip"]:
+            return True
+        vl = {v["email"].lower() for v in self.store.vips()}
+        return any(h["kind"] == "email" and h["value"] in vl for h in self._handles(row["id"]))
+
+    @staticmethod
+    def _pair_key(a_id, b_id, prop_id):
+        return "|".join(sorted((a_id, b_id)) + [prop_id or ""])
+
+    def _evidence(self, a, b, prop_id):
+        """[{strength, why}] and the caution line the owner sees before a merge into a VIP: the proposal's signals, or
+        (a merge without a proposal) the signals as they stand now."""
+        sigs = self._proposal(prop_id)["signals"] if prop_id else None
+        if sigs is None:
+            everyone = self._all()
+            sigs = signals(everyone[a["id"]], everyone[b["id"]], self.owner_names(),
+                           self._signatures(self.me_keys())) if a["id"] in everyone and b["id"] in everyone else []
+        return [{"strength": strength(s["weight"]), "why": s["why"]} for s in sigs], caution(sigs)
+
+    def _confirm_ok(self, key, token):
+        now = self.clock()
+        for t in [t for t, (_, until) in self._confirms.items() if until <= now]:
+            self._confirms.pop(t, None)
+        if not token:
+            return False
+        got = self._confirms.get(token)
+        if got is None or got[0] != key:
+            raise PeopleError("That confirmation has run out. Press Same person again.")
+        self._confirms.pop(token, None)  # one use
+        return True
+
+    def _ask_confirm(self, a, b, key, prop_id):
+        if len(self._confirms) >= CONFIRM_MAX:
+            for t in sorted(self._confirms, key=lambda t: self._confirms[t][1])[:len(self._confirms) - CONFIRM_MAX + 1]:
+                self._confirms.pop(t, None)
+        token = secrets.token_urlsafe(18)
+        self._confirms[token] = (key, self.clock() + CONFIRM_S)
+        evidence, warn = self._evidence(a, b, prop_id)
+        vip = a if self._is_vip(a) else b
+        return {"ok": False, "needs_confirm": True, "confirm": token, "proposal": prop_id or "",
+                "vip": vip["name"], "names": f"{a['name']} and {b['name']}", "evidence": evidence, "caution": warn}
+
+    def merge(self, a_id, b_id, prop_id=None, confirm=None):
+        """Merges b into a (the owner pressed Same person). The owner record never merges. A merge into a VIP needs
+        the confirm token from a first call (which returns needs_confirm and changes nothing). Every handle b had
+        moves to a; the audit entry keeps what moved and both people as they were, so Split can put it back."""
         with self.lock:
             if ME in (a_id, b_id):
                 raise PeopleError("Nothing is ever merged with you.")
             a, b = self._row(a_id), self._row(b_id)
             if a["merged_into"] or b["merged_into"] or a_id == b_id:
                 raise PeopleError("One of them was already merged. Reload the page.")
+            if a["state"] == ME or b["state"] == ME:
+                raise PeopleError("Nothing is ever merged with you.")
+            key = self._pair_key(a["id"], b["id"], prop_id)
+            if (self._is_vip(a) or self._is_vip(b)) and not self._confirm_ok(key, confirm):
+                return self._ask_confirm(a, b, key, prop_id)
             # the one the owner already shaped (VIP, confirmed, more handles) stays the person
             if (b["vip"], b["state"] == "confirmed", len(self._handles(b_id))) > \
                     (a["vip"], a["state"] == "confirmed", len(self._handles(a_id))):
@@ -785,7 +846,8 @@ class People:
             now = self.clock()
             detail = {"moved": moved, "aliases_added": add, "vip_from_b": bool(b["vip"] and not a["vip"]),
                       "area_from_b": b["area"] if b["area"] and not a["area"] else "", "a_state": a["state"],
-                      "proposal": prop_id or ""}
+                      "b_state": b["state"], "at": now, "proposal": prop_id or "", "repointed": [],
+                      "a_before": {k: a[k] for k in ("name", "aliases", "vip", "area", "state")}}
             with self.store.lock:
                 self.db.execute("UPDATE person_handles SET person=? WHERE person=?", (a["id"], b["id"]))
                 self.db.execute("UPDATE people SET aliases=?, vip=?, area=?, state='confirmed', updated=? WHERE id=?",
@@ -795,24 +857,30 @@ class People:
                                 (a["id"], now, b["id"]))
                 if prop_id:
                     self.db.execute("UPDATE merge_proposals SET state='merged', decided=? WHERE id=?", (now, prop_id))
-                # other open suggestions about b now ask about a (or end, when they were about a and b)
+                # other open suggestions about b now ask about a (or end, when they were about a and b); the audit keeps
+                # the originals so Split can put them back
                 for r in self.db.execute("SELECT * FROM merge_proposals WHERE (a=? OR b=?) AND state IN ('open','later')",
                                          (b["id"], b["id"])).fetchall():
                     other = r["b"] if r["a"] == b["id"] else r["a"]
                     self.db.execute("DELETE FROM merge_proposals WHERE id=?", (r["id"],))
+                    new = ""
                     if other != a["id"]:
                         x, y = sorted((a["id"], other))
-                        self.db.execute("INSERT OR IGNORE INTO merge_proposals (id, a, b, signals, score, by, state, "
-                                        "created, until) VALUES (?,?,?,?,?,?,?,?,?)",
-                                        (pair_id(x, y), x, y, r["signals"], r["score"], r["by"], r["state"],
-                                         r["created"], r["until"]))
+                        cur = self.db.execute("INSERT OR IGNORE INTO merge_proposals (id, a, b, signals, score, by, "
+                                              "state, created, until) VALUES (?,?,?,?,?,?,?,?,?)",
+                                              (pair_id(x, y), x, y, r["signals"], r["score"], r["by"], r["state"],
+                                               r["created"], r["until"]))
+                        new = pair_id(x, y) if cur.rowcount else ""
+                    detail["repointed"].append({"row": dict(r), "new": new})
                 self._audit("merge", a["id"], b["id"], f"{a['name']} and {b['name']}", detail)
             self._touch()
             return {"ok": True, "state": "same", "person": self.person(a["id"])}
 
     def split(self, audit_id):
-        """Undoes one merge from the History: the handles that moved go back, the merged person returns, and the pair
-        is remembered as different people."""
+        """Undoes one merge from the History ("Undo merge"): the handles that moved go back, the merged person returns
+        as they were (state, VIP, area, aliases), the person they went into gets back what they had when nothing else
+        changed them since (else only what the merge added is taken off), the suggestions that were moved over are put
+        back, and the pair is remembered as different people."""
         with self.lock:
             with self.store.lock:
                 e = self.db.execute("SELECT * FROM people_audit WHERE id=?", (int(audit_id),)).fetchone()
@@ -828,13 +896,32 @@ class People:
                 for kind, value in d.get("moved") or []:
                     self.db.execute("UPDATE person_handles SET person=? WHERE kind=? AND value=? AND person!=?",
                                     (b["id"], kind, value, ME))
-                self.db.execute("UPDATE people SET state='confirmed', merged_into='', updated=? WHERE id=?", (now, b["id"]))
-                drop = {norm_name(x) for x in d.get("aliases_added") or []}
-                aliases = [x for x in a["aliases"] if norm_name(x) not in drop]
-                vip = 0 if d.get("vip_from_b") else a["vip"]
-                area = "" if d.get("area_from_b") and a["area"] == d["area_from_b"] else a["area"]
-                self.db.execute("UPDATE people SET aliases=?, vip=?, area=?, updated=? WHERE id=?",
-                                (json.dumps(aliases), vip, area, now, a["id"]))
+                b_state = d.get("b_state") if d.get("b_state") in ("suggested", "confirmed") else "confirmed"
+                self.db.execute("UPDATE people SET state=?, merged_into='', updated=? WHERE id=?", (b_state, now, b["id"]))
+                before = d.get("a_before")
+                if before and a["id"] == e["a"] and d.get("at") is not None and a["updated"] == d["at"]:
+                    # nothing changed a since this merge: back exactly as it was
+                    aliases, vip, area, state = before["aliases"], int(before["vip"]), before["area"], before["state"]
+                else:
+                    drop = {norm_name(x) for x in d.get("aliases_added") or []}
+                    aliases = [x for x in a["aliases"] if norm_name(x) not in drop]
+                    vip = 0 if d.get("vip_from_b") else a["vip"]
+                    area = "" if d.get("area_from_b") and a["area"] == d["area_from_b"] else a["area"]
+                    state = a["state"]
+                self.db.execute("UPDATE people SET aliases=?, vip=?, area=?, state=?, updated=? WHERE id=?",
+                                (json.dumps(aliases), vip, area, state, now, a["id"]))
+                for rp in d.get("repointed") or []:
+                    r = rp.get("row") or {}
+                    if rp.get("new"):
+                        gone = self.db.execute("DELETE FROM merge_proposals WHERE id=? AND state IN ('open','later')",
+                                               (rp["new"],)).rowcount
+                        if not gone:
+                            continue  # the owner answered it since: their answer stands
+                    if r.get("id"):
+                        self.db.execute("INSERT OR IGNORE INTO merge_proposals (id, a, b, signals, score, by, state, "
+                                        "created, decided, until) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                        (r["id"], r["a"], r["b"], r["signals"], r["score"], r["by"], r["state"],
+                                         r["created"], r.get("decided"), r.get("until")))
                 self.db.execute("UPDATE people_audit SET undone=? WHERE id=?", (now, e["id"]))
                 x, y = sorted((e["a"], e["b"]))
                 self.db.execute("INSERT INTO merge_proposals (id, a, b, signals, score, state, created, decided) VALUES "

@@ -60,6 +60,7 @@
 - `tests/test_see_page_080.py`: 0.8.0 page checks: text only, no URLs built on the page, links only through gLink (run under node when installed), email-only invites without a Calendar link and outside the timeline's calendar column, api/horizon, theme tokens only.
 - `tests/test_remember_081.py`: 0.8.1 Remember: intent detection, propose_memory only in remember turns, injection via tool results and mail, two-turn attack, note checks, one-time Save token (forgery, replay, expiry, restart), saved format, undo, unscoped prompt pin, API and page checks.
 - `tests/test_people_082.py`: 0.8.2 People: signals and why strings, no auto-merge, owner identity can't be extended by content, VIP and memory via person, merge/split/audit, migration, API, the memory paste warning, page checks.
+- `tests/test_people_adversarial_082.py`: 0.8.2 People adversarial cases (S-T3, S-T4, S-T5, S-T6, S-T17, S-T19, S-L3; mail, Slack and Signal), the second confirm step for a merge into a VIP (people, API, page) and exact Undo merge.
 - `tests/fake_google_index.py`: the fake Google plus Gmail list/get(full), profile, Calendar pages, Drive list/export/media (scope-gated) and one-shot injected failures.
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.

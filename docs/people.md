@@ -38,6 +38,12 @@ Signal), a signature counts 0.6 at most (shown as "Good", never "Strong"); the c
 signature is the only evidence, says "Only evidence: a signature in a message from <sender>; check before merging."
 `unique_name` never counts towards opening a card into a VIP, so a display-name spoof of a VIP is never suggested.
 
+A name alone never gives VIP status anywhere (0.8.2): mail by the VIP's own address that Gmail didn't reject, Slack by
+a VIP person's user or a VIP address as the profile email, Signal by a VIP person's sender id. A display name that is
+a VIP's gets `uses_name` ("Uses <VIP>'s name") on mail, Slack and Signal rows; the owner's name from elsewhere gets
+`uses_your_name`. Mail from the owner's own address with a failed sender check (DMARC fail) is not the owner's: the
+row stays, marked `sender_fail`, and it never counts as the owner's reply.
+
 Score = 1 - product(1 - weight). A card opens at one signal of 0.8 or more, or two signals reaching 0.5. Strength on
 the card: Strong (0.9+), Good (0.6+), Some. Never proposed: role or automated addresses (info@, team@, noreply@…),
 first names on their own (a full name has two words of two letters or more), the owner's own names, groups of more
@@ -76,8 +82,20 @@ handles, fills names, VIP and area only on unconfirmed people, never merges and 
 
 `GET api/people[?q=]` (me, proposals, people (300 at most), total, audit); `POST api/people/refresh`;
 `PATCH api/people/me {names}`; `POST api/people/me/send-as`; `POST api/people/proposals/<id> {answer: same |
-different | later}`; `POST api/people/merges/<audit id>/split`; `PATCH api/people/<id> {name, vip, area}`.
+different | later, confirm?}`; `POST api/people/merges/<audit id>/split`; `PATCH api/people/<id> {name, vip, area}`.
 `GET api/state` has `people.open`.
+
+Merge into a VIP (second step): `same` on a pair where either person is a VIP (the flag, or an address on the VIP
+list) changes nothing and returns `{ok: false, needs_confirm: true, confirm: <one-time token>, vip, names, evidence:
+[{strength, why}], caution}`; the page shows "Merge into a VIP?" with the evidence and **Yes, merge** / **Cancel**.
+`{answer: same, confirm: <token>}` merges. The token is bound to the pair and the proposal, used once, and lasts ten
+minutes (kept in memory; a restart asks again); a wrong or expired token is a 400. A merge into "me" is refused with
+or without a token.
+
+Split ("Undo merge") restores exactly: the moved handles go back, the merged person gets back their state, and the
+person they went into gets back their name, aliases, VIP flag, area and state when nothing changed them since the
+merge (else only what the merge added comes off). Suggestions the merge moved from b to a go back to b (unless the
+owner answered them since). The split pair is kept apart. VIP coverage and notes links follow the handles.
 
 ## Memory paste warning (0.8.2)
 

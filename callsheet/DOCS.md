@@ -434,7 +434,8 @@ Callsheet knows that two addresses, a Slack user and a Signal contact can be one
   adds Gmail's own list (read-only). **Names people use for you** marks mail that uses your name from an address
   that isn't yours. Nothing a message says can add an address to you.
 - **Everyone**: search by name or address, turn **VIP** on or off for a person (all their addresses, Slack and Signal
-  count), and **Split** a merge. **History** lists merges and splits.
+  count), and **Split** a merge. **History** lists merges and splits. Merging into a VIP asks once more, with the
+  evidence, before it merges; Split puts both people back exactly as they were.
 
 ## Looks
 

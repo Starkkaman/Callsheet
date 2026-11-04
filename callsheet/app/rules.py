@@ -446,9 +446,11 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     name, addr = email.utils.parseaddr(hdr.get("from", ""))
     addr = addr.lower()
     me = account_email.lower()
-    if "SENT" in (last.get("labelIds") or []) or (addr and addr == me):
-        return None
     auth = auth_level(last_headers(last))
+    # 0.8.2: mail "from" the owner's own address that Gmail rejected is someone else's: it stays, marked
+    owner_spoof = bool(addr and addr == me and auth == "fail" and "SENT" not in (last.get("labelIds") or []))
+    if "SENT" in (last.get("labelIds") or []) or (addr and addr == me and not owner_spoof):
+        return None
     # 0.8.0: a VIP only by their own address that Gmail didn't reject; a display name alone never makes a VIP
     vip = addr in vips and auth != "fail"
     spoof = None if vip else vip_name_of(name, vips)
@@ -498,7 +500,7 @@ def reply_row(thread, account_email, area, now_ts, reply_age_days, vips):
     # 0.8.0 marks (only when they apply, so other rows stay as they were)
     if spoof:
         row["uses_name"] = _clip(spoof, 60)
-    if auth == "fail" and addr in vips:
+    if auth == "fail" and (addr in vips or owner_spoof):
         row["sender_fail"] = True
     return row
 
@@ -518,7 +520,9 @@ def _ms(msg):
 def _from_owner(msg, me):
     if "SENT" in (msg.get("labelIds") or []):
         return True
-    return email.utils.parseaddr(_headers(msg).get("from", ""))[1].lower() == me
+    # 0.8.2: the owner's address with a failed sender check is not the owner
+    return email.utils.parseaddr(_headers(msg).get("from", ""))[1].lower() == me and \
+        auth_level(last_headers(msg)) != "fail"
 
 
 def sort_replies(rows):
@@ -615,12 +619,18 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
         return (users.get(uid) or {}).get("name") or uid
 
     def is_vip(uid):
+        """0.8.2: a VIP only by the Slack user of a VIP person or a VIP's address as the Slack profile email; a name
+        alone never makes a VIP (name_of marks it instead)."""
         u = users.get(uid) or {}
-        if str(uid).lower() in getattr(vips, "slack", ()):  # 0.8.2: a VIP person's Slack user
+        if str(uid).lower() in getattr(vips, "slack", ()):  # a VIP person's Slack user
             return True
-        if u.get("email"):
-            return u["email"].lower() in vips
-        return any(n and n.strip().lower() in vip_names for n in (u.get("name"), u.get("real_name")))
+        return bool(u.get("email")) and u["email"].lower() in vips
+
+    def name_of(uid):
+        """The VIP whose name this Slack user shows (name or real name), or None."""
+        u = users.get(uid) or {}
+        return next((vip_names[n.strip().lower()] for n in (u.get("name"), u.get("real_name"))
+                     if n and n.strip().lower() in vip_names), None)
 
     def add(key, ch, msg, ctx, root=None, mentioned=False, in_thread=False, facts=None):
         c = cands.get(key)
@@ -710,6 +720,9 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
             "_key": f"slack:{ws.get('team_id', '')}:{c['ch']}:{root or ''}:{m['ts']}",
             "_messages": ctx,
             "_facts": dict(c["facts"], last=_f(m["ts"]), text=text), "_inbound": text})
+        spoof = None if vip else name_of(uid)
+        if spoof:  # 0.8.2: uses a VIP's name, not their Slack user: never a VIP, marked
+            rows[-1]["uses_name"] = _clip(spoof, 60)
     heads = []
     for ch, msgs in (data.get("chan") or {}).items():
         conv = convs.get(ch) or {}
@@ -740,10 +753,10 @@ SIGNAL_MAX_HEADS = 3
 def signal_rows(chats, area, now_ts, vips, tz=None, fmt="24h", ignored=()):
     """Needs-a-reply rows and Heads up lines from the stored Signal messages (store.signal_recent). Pure.
     A DM needs a reply when the other person wrote last; a group when a message after the owner's last one
-    mentions the owner or replies to (quotes) them. vips: {lowercase email: name}; Signal has no email, so a
-    VIP is matched by name. ignored: chat ids from Setup. Returns (rows, heads_up)."""
+    mentions the owner or replies to (quotes) them. vips: {lowercase email: name} with `.signal`, the
+    Signal senders of VIP people (0.8.2); a sender who only shows a VIP's name gets uses_name, never VIP. ignored: chat ids from Setup. Returns (rows, heads_up)."""
     tz = tz or dt.timezone.utc
-    vip_names = {n.strip().lower() for n in vips.values() if n and n.strip()}
+    vip_names = {n.strip().lower(): n.strip() for n in vips.values() if n and n.strip()}
     skip = set(ignored or ())
     rows, heads = [], []
     for c in chats:
@@ -771,7 +784,9 @@ def signal_rows(chats, area, now_ts, vips, tz=None, fmt="24h", ignored=()):
         name = last.get("sender_name") or (title if c.get("kind") == "dm" else "") or "Someone"
         text = " ".join((last.get("text") or "").split())
         age_s = max(0.0, now_ts - last["ts"])
-        vip = name.strip().lower() in vip_names or str(last.get("sender") or "").lower() in getattr(vips, "signal", ())
+        # 0.8.2: a VIP only by the Signal sender of a VIP person (People); a name alone is marked, never a VIP
+        vip = str(last.get("sender") or "").lower() in getattr(vips, "signal", ())
+        spoof = None if vip else vip_names.get(name.strip().lower())
         reasons = (["VIP"] if vip else []) + (["Mentioned you"] if mentioned else []) \
             + (["Replied to you"] if quoted else [])
         if "?" in text:
@@ -802,6 +817,8 @@ def signal_rows(chats, area, now_ts, vips, tz=None, fmt="24h", ignored=()):
             "_messages": ctx,
             "_facts": dict(unanswered([(m["ts"], m["outgoing"]) for m in msgs]), last=last["ts"], text=text),
             "_inbound": text})
+        if spoof:
+            rows[-1]["uses_name"] = _clip(spoof, 60)
     return rows, heads
 
 
