@@ -2266,6 +2266,7 @@ html.fa-lock{overflow:hidden}
 .bv .oatcard[data-dir=later]{box-shadow:inset -6px 0 0 var(--muted),inset 0 0 0 var(--rule-w) var(--rule)}
 .bv .oatmeta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;color:var(--muted);font-size:var(--fs-sm)}
 .bv .oatmeta .ri .ico{width:16px;height:16px}
+.app[data-base=clean] .bv .oatmeta .tag{color:color-mix(in srgb,var(--a) 60%,var(--text))}  /* the deeper step: AA on the card */
 .bv .oatwho{margin:12px 0 4px;font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-h2);line-height:1.1;outline-offset:4px}
 .bv .oatwant{margin:0 0 16px;font-size:var(--fs-lg);max-width:60ch}
 .bv .oatdraft{margin:0 0 16px;padding:12px 16px;border-radius:var(--radius);background:var(--surface)}
