@@ -2221,7 +2221,7 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
 
 /* Find or ask: a dialog with a combobox and a listbox; on phones a sheet from the top (clear of the keyboard) */
 html.fa-lock{overflow:hidden}
-.fa-wrap{position:fixed;inset:0;z-index:120}
+.fa-wrap{position:fixed;inset:0;z-index:1000}
 .fa-back{position:absolute;inset:0;background:var(--text);opacity:.35}
 .fa{position:absolute;left:50%;top:12vh;transform:translateX(-50%);width:min(640px,calc(100vw - 32px));max-height:72vh;display:grid;grid-template-rows:auto minmax(0,1fr) auto;
   background:var(--bg);color:var(--text);border-radius:var(--radius);box-shadow:var(--elev),inset 0 0 0 var(--rule-w) var(--rule);overflow:hidden}
@@ -2292,5 +2292,7 @@ html.fa-lock{overflow:hidden}
 .bv .sd-l .disp{font-size:var(--fs-lg)}
 .bv .sd-go{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:4px}
 .app[data-look=nerv] .bv .startday{clip-path:var(--cut)}
-@media (max-width:700px){.bv .startday{padding:16px}.bv .sd-go .btn{flex:1 1 auto}}
+.bv .startday .btn.primary{background:var(--on-panel);color:var(--panel)}
+.bv .startday .btn:not(.primary){background:transparent;color:var(--on-panel);box-shadow:inset 0 0 0 var(--rule-w) currentColor}
+@media (max-width:700px){.bv .startday{padding:16px}.bv .sd-go .btn{flex:1 1 auto}.rail button{min-width:56px;justify-content:center}}
 @media (prefers-reduced-motion:reduce){.bv .oatcard,.bv .oathead .bar i{transition:none}}
