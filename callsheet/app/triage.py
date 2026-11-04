@@ -68,6 +68,7 @@ MARKS = ("uses_owner_name", "uses_vip_name", "sender_not_verified", "lure", "unv
 STATUSES = ("rules", "ai", "fallback")
 FACT_STATUS = ("ok", "dropped_bad_s", "dropped_flagged", "sender_says")
 SRC = ("mail", "slack", "signal", "drive")
+ORIGINS = ("sync", "index")
 FIXES = ("needs_reply", "not_for_me", "promo")
 MODES = ("off", "shadow", "on")
 WHY = re.compile(r"(?:rules_only|override:[a-z_+]{2,40}|ai:[a-z_]{2,30}|rules:[a-z_]{2,30})")
@@ -87,7 +88,9 @@ MIN_RUN_S = 20             # not worth starting with less room than this
 EST_BATCH_S = 15.0         # a batch's planning time until measured
 DAY_CARDS = 1200
 DAY_GPU_MIN = 25
-MAX_PENDING = 2000
+MAX_PENDING = 2000         # the work queue's cap (callsheet.db, references only): the oldest items leave first
+STALE_S = 3 * 86400        # a live item whose text is gone (a restart) waits this long for the next sync to read it
+SLACK_CHAN_MAX = 40        # channel messages (not threads, not DMs) per workspace and sync, newest first
 INCR_DAYS = 3              # the incremental pass reads index items this new; older ones are the backfill's
 IX_EVERY_S = 5 * 60        # how often the index is asked for changed items between syncs
 TICK_S = 30.0
@@ -403,6 +406,12 @@ def _h(*parts):
     return hashlib.sha256("\x00".join(str(p) for p in parts).encode("utf-8", "replace")).hexdigest()
 
 
+def dup_id(*parts):
+    """One message's id across the two ways in (the sync's live read and the Know me index), so it is sorted once:
+    Gmail by message id, Slack by workspace, channel and ts, Signal by chat, sender and time."""
+    return _h(*parts)[:16]
+
+
 def thread_source(thread, account_email, acc_id, area, invite_msgs=()):
     """A live Gmail thread (format=metadata) as a source: its newest message that isn't a draft. The key is the
     brief row key of that message (rules.row_key), so the label finds its row."""
@@ -419,7 +428,7 @@ def thread_source(thread, account_email, acc_id, area, invite_msgs=()):
     owner_wrote = any("SENT" in (m.get("labelIds") or []) for m in msgs[:-1])
     return {"key": key, "ch": "mail", "headers": hdrs, "labels": labels, "subject": subject, "text": text,
             "area": area, "ts": int(last.get("internalDate") or 0) / 1000, "acc": acc_id,
-            "hash": _h(subject, text, sorted(labels))[:16],
+            "hash": _h(subject, text, sorted(labels))[:16], "dup": dup_id("gmail", last.get("id")),
             "thread": {"pos": len(msgs), "of": len(msgs), "owner_wrote": owner_wrote},
             "invite": "email" if last.get("id") in invite_msgs else None}
 
@@ -432,8 +441,11 @@ def index_source(row, owner_addrs=()):
     key = rules.row_key("ix:" + str(src) + ":" + str(row.get("account")) + ":" + str(row.get("source_id")))
     body = row.get("body") or row.get("snippet") or ""
     people = [p.strip() for p in str(row.get("people") or "").split(";") if p.strip()]
+    sid = str(row.get("source_id"))
+    dup = dup_id("gmail", sid) if src == "gmail" else dup_id("signal", sid) if src == "signal" else \
+        dup_id(src, row.get("account"), sid)
     base = {"key": key, "area": row.get("area") or "", "ts": float(row.get("ts") or 0), "ix": row.get("id"),
-            "hash": str(row.get("hash") or _h(row.get("title"), body))[:16],
+            "hash": str(row.get("hash") or _h(row.get("title"), body))[:16], "dup": dup,
             "marks": ["hidden_text"] if row.get("hidden_text") else []}
     if src == "gmail":
         sender = people[0] if people else ""
@@ -458,6 +470,94 @@ def index_source(row, owner_addrs=()):
         return dict(base, ch="drive", actor_name=actor[0] or actor[1], actor_email=actor[1].lower(),
                     event="edit", doc=row.get("title") or "", text=body)
     return None
+
+
+def slack_sources(data, ws, area, now_ts):
+    """0.8.4: a sync's live Slack read (slack.read_workspace) as sources, keyed like the brief's Slack rows
+    (rules.slack_rows), so a label finds its row: per DM the newest message from someone else, per thread the newest
+    one after the owner's last, and the channel's other messages (SLACK_CHAN_MAX newest). "From the owner" and the
+    sender come from the API's user ids, never from the text. ws: {"id", "team_id"} only (no token)."""
+    me, users, convs = data.get("me"), data.get("users") or {}, data.get("convs") or {}
+    team, out, seen = ws.get("team_id", ""), [], set()
+    oldest = now_ts - INCR_DAYS * 86400
+
+    def add(ch, m, root):
+        conv = convs.get(ch) or {}
+        kind = conv.get("kind")
+        uid = str(m.get("user") or "")
+        text = " ".join(rules.slack_text(m.get("text") or "", users).split())
+        name = (users.get(uid) or {}).get("name") or uid
+        title = ("DM with " + name if kind == "dm" else "Group DM " + str(conv.get("name") or "")
+                 if kind == "group" else "#" + str(conv.get("name") or ch))
+        ts = rules._f(m.get("ts"))  # noqa: SLF001
+        if ts < oldest:
+            return
+        out.append({"key": rules.row_key(f"slack:{team}:{ch}:{root or ''}:{m['ts']}"), "ch": "slack",
+                    "owner": uid == me, "from_id": uid.lower(), "from_name": name,
+                    "chan": "dm" if kind == "dm" else "group" if kind == "group" else "channel", "chan_title": title,
+                    "text": text, "mentions_owner": rules.mentions_me(m, me), "bot": False, "area": area, "ts": ts,
+                    "hash": _h(ch, uid, text)[:16], "dup": dup_id("slack", ws.get("id"), f"{ch}:{m['ts']}"),
+                    "marks": []})
+    for ch, msgs in (data.get("dm") or {}).items():
+        real = [m for m in msgs if rules._real(m) and not (m.get("thread_ts") and m.get("thread_ts") != m["ts"])]  # noqa: SLF001
+        if real and real[-1]["user"] != me:
+            add(ch, real[-1], None)
+    threads = data.get("threads") or {}
+    for (ch, root), msgs in threads.items():
+        real = [m for m in msgs if rules._real(m)]  # noqa: SLF001
+        if not real or ch not in convs:
+            continue
+        my_last = max((rules._f(m["ts"]) for m in real if m["user"] == me), default=0.0)  # noqa: SLF001
+        after = [m for m in real if m["user"] != me and rules._f(m["ts"]) > my_last]  # noqa: SLF001
+        if after:
+            is_thread = len(msgs) > 1 or bool(real[0].get("thread_ts"))
+            add(ch, after[-1], root if is_thread else None)
+            seen.add((ch, root))
+    chan = []
+    for ch, msgs in (data.get("chan") or {}).items():
+        for m in msgs:
+            if not rules._real(m) or m["user"] == me or rules._f(m["ts"]) < data.get("window_start", 0):  # noqa: SLF001
+                continue
+            if (ch, m.get("thread_ts") or m["ts"]) in threads:
+                continue
+            chan.append((rules._f(m["ts"]), ch, m))  # noqa: SLF001
+    for _, ch, m in sorted(chan, key=lambda x: -x[0])[:SLACK_CHAN_MAX]:
+        add(ch, m, None)
+    return out
+
+
+def signal_sources(chats, area, now_ts, ignored=()):
+    """0.8.4: the stored live Signal messages (store.signal_recent) as sources, keyed like the brief's Signal rows
+    (rules.signal_rows): per chat the newest message from someone else after the owner's last one (in a group the
+    newest that mentions or quotes the owner when there is one). The sender and "from the owner" come from
+    signal-cli's fields (salted ids, the outgoing flag), never from the text. Ignored chats are left out."""
+    skip, out = set(ignored or ()), []
+    for c in chats or []:
+        msgs = c.get("messages") or []
+        if c.get("id") in skip or not msgs:
+            continue
+        my_last = max((m["ts"] for m in msgs if m["outgoing"]), default=0.0)
+        after = [m for m in msgs if not m["outgoing"] and m["ts"] > my_last]
+        if not after or now_ts - after[-1]["ts"] > INCR_DAYS * 86400:
+            continue
+        if c.get("kind") == "group":
+            hits = [m for m in after if m["mentions_me"] or m["quotes_me"]]
+            last = (hits or after)[-1]
+        else:
+            last = msgs[-1]
+            if last["outgoing"]:
+                continue
+        title = c.get("title") or ("Signal chat" if c.get("kind") == "dm" else "Signal group")
+        text = " ".join((last.get("text") or "").split())
+        sender = str(last.get("sender") or "")
+        out.append({"key": rules.row_key(f"signal:{c['id']}:{last['ts']}"), "ch": "signal", "owner": False,
+                    "from_id": sender.lower(), "from_name": last.get("sender_name") or "",
+                    "group": c.get("kind") == "group", "chan_title": ("Signal group " if c.get("kind") == "group"
+                                                                       else "Signal with ") + title,
+                    "text": text, "mentions_owner": bool(last.get("mentions_me")), "area": area,
+                    "ts": float(last["ts"]), "hash": _h(c["id"], sender, text)[:16],
+                    "dup": dup_id("signal", f"{c['id']}:{sender}:{float(last['ts']):.3f}"), "marks": []})
+    return out
 
 
 # --- the card builder (design 3.2) and the rules pre-labels (3.1) ------------------------------------------------------
@@ -847,6 +947,11 @@ CREATE TABLE IF NOT EXISTS triage_corrections (
 CREATE TABLE IF NOT EXISTS review_counts (
   week TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL, label TEXT NOT NULL, truth TEXT NOT NULL,
   n INTEGER NOT NULL, PRIMARY KEY (week, model, prompt, label, truth));
+CREATE TABLE IF NOT EXISTS triage_queue (
+  key TEXT PRIMARY KEY, src TEXT NOT NULL, origin TEXT NOT NULL, ix INTEGER, dup TEXT NOT NULL, hash TEXT NOT NULL,
+  ts REAL NOT NULL, queued REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS triage_queue_order ON triage_queue (ts, queued);
+CREATE INDEX IF NOT EXISTS triage_queue_dup ON triage_queue (dup);
 """
 _JSON_COLS = ("evidence", "overrides", "marks", "ai_evidence", "evidence_s", "facts")
 
@@ -855,7 +960,7 @@ def _enum_list(xs, allowed):
     return [x for x in xs or [] if x in allowed]
 
 
-def label_row(key, src, hash_, day, at, meta, ai, placed, status, model, prompt):
+def label_row(key, src, hash_, day, at, meta, ai, placed, status, model, prompt, dup=""):
     """The stored row: every value checked against its enum or pattern (no free text can get in)."""
     ai = ai or {}
     fs = []
@@ -886,7 +991,8 @@ def label_row(key, src, hash_, day, at, meta, ai, placed, status, model, prompt)
             "facts": fs[:MAX_FACTS], "grp": placed["group"] if placed.get("group") in GROUPS else "for_your_info",
             "why": why if WHY.fullmatch(why) else "rules_only",
             "model": model if model and MODEL.fullmatch(model) else "", "prompt": prompt if prompt == PROMPT_VERSION
-            else "", "ix": meta.get("ix") if isinstance(meta.get("ix"), int) else None}
+            else "", "ix": meta.get("ix") if isinstance(meta.get("ix"), int) else None,
+            "dup": dup if isinstance(dup, str) and KEY.fullmatch(dup) else ""}
 
 
 class Labels:
@@ -894,6 +1000,10 @@ class Labels:
         self.store = store
         with store.lock:
             store.db.executescript(_SCHEMA)
+            cols = {r[1] for r in store.db.execute("PRAGMA table_info(triage_labels)")}
+            if "dup" not in cols:   # additive: one message's id across the live read and the index
+                store.db.execute("ALTER TABLE triage_labels ADD COLUMN dup TEXT NOT NULL DEFAULT ''")
+            store.db.execute("CREATE INDEX IF NOT EXISTS triage_labels_dup ON triage_labels (dup)")
 
     @property
     def db(self):
@@ -938,6 +1048,14 @@ class Labels:
             rs = self.db.execute("SELECT * FROM triage_labels WHERE day=? AND status=? AND checked=? "
                                  "ORDER BY at DESC LIMIT ?", (day, status, 1 if checked else 0, limit)).fetchall()
         return [self._out(r) for r in rs]
+
+    def dup_elsewhere(self, dup, key):
+        """Is this message already sorted under another key (the live read and the index see the same message)?"""
+        if not dup:
+            return False
+        with self.store.lock:
+            return self.db.execute("SELECT 1 FROM triage_labels WHERE dup=? AND key<>? LIMIT 1",
+                                   (dup, key)).fetchone() is not None
 
     def mark_checked(self, key):
         with self.store.lock:
@@ -993,6 +1111,77 @@ class Labels:
         return [(r["label"], r["truth"], int(r["n"])) for r in rs]
 
 
+class Queue:
+    """The sorter's work queue in callsheet.db (restart-safe), newest first. References only: the key, the source kind,
+    where it came from (the sync's live read or the index), the index id, the dedupe id, the content hash and two
+    times. Never message text: that comes from the live read in memory or from the index when the batch is built; a
+    live item whose text was lost in a restart waits (STALE_S at most) for the next sync to read it again.
+    Dedupe: one row per key; one message seen through both ways keeps the live one (it has the headers). Cap: the
+    oldest items leave first beyond MAX_PENDING (their rules labels stay)."""
+
+    def __init__(self, store, cap=MAX_PENDING):
+        self.store, self.cap = store, cap
+
+    @property
+    def db(self):
+        return self.store.db
+
+    def __len__(self):
+        with self.store.lock:
+            return self.db.execute("SELECT COUNT(*) FROM triage_queue").fetchone()[0]
+
+    def __bool__(self):
+        with self.store.lock:
+            return self.db.execute("SELECT 1 FROM triage_queue LIMIT 1").fetchone() is not None
+
+    def __contains__(self, key):
+        with self.store.lock:
+            return self.db.execute("SELECT 1 FROM triage_queue WHERE key=?", (key,)).fetchone() is not None
+
+    def put(self, src, origin, now):
+        """Queue (or refresh) one item. False when a live copy of the same message is already queued."""
+        key = src["key"]
+        dup = src.get("dup") if isinstance(src.get("dup"), str) and KEY.fullmatch(src["dup"]) else _h(key)[:16]
+        ix = src.get("ix") if isinstance(src.get("ix"), int) else None
+        origin = origin if origin in ORIGINS else "sync"
+        with self.store.lock:
+            if origin == "index":
+                if self.db.execute("SELECT 1 FROM triage_queue WHERE dup=? AND key<>? AND origin='sync' LIMIT 1",
+                                   (dup, key)).fetchone():
+                    return False
+            else:
+                self.db.execute("DELETE FROM triage_queue WHERE dup=? AND key<>? AND origin='index'", (dup, key))
+            self.db.execute("INSERT INTO triage_queue (key, src, origin, ix, dup, hash, ts, queued) VALUES "
+                            "(?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET src=excluded.src, origin=excluded.origin, "
+                            "ix=excluded.ix, dup=excluded.dup, hash=excluded.hash, ts=excluded.ts, queued=excluded.queued",
+                            (key, src["ch"] if src.get("ch") in SRC else "mail", origin, ix, dup,
+                             re.sub(r"[^0-9a-f]", "", str(src.get("hash")))[:16] or "0", float(src.get("ts") or 0),
+                             float(now)))
+        return True
+
+    def trim(self):
+        """The cap: drops the oldest items beyond it. Returns how many left."""
+        with self.store.lock:
+            return self.db.execute("DELETE FROM triage_queue WHERE key IN (SELECT key FROM triage_queue ORDER BY "
+                                   "ts DESC, queued DESC, key LIMIT -1 OFFSET ?)", (int(self.cap),)).rowcount
+
+    def rows(self, limit=200, offset=0):
+        with self.store.lock:
+            return [dict(r) for r in self.db.execute(
+                "SELECT key, src, origin, ix, hash, ts, queued FROM triage_queue ORDER BY ts DESC, queued DESC, key "
+                "LIMIT ? OFFSET ?", (int(limit), int(offset)))]
+
+    def remove(self, key, hash_=None):
+        with self.store.lock:
+            if hash_ is None:
+                return self.db.execute("DELETE FROM triage_queue WHERE key=?", (key,)).rowcount
+            return self.db.execute("DELETE FROM triage_queue WHERE key=? AND hash=?", (key, str(hash_)[:16])).rowcount
+
+    def keys(self):
+        with self.store.lock:
+            return {r[0] for r in self.db.execute("SELECT key FROM triage_queue")}
+
+
 # --- the runner ---------------------------------------------------------------------------------------------------------
 def default_settings():
     return {"mode": "shadow", "model": GEMMA, "batch": BATCH, "day_cards": DAY_CARDS, "day_gpu_min": DAY_GPU_MIN,
@@ -1025,8 +1214,9 @@ class Sorter:
         self._post_fn = post
         self.labels = Labels(store)
         self.lock = threading.Lock()        # one run at a time
-        self.plock = threading.Lock()       # the pending queue and the card cache
-        self.pending = collections.OrderedDict()   # key -> (src, area) newest last; memory only
+        self.plock = threading.Lock()       # the queue's texts and the card cache
+        self.pending = Queue(store)         # the work queue: callsheet.db, references only (restart-safe)
+        self.srcs = {}                      # key -> the queued item with its text: memory only
         self.cache = collections.OrderedDict()     # key -> display fields for the page; memory only
         self._last_ix = 0.0
         self._stop = threading.Event()
@@ -1177,11 +1367,13 @@ class Sorter:
     def _store_rules(self, src, meta, now_ts, day):
         placed = {"group": place(meta, None)[0], "why": "rules_only", "facts": []}
         self.labels.put(label_row(src["key"], src["ch"], src["hash"], day, now_ts, meta, None, placed, "rules", "",
-                                  ""))
+                                  "", src.get("dup") or ""))
 
-    def collect(self, srcs, ctx=None):
-        """New or changed items: rules labels now (stored), the AI pass later (queued in memory). Returns the
-        number queued. Off: nothing."""
+    def collect(self, srcs, ctx=None, origin="sync"):
+        """New or changed items: rules labels now (stored), the AI pass later (queued: references in callsheet.db,
+        the text in memory). An item already queued with the same content gets its text back (after a restart);
+        one already sorted under another key (the same message through the index) is skipped. Returns the number
+        queued. Off: nothing."""
         s = self.settings()
         if s["mode"] == "off":
             return 0
@@ -1192,9 +1384,12 @@ class Sorter:
             self._save_settings(s)
         ctx = ctx or context(self.store, self.people)
         known = self.labels.hashes(x["key"] for x in srcs)
+        queued = self.pending.keys()
         now_ts, day, n = self.clock(), self._today().isoformat(), 0
         with self.plock:
             for src in srcs:
+                if origin == "index" and self.labels.dup_elsewhere(src.get("dup"), src["key"]):
+                    continue   # the live read already has this message
                 try:
                     card, meta = build(src, ctx)
                 except Exception as e:  # noqa: BLE001 (one odd item never stops the rest)
@@ -1203,23 +1398,42 @@ class Sorter:
                 self._remember(src["key"], meta, card.get("area"))
                 old = known.get(src["key"])
                 if old and old[0] == src["hash"][:16]:
+                    if src["key"] in queued:
+                        self.srcs[src["key"]] = src      # its text again (the queue outlived a restart)
+                        continue
+                    if old[1] != "rules":
+                        continue
+                if not self.pending.put(src, origin, now_ts):
                     continue
                 self._store_rules(src, meta, now_ts, day)
-                self.pending[src["key"]] = src
-                self.pending.move_to_end(src["key"])
+                self.srcs[src["key"]] = src
                 n += 1
-            while len(self.pending) > MAX_PENDING:
-                self.pending.popitem(last=False)
+            if self.pending.trim():
+                keep = self.pending.keys()
+                self.srcs = {k: v for k, v in self.srcs.items() if k in keep}
         return n
 
-    def collect_sync(self, threads, invite_msgs=()):
-        """From a sync's live read: every Gmail thread it read (also the ones the rules drop today)."""
+    def collect_sync(self, threads, invite_msgs=(), slack=(), signal=()):
+        """From a sync's live read: every Gmail thread it read (also the ones the rules drop today), and (0.8.4)
+        the live Slack and Signal messages it read: slack = [(data, {"id", "team_id"}, area id)], signal =
+        [(chats, area id, ignored chat ids)]. Then the index's new items."""
         srcs = []
         for th, addr, area_id, acc_id in threads or []:
             try:
                 srcs.append(thread_source(th, addr, acc_id, area_id, invite_msgs))
             except Exception as e:  # noqa: BLE001
                 self.log(f"Callsheet sorting: a thread was skipped ({type(e).__name__})")
+        now = self.clock()
+        for data, ws, area_id in slack or ():
+            try:
+                srcs += slack_sources(data, ws, area_id, now)
+            except Exception as e:  # noqa: BLE001 (one workspace never stops the rest)
+                self.log(f"Callsheet sorting: a Slack read was skipped ({type(e).__name__})")
+        for chats, area_id, ignored in signal or ():
+            try:
+                srcs += signal_sources(chats, area_id, now, ignored)
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Callsheet sorting: the Signal read was skipped ({type(e).__name__})")
         n = self.collect(srcs)
         n += self.collect_index()
         return n
@@ -1239,7 +1453,7 @@ class Sorter:
         if not rows:
             return 0
         ctx = context(self.store, self.people)
-        n = self.collect([index_source(r, ctx.owner_addrs) for r in rows], ctx)
+        n = self.collect([index_source(r, ctx.owner_addrs) for r in rows], ctx, "index")
         self.store._set_meta("sorting_ix", {"indexed_at": max(r["indexed_at"] for r in rows)})  # noqa: SLF001
         return n
 
@@ -1273,7 +1487,9 @@ class Sorter:
             status = "ai" if ai is not None else "fallback"
             fb += status == "fallback"
             self.labels.put(label_row(src["key"], src["ch"], src["hash"], day, now_ts, metas[cid], ai, merged[cid],
-                                      status, s["model"], PROMPT_VERSION))
+                                      status, s["model"], PROMPT_VERSION, src.get("dup") or ""))
+            if self.pending.remove(src["key"], src["hash"][:16]):
+                self.srcs.pop(src["key"], None)
         usage = res.get("usage") if isinstance(res, dict) and isinstance(res.get("usage"), dict) else {}
         timings = res.get("timings") if isinstance(res, dict) and isinstance(res.get("timings"), dict) else {}
         return len(cards), secs, fb, {"in": usage.get("prompt_tokens") or 0, "out": usage.get("completion_tokens") or 0,
@@ -1282,6 +1498,43 @@ class Sorter:
 
     def _caps(self, s, d):
         return d["cards"] >= s["day_cards"] or d["gpu_s"] >= s["day_gpu_min"] * 60
+
+    def _hydrate(self, row):
+        """A queued reference back to an item with its text: the live read's copy in memory, else the index's."""
+        src = self.srcs.get(row["key"])
+        if src is not None and src["hash"][:16] == row["hash"]:
+            return src
+        if row["origin"] == "index" and row["ix"] is not None and self.index is not None:
+            try:
+                item = self.index.get(row["ix"])
+                if item:
+                    src = index_source(item, context(self.store, self.people).owner_addrs)
+                    if src and src["key"] == row["key"]:
+                        src["hash"] = row["hash"]
+                        return src
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Callsheet sorting: a queued item wasn't read ({type(e).__name__})")
+        return None
+
+    def _take(self, n):
+        """Up to n queued items with their text, newest first. Items whose text is gone (a live read before a
+        restart) wait for the next sync; after STALE_S they leave the queue (their rules labels stay)."""
+        take, off, now = [], 0, self.clock()
+        while len(take) < n:
+            rows = self.pending.rows(200, off)
+            if not rows:
+                break
+            for row in rows:
+                src = self._hydrate(row)
+                if src is not None:
+                    take.append(src)
+                    if len(take) >= n:
+                        break
+                elif now - row["queued"] > STALE_S:
+                    self.pending.remove(row["key"])
+                    off -= 1
+            off += len(rows)
+        return take
 
     def run_pass(self):
         """One incremental run over the queue, inside the budget. Returns a reason code (counts are logged)."""
@@ -1326,16 +1579,13 @@ class Sorter:
                 reason = "yield"
                 break
             with self.plock:
-                take = []
-                while self.pending and len(take) < max(1, min(int(s["batch"]), d_left(s, d))):
-                    take.append(self.pending.popitem(last=True)[1])   # newest first
+                take = self._take(max(1, min(int(s["batch"]), d_left(s, d))))   # newest first
+            if not take:
+                reason = "waiting"   # what's left waits for its text (the next sync reads it again)
+                break
             try:
                 c, secs, f, u = self._batch(take, ctx, s, room - (self.monotonic() - t0))
-            except writer.WriterError as e:
-                with self.plock:   # back in the queue, newest stays newest
-                    for src in reversed(take):
-                        if src["key"] not in self.pending:
-                            self.pending[src["key"]] = src
+            except writer.WriterError as e:   # they stay in the queue
                 if isinstance(e, Busy):
                     reason = "yield"
                     break
@@ -1428,7 +1678,8 @@ class Sorter:
             ctx = context(self.store, self.people)
             srcs = [x for x in (index_source(r, ctx.owner_addrs) for r in rows) if x]
             have = self.labels.hashes(x["key"] for x in srcs)
-            todo = [x for x in srcs if x["key"] not in have or have[x["key"]][1] == "rules"]
+            todo = [x for x in srcs if (x["key"] not in have or have[x["key"]][1] == "rules")
+                    and not self.labels.dup_elsewhere(x.get("dup"), x["key"])]
             st["cursor"] = [rows[-1]["ts"], rows[-1]["id"]]
             st["done_n"] = int(st.get("done_n") or 0) + len(rows)
             st["paused"] = None
@@ -1674,7 +1925,8 @@ class Sorter:
                              "ai_codes": lab["ai_evidence"], "overrides": lab["overrides"], "marks": lab["marks"],
                              "quote": self._quote(c, lab) if lab["status"] == "ai" else None,
                              "fixed": [x["action"] for x in self.labels.corrections(key)][-1:]}
-        brief["sorting"] = {"on": True, "rows": rows, "waiting": len(self.pending), "names": KIND_NAMES}
+        brief["sorting"] = {"on": True, "rows": rows, "waiting": len(self.pending), "names": KIND_NAMES,
+                            "sections": sections(brief.get("replies") or [], rows)}
 
     def fix(self, key, action):
         if self.settings()["mode"] != "on":
@@ -1693,6 +1945,46 @@ class Sorter:
         if not self.labels.uncorrect(int(cid)):
             raise InputError("That correction is already gone.")
         return {"ok": True}
+
+
+# --- the brief's sections when sorting is on (0.8.4) -------------------------------------------------------------------
+SECTION_OF = {"needs_you": "needs_you", "heads_up_security": "needs_you", "your_day": "needs_you",
+              "what_changed": "for_your_info", "for_your_info": "for_your_info",
+              "sorted_promos": "promos", "sorted_updates": "updates", "probably_not_for_you": "not_for_you"}
+SORTED_PARTS = ("promos", "updates", "not_for_you")
+_ASK_RANK = {"decision_needed": 0, "deadline": 1, "request": 2, "question": 3}
+
+
+def section_of(row):
+    """Where one reply row goes: an override or no label yet -> Needs you (nothing waits for the model)."""
+    if not row or row.get("overrides"):
+        return "needs_you"
+    return SECTION_OF.get(row.get("group"), "needs_you")
+
+
+def _sec_rank(i, row):
+    """Within a section: VIP and security overrides first, the other overrides next, then what the owner or the
+    model said is a reply (decision, deadline, request, question), then the rules' own order."""
+    row = row or {}
+    ov = set(row.get("overrides") or [])
+    tier = 0 if ov & {"vip", "security"} else 1 if ov else 2 if row.get("group") == "needs_you" else 3
+    return (tier, _ASK_RANK.get(row.get("ask"), 4), i)
+
+
+def sections(replies, rows):
+    """The brief's reply rows in three sections: Needs you, For your info, Sorted for you (promos, updates, probably
+    not for you). Pure. Every row id lands in exactly one section, so nothing is hidden; the page shows counts and
+    folds the sorted lists. rows: brief["sorting"]["rows"] (row id -> label)."""
+    out = {"needs_you": [], "for_your_info": [], "promos": [], "updates": [], "not_for_you": []}
+    for i, r in enumerate(replies):
+        rid = r.get("id")
+        if isinstance(rid, str):
+            row = rows.get(rid)
+            out[section_of(row)].append((_sec_rank(i, row), rid))
+    ids = {k: [rid for _, rid in sorted(v)] for k, v in out.items()}
+    return [{"id": "needs_you", "rows": ids["needs_you"]}, {"id": "for_your_info", "rows": ids["for_your_info"]},
+            {"id": "sorted", "rows": [x for k in SORTED_PARTS for x in ids[k]],
+             "parts": [{"id": k, "rows": ids[k]} for k in SORTED_PARTS]}]
 
 
 def d_left(s, d):

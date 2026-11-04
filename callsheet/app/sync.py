@@ -430,8 +430,9 @@ class Syncer:
         if stopped:
             errors.append(f"Reading stopped after {DEADLINE_S} seconds, so some items were skipped.")
 
-        slack_rows, slack_heads, n["slack"] = self._read_slack(areas, vips, t0, tz, errors, live)
-        signal_rows, signal_heads, n["signal"] = self._read_signal(areas, vips, t0, tz, live)  # 0.5.1
+        slack_reads, signal_reads = [], []   # 0.8.4: the live reads for the sorter too (no tokens in them)
+        slack_rows, slack_heads, n["slack"] = self._read_slack(areas, vips, t0, tz, errors, live, slack_reads)
+        signal_rows, signal_heads, n["signal"] = self._read_signal(areas, vips, t0, tz, live, signal_reads)  # 0.5.1
         fmt = rules.time_format(settings)
         schedule, all_day = rules.build_schedule(events, tz, day, fmt)
         for i, row in enumerate(schedule, 1):
@@ -493,7 +494,8 @@ class Syncer:
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
                 "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule,
                 # 0.8.4 AI sorting: every thread read (also the ones the rules drop) and the messages with invites
-                "threads": threads, "invite_msgs": {f.get("msg_id") for f in see["found"] if f.get("msg_id")}}
+                "threads": threads, "invite_msgs": {f.get("msg_id") for f in see["found"] if f.get("msg_id")},
+                "slack_reads": slack_reads, "signal_reads": signal_reads}
 
     def _possible(self, replies, refs, inbound, cal_events, areas, tz, day):
         """The brief's possible events (dates.possible_events) from each reply row's latest incoming message
@@ -640,9 +642,10 @@ class Syncer:
                     out.append((f["ev"]["uid"], (ev, a["area_id"])))
         return out
 
-    def _read_slack(self, areas, vips, t0, tz, errors, live):
+    def _read_slack(self, areas, vips, t0, tz, errors, live, reads=None):
         """Every connected Slack workspace whose area reads chat. Returns (rows, heads_up, workspaces read).
-        With live=False (the writer evaluation) neither the saved state nor the status changes."""
+        With live=False (the writer evaluation) neither the saved state nor the status changes. reads (0.8.4): gets
+        (data, {"id", "team_id"}, area id) per workspace read, for the sorter; never the token."""
         rows, heads, count = [], [], 0
         for pub in self.store.slack_workspaces():
             area = areas.get(pub["area_id"])
@@ -672,9 +675,11 @@ class Syncer:
                 row["_ref"] = {"source": "slack", "ws": ws["id"]}
             rows += r
             heads += h
+            if reads is not None:
+                reads.append((data, {"id": ws["id"], "team_id": ws.get("team_id") or ""}, area["id"]))
         return rows, heads, count
 
-    def _read_signal(self, areas, vips, t0, tz, live):
+    def _read_signal(self, areas, vips, t0, tz, live, reads=None):
         """Signal rows (0.5.1) from the messages signal-cli stored; nothing is fetched here. Only while Signal is
         linked and its area reads chat. Returns (rows, heads_up, 1 when read else 0). Live runs prune old
         messages first (30 days; disappearing messages when their time is up)."""
@@ -691,6 +696,8 @@ class Syncer:
                                         meta.get("ignored") or [])
         for row in rows:
             row["_ref"] = {"source": "signal"}
+        if reads is not None:   # 0.8.4: for the sorter
+            reads.append((chats, area["id"], list(meta.get("ignored") or [])))
         return rows, heads, 1
 
     def _apply_done(self, brief, refs, tz, live=True):
@@ -764,7 +771,8 @@ class Syncer:
         self.store.set_cached_brief(brief)  # the rules brief first: the page shows it while the writer runs
         if self.sorter is not None and kind != "sample":   # 0.8.4: rules labels now, the AI pass later (no model here)
             try:
-                self.sorter.collect_sync(r.get("threads"), r.get("invite_msgs"))
+                self.sorter.collect_sync(r.get("threads"), r.get("invite_msgs"), r.get("slack_reads"),
+                                         r.get("signal_reads"))
             except Exception as e:  # noqa: BLE001 (sorting never breaks a sync)
                 self.log(f"Callsheet sorting: not collected ({type(e).__name__})")
         last = {"at": written, "ok": not errors, "errors": errors}

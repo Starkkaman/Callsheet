@@ -12,6 +12,14 @@
   a passing sender check, your linked Signal and your Slack user, never from what a message says.
 - **Check the sorting**: up to ten items a day, **Right** or **Wrong** (and the right label). Only the counts are
   kept; **Copy the numbers** copies counts only, no names, subjects or addresses.
+- **Live Slack and Signal too**: the Slack and Signal messages a refresh reads go to the sorter straight away (not
+  only after Know me indexes them), and their labels land on the same brief rows. One message seen both ways is
+  sorted once.
+- **The waiting list survives a restart**: what's waiting to be sorted is kept in Callsheet's database (references
+  only, never message text), at most 2,000 items, the newest first.
+- **When sorting is on, the brief is grouped**: **Needs you**, **For your info** (the first 5, then "Show more") and
+  **Sorted for you** (Promos · Updates · Not for you, with counts; each opens its list). Nothing is hidden, and VIPs,
+  security alerts and the other always-show items stay in Needs you. In the shadow week the brief doesn't change.
 - **When sorting is on**: a reply's panel has **Why is this here?** (the rules' label, the AI's label and the
   sentence it pointed to, and the rule that placed it) and three fixes (**Needs a reply**, **Not for me**, **This
   is a promo**, with Undo). Fixes are stored as labels only, for the next version to learn from.

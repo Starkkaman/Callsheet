@@ -612,7 +612,7 @@
         h('span', { class: 'sp' }), meter(), used && rs.length ? legendBtn() : null]),
       areaChips(all),
       rs.length && (!used || U.legend) ? legend() : null,
-      rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, U.area ? 'Nothing waiting in this area.' : 'Nothing waiting.'),
+      rs.length ? srSections(rs) || h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, U.area ? 'Nothing waiting in this area.' : 'Nothing waiting.'),
       hiddenLine(), doneRows()];
   }
   function timeline() {
@@ -4411,6 +4411,52 @@
         x.quote ? h('blockquote', { class: 'srquote' }, x.quote) : null,
         h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + srWhyText(x.why))])]),
       srMarks(x.marks), fixes, err]);
+  }
+  /* sorting on: the reply rows in sections (B.sorting.sections, built by the server; every row in exactly one). Needs you
+     open; For your info folds after 5; Sorted for you shows counts, each opening its list. Rows the server didn't place
+     (none should be) go to Needs you: nothing is hidden. */
+  var SR_SEC = { needs_you: 'Needs you', for_your_info: 'For your info', sorted: 'Sorted for you' };
+  var SR_PART = { promos: 'Promos', updates: 'Updates', not_for_you: 'Not for you' };
+  var SR_OPEN = {};
+  function srSections(rs) {
+    var secs = B && B.sorting && B.sorting.on && Array.isArray(B.sorting.sections) ? B.sorting.sections : null;
+    if (!secs) return null;
+    var by = {}, placed = {};
+    rs.forEach(function (r) { by[r.id] = r; });
+    function pick(ids) { return (ids || []).filter(function (id) { if (!by[id] || placed[id]) return false; placed[id] = 1; return true; }).map(function (id) { return by[id]; }); }
+    var lists = {};
+    secs.forEach(function (sc) {
+      if (sc.id === 'sorted') (sc.parts || []).forEach(function (pt) { if (SR_PART[pt.id]) lists[pt.id] = pick(pt.rows); });
+      else if (SR_SEC[sc.id]) lists[sc.id] = pick(sc.rows);
+    });
+    var need = (lists.needs_you || []).concat(rs.filter(function (r) { return !placed[r.id]; }));
+    var fyi = lists.for_your_info || [];
+    function list(xs) { return h('div', { class: 'list' }, xs.map(function (r) { return rowEl(r, 'rl'); })); }
+    function head(id, n) { return h('h3', { class: 'srsh', id: 'srs-' + id }, [SR_SEC[id], h('span', { class: 'n' }, String(n))]); }
+    function toggle(id, label, n) {
+      var open = !!SR_OPEN[id];
+      return btn('tbtn disc', label, { 'aria-expanded': String(open), 'aria-controls': open || id === 'fyi' ? 'srp-' + id : null, 'data-fk': 'srp:' + id }, function () {
+        SR_OPEN[id] = !open; renderBrief('[data-fk="srp:' + id + '"]');
+      });
+    }
+    var out = [h('section', { class: 'srs', 'aria-labelledby': 'srs-needs_you' }, [head('needs_you', need.length),
+      need.length ? list(need) : h('p', { class: 'empty' }, 'Nothing needs you here.')])];
+    if (fyi.length) {
+      var more = fyi.length - 5, openF = !!SR_OPEN.fyi;
+      out.push(h('section', { class: 'srs', 'aria-labelledby': 'srs-for_your_info' }, [head('for_your_info', fyi.length),
+        h('div', { id: 'srp-fyi' }, list(more > 0 && !openF ? fyi.slice(0, 5) : fyi)),
+        more > 0 ? h('div', { class: 'srmore' }, toggle('fyi', openF ? 'Show fewer' : 'Show ' + more + ' more', more)) : null]));
+    }
+    var parts = Object.keys(SR_PART).filter(function (k) { return (lists[k] || []).length; });
+    if (parts.length) {
+      var total = parts.reduce(function (a, k) { return a + lists[k].length; }, 0);
+      out.push(h('section', { class: 'srs srsorted', 'aria-labelledby': 'srs-sorted' }, [head('sorted', total),
+        h('div', { class: 'srparts' }, parts.map(function (k) { return toggle(k, SR_PART[k] + ' ' + lists[k].length, lists[k].length); }))]
+        .concat(parts.filter(function (k) { return SR_OPEN[k]; }).map(function (k) {
+          return h('div', { class: 'srpart', id: 'srp-' + k, role: 'region', 'aria-label': SR_PART[k] }, list(lists[k]));
+        }))));
+    }
+    return h('div', { class: 'srsecs' }, out);
   }
   function srUnfix(u) {
     run([], null, function () { return api('DELETE', 'api/sorting/fix/' + encodeURIComponent(u.id)); }, function () {

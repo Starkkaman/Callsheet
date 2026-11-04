@@ -6,9 +6,13 @@ schema, prompt `t083.1` and merge rules are the ones the 0.8.3 screen measured (
 ## What happens
 
 1. **Each refresh** (`sync.py`, after the rules brief is cached): every Gmail thread the sync read (also the ones the
-   rules drop today) and the index items (mail, Slack, Signal, Drive) indexed since the last look and at most 3 days
-   old become cards. Each card gets its **rules pre-label** right away (stored, status `rules`); new or changed items
-   (by content hash) go into an in-memory queue, newest first. No model is called inside a sync.
+   rules drop today), the **live Slack and Signal messages it read** (`slack_sources`, `signal_sources`: keyed exactly
+   like the brief's Slack and Signal rows, so their labels find the rows; the sender and "from the owner" come from
+   user ids and signal-cli's outgoing flag, never the text; ignored Signal chats are left out; the sorter gets the
+   workspace id and team id only, never the token) and the index items (mail, Slack, Signal, Drive) indexed since the
+   last look and at most 3 days old become cards. Each card gets its **rules pre-label** right away (stored, status
+   `rules`); new or changed items (by content hash) go into **the work queue** (below). No model is called inside a
+   sync.
 2. **The AI pass** (the sorter thread, every 30 s): batches of 12 cards, one request each, to the owner's local model
    server (the writer's address), with the model from the sorting settings (Gemma by default), `id_slot` 0,
    temperature 0, thinking off, a strict per-request JSON schema (each card's own sentence ids are the only allowed
@@ -19,6 +23,18 @@ schema, prompt `t083.1` and merge rules are the ones the 0.8.3 screen measured (
    (`never_hides`); a model answer that's missing, malformed or off-schema leaves that card to the rules (status
    `fallback`).
 4. **The night backfill** reads the index newest first from a stored `(ts, id)` cursor inside the owner's window.
+
+## The work queue (`Queue`, table `triage_queue`)
+
+- **Restart-safe**: one row per item in callsheet.db, newest first: key, source kind, origin (`sync` or `index`), index
+  id, dedupe id, content hash, message time, queued time. **References only, never text**: the text comes from the
+  live read in memory or, for index items, from the index when the batch is built. After a restart a live item waits
+  for the next sync to read it again (that sync re-attaches the text without queueing it twice); one that never comes
+  back leaves after `STALE_S` = 3 days (its rules label stays). A run with only such items ends with `waiting`.
+- **Dedupe**: one row per key; the same message seen through the live read and the index (same `dup` id: the Gmail
+  message id, Slack workspace + channel + ts, Signal chat + sender + ts) is sorted once. The live copy wins (it has
+  the headers): it replaces a queued index copy, and an index copy is skipped when the live one is queued or labelled.
+- **Cap**: `MAX_PENDING` = 2,000; beyond it the oldest leave first (their rules labels stay).
 
 ## Budget and timing (`Sorter.call_guard`, `_run`, `backfill_step`)
 
@@ -41,6 +57,11 @@ Log lines are counts only (cards, batches, rules-only, tokens, ms, cards/min, wa
 - `on` (the owner's choice; never automatic): `brief.sorting` = per reply row: group, why code, rules label and
   codes, AI label and codes, overrides, marks and the quoted evidence sentence (from memory, defanged, never a
   flagged sentence). The page shows a mark on demoted rows and **Why is this here?** with three fixes.
+  `brief.sorting.sections` (`sections`, pure) groups the reply rows: **Needs you** (needs_you, your_day, security;
+  every override; rows without a label yet), **For your info** (for_your_info, what_changed; folded after 5) and
+  **Sorted for you** (parts promos, updates, not_for_you: counts, each opening its list). Every row id is in exactly
+  one section, so nothing is hidden. Ranked within each: VIP and security overrides, other overrides, needs-a-reply
+  (decision, deadline, request, question), then the rules' order. Shadow mode adds nothing (byte-identical brief).
 - `off`: nothing is collected or sent.
 
 Other settings: `model`, `batch` (4-16), `day_cards`, `day_gpu_min`, `backfill {on, start, end, days, nights}`.
@@ -80,4 +101,5 @@ settings. `POST api/sorting/check {key, right, label}` adds one to the counts an
 
 ## Tests
 
-`tests/test_sorting_084.py` (fakes only; no model is ever called).
+`tests/test_sorting_084.py`, `tests/test_sorting_084_queue.py` (the queue, live Slack/Signal, sections; fakes only:
+no model is ever called).
