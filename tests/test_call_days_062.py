@@ -140,8 +140,9 @@ class PageTest(unittest.TestCase):
     def setUpClass(cls):
         static = ROOT / "callsheet" / "app" / "static"
         js = (static / "app.js").read_text()
-        cls.times = js[js.index("function stepTimes()"):js.index("function stepDelivery()")]
-        cls.review = js[js.index("function stepReview()"):]
+        # 0.9.0: Your day > Brief times (dayBriefs), with the urgent checks as one more row; Setup home's lines
+        cls.times = js[js.index("function urgentDays("):js.index("function fitTa(")]
+        cls.review = js[js.index("function placeLines()"):]
         cls.css = (static / "app.css").read_text()
 
     def test_day_chips_under_each_call_time(self):
@@ -152,7 +153,9 @@ class PageTest(unittest.TestCase):
                       "off.'; return; }", self.times)
         self.assertIn("save(ct, { days: DAYS.filter(", self.times)
         self.assertIn("inp, t]), days, err]);", self.times)
-        self.assertIn("'No urgent checks on days off'", self.times)
+        self.assertIn("'Urgent checks'", self.times)  # 0.9.0: working days are the urgent checks' own day chips
+        self.assertIn("'data-ugday': d", self.times)
+        self.assertIn("skip_checkins_days_off: true", self.times)
         self.assertNotIn("innerHTML", self.times)
         self.assertIn("return c.time + onDays(c);", self.review)
         self.assertIn(".tb .ctdays{display:flex;flex-wrap:wrap;gap:4px}", self.css)

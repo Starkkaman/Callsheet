@@ -34,17 +34,17 @@ class QuickWins071(unittest.TestCase):
 
     # 1. Setup opens on a home page; the rail shows on phones
     def test_setup_opens_home(self):
-        self.assertIn('function stepHome()', self.js)
+        self.assertIn('function setupHome()', self.js)  # 0.9.0: Setup home summarises the four places
         i = self.js.index("setupBtn")
-        self.assertIn('ui.step = 0', self.js[i:i + 2000])
+        self.assertIn("openSetup('home')", self.js[i:i + 2000])
         rs = func(self.js, 'renderSetup')
         self.assertIn("'Home'", rs)
-        self.assertIn('stepHome()', rs)
+        self.assertIn('setupHome()', rs)
         self.assertNotIn('prail', self.js)
         self.assertNotIn('.prail', self.css)
         phone = re.findall(r'@media \(max-width:700px\)\{([^@]*)', self.css)
         self.assertTrue(any(re.search(r'\.rail\{display:flex', p) for p in phone), 'rail must show on phones')
-        sh = func(self.js, 'stepHome')
+        sh = func(self.js, 'setupHome')
         self.assertIn("'Edit'", sh)
 
     # 2. Help folds behind "?", remembered per device, one sentence stays
@@ -121,7 +121,7 @@ class QuickWins071(unittest.TestCase):
 
     # 8. Labels under the phone header icons
     def test_phone_header_labels(self):
-        self.assertEqual(self.html.count('<span class="bl">'), 3)
+        self.assertEqual(self.html.count('<span class="bl">'), 4)  # 0.9.0: Refresh, Find, Setup, Look
         self.assertIn('.hbtn .bl{font-size:11px', self.css)
         self.assertIn('flex-direction:column', self.css)
 

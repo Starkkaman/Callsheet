@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.0 ("Next release": Setup in four places, Find or ask, One at a time)
+
+Page only: the writer, its instructions, the safety rules and every server setting work as before.
+
+- **Setup in four places**: **Connections** (Google, Slack, Signal, notes folders, GitHub; areas as chips; one line
+  per account saying what it reads, with **Change** for its switches and calendars), **Your day** (name, time zone,
+  brief times with their days, phone alerts and quiet hours, VIPs, "needs a reply after", look and sound), **AI**
+  (who writes: Off, On this box or Claude; Morning and Check-ins as **Careful** or **Fast**; Chat on this device;
+  Memory, Get to know me and People) and **Advanced**, closed until you open a part (Google sign-in key, model server,
+  presets, chat engine and its limits, alert limits and privacy, writing instructions and safety rules, the memory
+  file, writer evaluation, Signal history import, and clearing chats or memory). Setup's home page sums up each place
+  and has **Find a setting**. The first run is three short steps: Connect, Your day, Get to know me.
+- **Working days are now the urgent checks' days**: under Brief times, "Urgent checks" is one more row with its own
+  day chips, just like each brief. Nothing changes in what Callsheet does; the old "No urgent checks on days off"
+  switch is those chips (all seven picked means every day).
+- **Find or ask** (Ctrl+K, ⌘K or /, or **Find** in the header): jump to a person, a thread, an event or a project,
+  copy the open reply's draft or open it in Gmail or Slack, open any setting, or ask Chat. It only reads, copies and
+  opens: nothing is marked done, hidden or sent from it.
+- **One at a time** on Replies: one reply on a card with its draft ready. Keys: **C** copy, **O** open, **D** done,
+  **L** later, **N** note, **X** not for me (the "Doesn't need a reply" menu), **J**/**K** move, **Esc** back to the
+  list. On a phone, swipe right for done and left for later. Done, later, not for me and notes each have **Undo**.
+  It shows "4 of 9" as you go and ends with All clear. Later keeps a reply out of the queue until the next brief.
+- **Start your day** on Briefing: replies waiting, clashes, the next event and invites to answer, with **Start**
+  (One at a time) and **Not now** (hidden for the rest of the day). It shows once each morning.
+- **Compact or Comfortable** rows on Replies (Comfortable adds the reason line), kept on this device. Also in
+  Your day with the look, and an optional short sound when you reach All clear.
+- **Chat on this device**: AI → Chat can hide the Chat tab on this device.
+- The message's **Close** button is now a full 44 px target and no longer sits under **Undo**.
 ## 0.8.5 ("Learning")
 
 - **AI sorting learns from you**: your fixes (**Needs a reply**, **Not for me**, **This is a promo**), your
