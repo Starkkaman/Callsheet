@@ -142,6 +142,92 @@ class SignalsTest(unittest.TestCase):
             self.assertNotIn("‮", x["why"])
 
 
+# --- planted signatures and display-name spoofs (coordinator safety fix) --------------------------------------------
+class GuardTest(unittest.TestCase):
+    MALLORY = P("m", "Mallory", ("email", "mallory@evil.example"))
+    SIG = {("mallory@evil.example", "jonas@berg.example")}
+
+    def vip(self, **kw):
+        p = P("j", "Jonas Berg", ("email", "jonas@berg.example"))
+        p.update(kw)
+        return p
+
+    def test_signature_into_a_vip_is_medium_with_the_caution(self):
+        s = pp.signals(self.MALLORY, self.vip(vip=1), signatures=self.SIG)
+        self.assertEqual([(x["code"], x["weight"], x.get("capped")) for x in s], [("signature", 0.6, True)])
+        self.assertEqual(pp.strength(s[0]["weight"]), "Good")  # medium, never "Strong"
+        self.assertTrue(pp.opens(s))  # the owner sees it, with the caution line
+        self.assertEqual(pp.caution(s), "Only evidence: a signature in a message from mallory@evil.example; check "
+                                        "before merging.")
+
+    def test_signature_into_a_verified_handle_is_capped(self):
+        for kind in ("owner", "slack", "signal", "google"):
+            j = self.vip()
+            j["handles"][0]["verified"] = kind
+            s = pp.signals(self.MALLORY, j, signatures=self.SIG)
+            self.assertEqual((s[0]["weight"], pp.strength(s[0]["weight"])), (0.6, "Good"), kind)
+            self.assertTrue(pp.caution(s))
+
+    def test_unverified_signature_stays_strong_without_caution(self):
+        j = self.vip()
+        j["handles"][0]["verified"] = "inferred"
+        s = pp.signals(self.MALLORY, j, signatures=self.SIG)
+        self.assertEqual((s[0]["weight"], pp.caution(s)), (0.9, ""))
+
+    def test_caution_only_when_the_signature_is_the_only_evidence(self):
+        a = P("m", "Jonas Berg", ("email", "jb@berg.example"))
+        s = pp.signals(a, self.vip(vip=1), signatures={("jb@berg.example", "jonas@berg.example")})
+        self.assertEqual([x["code"] for x in s], ["name_domain", "signature"])
+        self.assertEqual(s[1]["weight"], 0.6)
+        self.assertEqual(pp.caution(s), "")
+
+    def test_unique_name_never_opens_into_a_vip(self):
+        spoof = P("s", "Jonas Berg", ("email", "jonas@evil.example"))
+        s = pp.signals(spoof, self.vip(vip=1), name_count={"jonas berg": 2})
+        self.assertEqual([x["code"] for x in s], ["name", "unique_name"])
+        self.assertFalse(pp.opens(s))
+        self.assertTrue(pp.opens(pp.signals(spoof, self.vip(), name_count={"jonas berg": 2})))
+
+
+class GuardSeedTest(Base):
+    def test_planted_signature_vip_card_is_medium_with_warning(self):
+        self.store.add_vip("Jonas Berg", "jonas@berg.example", self.work)
+        planted = "Contract attached.\n\nMallory\nBerg Studio\nmallory@evil.example · jonas@berg.example"
+        self.index.upsert([mail("p1", "Mallory <mallory@evil.example>", planted),
+                           mail("p2", "Mallory <mallory@evil.example>", planted),
+                           mail("j1", "Jonas Berg <jonas@berg.example>")])
+        self.pp.seed()
+        cards = [c for c in self.pp.proposals() if "Jonas Berg" in (c["a"]["name"], c["b"]["name"])]
+        self.assertEqual(len(cards), 1)
+        c = cards[0]
+        self.assertEqual([s["strength"] for s in c["signals"]], ["Good"])
+        self.assertNotIn("Strong", json.dumps(c))
+        self.assertEqual(c["caution"], "Only evidence: a signature in a message from mallory@evil.example; check "
+                                       "before merging.")
+        jonas = self.pid("email", "jonas@berg.example")
+        self.assertNotEqual(self.pid("email", "mallory@evil.example"), jonas)  # nothing merged by itself
+        self.assertEqual(pp.vip_map(self.store, self.pp).get("mallory@evil.example"), None)
+
+    def test_display_name_spoof_never_proposes_into_the_owner_or_a_vip(self):
+        self.store.add_vip("Jonas Berg", "jonas@berg.example", self.work)
+        self.pp.my_names(["Isaac", "Zac"])
+        self.index.upsert([mail("s1", "Isaac Hammond <isaac@evil.example>", f"Isaac Hammond\n{ME_ACC}"),
+                           mail("s2", "Isaac Hammond <isaac@evil.example>", f"It's me, Isaac.\n\nIsaac\n{ME_ACC}"),
+                           mail("s3", "Jonas Berg <jonas@evil.example>", "New address, use this one."),
+                           mail("s4", "Jonas Berg <jonas@evil.example>", "Jonas"),
+                           mail("j1", "Jonas Berg <jonas@berg.example>")])
+        self.pp.seed()
+        self.assertEqual(self.pp.me_keys(), {("email", ME_ACC)})
+        for c in self.pp.proposals():
+            ids = {c["a"]["id"], c["b"]["id"]}
+            self.assertNotIn(pp.ME, ids)
+            self.assertNotIn(self.pid("email", "jonas@berg.example"), ids)
+        with self.store.lock:
+            n = self.store.db.execute("SELECT COUNT(*) FROM merge_proposals WHERE a=? OR b=?",
+                                      (pp.ME, pp.ME)).fetchone()[0]
+        self.assertEqual(n, 0)
+
+
 # --- seeding, matching, no auto-merge -------------------------------------------------------------------------------
 class SeedTest(Base):
     def setUp(self):
@@ -313,10 +399,14 @@ class VipTest(Base):
         self.assertNotIn("u07pn", v.slack)
         names = self.open_pairs()
         self.assertTrue(any("Priya Nair" in k for k in names))
-        # merge every suggestion about Priya, then add pn@gmail.com by hand (no signal links it)
+        # the Slack profile email opens a card; the Signal contact's name alone never opens one into a VIP
+        sig = self.pid("signal", "s123")
+        self.assertFalse(any(sig in (c["a"]["id"], c["b"]["id"]) for c in self.pp.proposals()))
         self.merge_all()
         priya = self.pid("email", "priya@acme.com")
         self.assertEqual(self.pid("slack", "u07pn"), priya)
+        self.assertNotEqual(self.pid("signal", "s123"), priya)
+        self.pp.merge(priya, sig)  # as the owner would, with stronger evidence
         self.assertEqual(self.pid("signal", "s123"), priya)
         v = pp.vip_map(self.store, self.pp)
         self.assertIn("u07pn", v.slack)
@@ -552,6 +642,7 @@ class PageTest(unittest.TestCase):
     def test_people_view_and_card(self):
         self.assertNotIn("innerHTML", self.pp)
         self.assertIn("location.hash === '#people' ? 'people'", self.js)
+        self.assertIn("c.caution ? h('p', { class: 'scaution' }, c.caution)", self.pp)
         for s in ("'Same person'", "'Different people'", "'Later'", "'api/people/proposals/'", "/split'",
                   "'Names people use for you'", "Read my Gmail “send as” addresses", "panelSame(r)", "pfSame()",
                   "Uses your name; not from your accounts."):

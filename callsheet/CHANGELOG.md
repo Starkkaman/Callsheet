@@ -9,7 +9,9 @@
   show both people and why Callsheet thinks so, in plain sentences: an address written two ways, a Slack profile
   email, a signature listing the other address, the same full name at the same company, a Slack or Signal name.
   Answer **Same person**, **Different people** (never asked again) or **Later** (asked again in a week). Shared
-  addresses (info@, team@), first names on their own and you are never suggested.
+  addresses (info@, team@), first names on their own and you are never suggested. A signature is never strong
+  evidence for a VIP or a verified contact: such a card says "Only evidence: a signature in a message from …; check
+  before merging", and a name alone never suggests a VIP.
 - **Split** undoes a merge; Setup → People keeps the history of merges and splits.
 - **Everywhere**: a VIP is a person, so all their addresses, their Slack user and their Signal contact count. Notes
   about a person apply to mail from any of their addresses and to their Slack and Signal messages. Replies show the

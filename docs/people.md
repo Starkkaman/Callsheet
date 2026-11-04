@@ -33,6 +33,11 @@ Rules only: no AI, no new network request except the owner-pressed Gmail send-as
 | `slack_name` / `signal_name` | 0.5 | Their Slack name is Priya Nair. / Their Signal contact name is Priya Nair. |
 | `unique_name` | 0.3 | No one else you know has this name. |
 
+Planted signatures: when either person is a VIP or has a verified handle (VIP list, a connected account, Slack or
+Signal), a signature counts 0.6 at most (shown as "Good", never "Strong"); the card still opens and, when the
+signature is the only evidence, says "Only evidence: a signature in a message from <sender>; check before merging."
+`unique_name` never counts towards opening a card into a VIP, so a display-name spoof of a VIP is never suggested.
+
 Score = 1 - product(1 - weight). A card opens at one signal of 0.8 or more, or two signals reaching 0.5. Strength on
 the card: Strong (0.9+), Good (0.6+), Some. Never proposed: role or automated addresses (info@, team@, noreply@…),
 first names on their own (a full name has two words of two letters or more), the owner's own names, groups of more

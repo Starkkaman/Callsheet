@@ -4236,7 +4236,8 @@
       o.compact ? h('h3', { class: 'plab' }, 'Same person?') : null,
       h('div', { class: 'pair' }, [ppCard(c.a), h('span', { class: 'or' }, 'and'), ppCard(c.b)]),
       h('div', { class: 'swhy' }, [h('h4', { class: 'label' }, 'Why Callsheet thinks so'),
-        h('ul', { class: 'sigs' }, (c.signals || []).map(function (s) { return h('li', null, [h('b', null, s.strength), h('span', null, s.why)]); }))]),
+        h('ul', { class: 'sigs' }, (c.signals || []).map(function (s) { return h('li', null, [h('b', null, s.strength), h('span', null, s.why)]); })),
+        c.caution ? h('p', { class: 'scaution' }, c.caution) : null]),  /* a signature the sender wrote is the only evidence */
       h('div', { class: 'btns' }, [yes, no, later]), err]);
   }
   function ppAnswered(a, r) {

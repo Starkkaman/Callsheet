@@ -45,6 +45,10 @@ LIST_MAX = 300
 
 WEIGHTS = {"slack_email": 1.0, "email_same": 1.0, "signature": 0.9, "name_domain": 0.7, "name": 0.5,
            "slack_name": 0.5, "signal_name": 0.5, "unique_name": 0.3}
+# a signature is text the sender wrote: when either person is a VIP or has a verified handle (the owner's VIP list,
+# a connected account, Slack or Signal), it counts as medium ("Good") at most and the card says so
+SIG_CAP = 0.6
+VERIFIED = frozenset(("owner", "google", "slack", "signal"))
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -216,10 +220,12 @@ def signals(a, b, owner_names=(), signatures=(), name_count=None):
                 out.append(("slack_email", f"Their Slack profile email is {clean(pe)}."))
                 break
     sig = set(signatures or ())
+    sender = ""
     for x, y in ((ea, eb), (eb, ea)):
         hit = next(((f, t) for f in x for t in y if (f, t) in sig), None)
         if hit:
-            out.append(("signature", f"The signature in mail from {clean(hit[0])} lists {clean(hit[1])}."))
+            sender = clean(hit[0])
+            out.append(("signature", f"The signature in mail from {sender} lists {clean(hit[1])}."))
             break
     own = set(owner_names or ())
     na, nb = _names(a), _names(b)
@@ -246,13 +252,27 @@ def signals(a, b, owner_names=(), signatures=(), name_count=None):
         out.append(best)
         if name_count is not None and all(name_count.get(n, 0) <= 2 for n, _, _ in shared[:1]):
             out.append(("unique_name", "No one else you know has this name."))
+    guarded = protected(a) or protected(b)
+    vip = bool(a.get("vip") or b.get("vip"))
     seen, res = set(), []
     for code, why in out:
         if code not in seen:
             seen.add(code)
-            res.append({"code": code, "weight": WEIGHTS[code], "why": why})
+            s = {"code": code, "weight": WEIGHTS[code], "why": why}
+            if code == "signature":
+                s["sender"] = sender
+                if guarded:  # medium at most: the sender wrote it
+                    s.update(weight=SIG_CAP, capped=True)
+            if code == "unique_name" and vip:  # never opens a card into a VIP
+                s["no_open"] = True
+            res.append(s)
     res.sort(key=lambda s: -s["weight"])
     return res
+
+
+def protected(p):
+    """A VIP, or someone with a handle the owner or an account vouches for (not only seen in mail)."""
+    return bool(p.get("vip")) or any(h.get("verified") in VERIFIED for h in p.get("handles") or [])
 
 
 def score(sigs):
@@ -263,10 +283,21 @@ def score(sigs):
 
 
 def opens(sigs):
-    """A proposal opens at a signal of 0.8 or more, or a combined 0.5 or more from two independent signals."""
-    if not sigs:
+    """A proposal opens at a signal of 0.8 or more, or a combined 0.5 or more from two independent signals. A capped
+    signature still opens its card (shown as medium, with the caution line); "no one else has this name" never
+    counts for a VIP."""
+    ev = [s for s in sigs or () if not s.get("no_open")]
+    if not ev:
         return False
-    return max(s["weight"] for s in sigs) >= OPEN_SCORE or (len(sigs) >= 2 and score(sigs) >= PAIR_SCORE)
+    return max(WEIGHTS[s["code"]] if s.get("capped") else s["weight"] for s in ev) >= OPEN_SCORE or \
+        (len(ev) >= 2 and score(ev) >= PAIR_SCORE)
+
+
+def caution(sigs):
+    """The card's warning when a capped signature is the only evidence."""
+    if len(sigs or ()) == 1 and sigs[0].get("code") == "signature" and sigs[0].get("capped"):
+        return f"Only evidence: a signature in a message from {sigs[0].get('sender') or 'someone'}; check before merging."
+    return ""
 
 
 def strength(w):
@@ -891,9 +922,10 @@ class People:
                 "n": sum(h["n"] for h in hs)}
 
     def _card(self, r, areas):
+        sigs = json.loads(r["signals"] or "[]")
         return {"id": r["id"], "a": self.person(r["a"], areas), "b": self.person(r["b"], areas),
-                "signals": [{"strength": strength(s["weight"]), "why": s["why"]} for s in json.loads(r["signals"] or "[]")],
-                "by": r["by"]}
+                "signals": [{"strength": strength(s["weight"]), "why": s["why"]} for s in sigs],
+                "caution": caution(sigs), "by": r["by"]}
 
     def proposals(self, person=None, limit=MAX_OPEN):
         now = self.clock()
