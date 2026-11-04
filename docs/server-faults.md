@@ -26,6 +26,10 @@ fallback are unchanged).
 
 ## What happens
 
+- **Content-provokable rules get an immediate probe.** `repeat` and `control` can be caused by text in a message (a mail
+  asking for one word thirty times), so the health probe runs at once. If it passes, only that request failed
+  (`ModelGarbage`, "The local model's answer wasn't usable."): no mark, no backoff, the next request goes straight to
+  the model. If it fails, the server fault below. `unused`, `special`, `grammar` and `empty_length` go straight to it.
 - **No retries on a fault.** The existing one retry after "Loading model" stays (a fault on the retry still counts).
 - **Marked unhealthy** per (server address, model), in memory (a restart forgets it), with the time it started.
 - **Backoff** `FAULT_BACKOFF_S` = 15 minutes: `_post` raises `ServerFault` at once and sends nothing.
@@ -49,6 +53,10 @@ fallback are unchanged).
   today) and **Check again**, which runs the probe now (`POST api/sorting/model-check`, returns the sorting view; 409
   when Callsheet's own requests keep the server busy for 30 s). `GET api/sorting` has `local_health`:
   `{healthy: true}` or `{healthy: false, since, since_text, next_check}`. No addresses or keys.
+- **One unusable answer** (`ModelGarbage`): the brief is the rules brief for that run with Heads up "The local model's
+  answer wasn't usable, so this brief was made by the rules." (no Fast or Claude fallback); the sorter gives that
+  batch's cards their rules labels (status `fallback`, they leave the queue, so the mail isn't asked about again) and
+  goes on; Chat answers "The chat model's answer wasn't usable. Try again, or ask in other words."
 - Projects, Know me and the evaluation get the same `ServerFault` (a plain error).
 
 ## Logs (codes and counts only)
@@ -57,11 +65,15 @@ fallback are unchanged).
   check in 15 min`
 - `Callsheet writer: the local model passed its health check (Xs); using it again` / `... failed its health check
   (<rule>, Xs); next check in 15 min`
+- `Callsheet writer: local answer tripped <rule>; the health check passed, so it counts as a model error for this
+  request (no backoff)`
+- `Callsheet sorting: a batch's answer wasn't usable (<rule>); rules labels for its N cards`
 - `Callsheet sorting: the local model isn't healthy (<rule>); rules-only labels this run, N cards sorted, M waiting`
 - `Callsheet chat: local failed: the local model isn't healthy (<rule>) (...)`
 
 ## Known limits
 
-- Text an attacker puts in a mail can't call a tool, but a model asked to repeat 25 copies of a word or `<unused1>`
-  tokens could trip a rule; the cost is the rules brief and plain-word errors for 15 minutes, never a wrong label.
+- A mail that gets the model to repeat a word costs one rules brief or one batch of rules labels, not an outage (the
+  probe passes). A model talked into writing `<unusedNN>` or `<|...|>` tokens three times would still trip a fault
+  rule; the cost is the rules brief and plain-word errors until the next probe passes, never a wrong label.
 - Health is kept in memory: after a restart the first request finds a still-broken server again (one request).

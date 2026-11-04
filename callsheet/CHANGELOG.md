@@ -16,7 +16,8 @@
   **Forget all**. What you taught it fades after 45 days and is gone after 90.
 - **A broken local model server is noticed**: when it sends garbage (stray special tokens, control characters, one
   word over and over) or an internal error, Callsheet stops asking it for 15 minutes instead of retrying, then checks
-  it with a short real answer first. Meanwhile your brief is made by the rules (Heads up says so), sorting keeps the
+  it with a short real answer first. (Repeated words or control characters are checked at once: if the server is
+  fine, only that one answer falls back to the rules, so a mail can't switch your model off.) Meanwhile your brief is made by the rules (Heads up says so), sorting keeps the
   rules' labels, Chat says the local model isn't working, and **Setup -> AI sorting** shows "Local model unhealthy
   since ..." with **Check again**.
 

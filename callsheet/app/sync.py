@@ -37,6 +37,8 @@ ICS_EMPTY_TTL_S = 30 * 86400  # a mail without a calendar file is not read again
 RECONNECT_CODES = ("invalid_grant", "invalid_client", "unauthorized_client")
 # 0.8.5: the local server sent garbage or an internal error (writer.ServerFault): the rules brief, never Claude
 UNHEALTHY_HEADS_UP = "The local model isn't healthy right now, so this brief was made by the rules."
+# 0.8.5: one unusable answer (writer.ModelGarbage: the health check passed): the rules brief for this run only
+GARBAGE_HEADS_UP = "The local model's answer wasn't usable, so this brief was made by the rules."
 
 
 def _stderr(line):
@@ -934,7 +936,7 @@ class Syncer:
     def _write(self, wcfg, brief, refs, events, areas, settings, tz, day, client, kind=None):
         t0 = self.clock()
         provider, used, note = wcfg["provider"], wcfg["provider"], ""
-        result, error, ids, fell_back, fault = None, None, set(), None, False
+        result, error, ids, fell_back, fault = None, None, set(), None, None
         preset = fast = None
         try:
             data, ids, ask = self._writer_input(wcfg, brief, refs, events, areas, settings, tz, day, client)
@@ -945,8 +947,8 @@ class Syncer:
                 try:
                     try:
                         result = self._local_preset(wcfg, preset, data, ids, ask, kind)
-                    except writer.ServerFault:
-                        raise   # 0.8.5: a server fault: no Fast fallback, no Claude fallback
+                    except (writer.ServerFault, writer.ModelGarbage):
+                        raise   # 0.8.5: a server fault or an unusable answer: no Fast fallback, no Claude fallback
                     except writer.WriterError as e:
                         if preset["id"] == presets.FAST:
                             raise
@@ -954,13 +956,13 @@ class Syncer:
                         note = f"preset {preset['id']} failed, fell back to fast"
                         try:
                             result = self._local_preset(wcfg, fast, data, ids, ask, kind)
-                        except writer.ServerFault:
+                        except (writer.ServerFault, writer.ModelGarbage):
                             raise
                         except writer.WriterError as e2:
                             raise _NoCloud(f"{e} The fast model didn't run either: {e2}") from None
                         fell_back = presets.FELL_BACK_TIMEOUT if isinstance(e, writer.LocalTimeout) \
                             else presets.FELL_BACK
-                except writer.ServerFault:
+                except (writer.ServerFault, writer.ModelGarbage):
                     raise
                 except _NoCloud as e:
                     raise writer.WriterError(str(e)) from None
@@ -980,8 +982,11 @@ class Syncer:
             error = str(e)
             note = f"refused ({e.category or 'no category'})"
         except writer.ServerFault as e:
-            error, fault = UNHEALTHY_HEADS_UP, True
+            error, fault = UNHEALTHY_HEADS_UP, UNHEALTHY_HEADS_UP
             note = f"local server fault ({e.rule}), rules brief"
+        except writer.ModelGarbage as e:
+            error, fault = GARBAGE_HEADS_UP, GARBAGE_HEADS_UP
+            note = f"unusable answer ({e.rule}), health check passed, rules brief"
         except writer.WriterError as e:
             error = str(e)
         except Exception as e:  # noqa: BLE001 (a writer bug must never break the brief)
@@ -1009,7 +1014,7 @@ class Syncer:
             if fell_back:
                 brief["heads_up"].append(fell_back)
         elif fault:
-            brief["heads_up"].append(UNHEALTHY_HEADS_UP)
+            brief["heads_up"].append(fault)
         else:
             brief["heads_up"].append(f"The AI writer didn't run: {error}")
         self._apply_done(brief, refs, tz)  # rows marked done (or undone) while the writer ran

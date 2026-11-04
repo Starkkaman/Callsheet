@@ -85,6 +85,7 @@ TIMED_OUT = ("The model server was busy and didn't answer within {n}. Nothing we
 UNREACHABLE = "Couldn't reach the chat model's server. Check that it's running, then try again."
 # 0.8.5: the local server sent garbage or an internal error (writer.ServerFault): nothing of it is stored
 UNHEALTHY = "The local model isn't working right now. Try again in a few minutes."
+GARBAGE = "The chat model's answer wasn't usable. Try again, or ask in other words."  # writer.ModelGarbage
 
 # --- settings ------------------------------------------------------------------------------------------------
 # id_slot: the llama.cpp slot chat requests are pinned to (0..writer.ID_SLOT_MAX), always sent. Default 0, so a chat
@@ -1810,6 +1811,8 @@ class Chat:
                 self._timing(timing, stats)
                 if isinstance(e, writer.ServerFault):
                     raise _Retry(UNHEALTHY, f"the local model isn't healthy ({e.rule})") from None
+                if isinstance(e, writer.ModelGarbage):
+                    raise _Retry(GARBAGE, f"the answer wasn't usable ({e.rule}), the health check passed") from None
                 if isinstance(e, writer.LocalTimeout):
                     raise _Retry(TIMED_OUT.format(n=_secs(cfg["timeout"])),
                                  f"timed out after {cfg['timeout']} s without an answer, "

@@ -1138,6 +1138,7 @@ def _log_answer(log, res, wall):
 # never retried (the "Loading model" retry stays): the server and model are marked unhealthy with the time, nothing
 # goes to them for FAULT_BACKOFF_S, then a real health probe (a short generation that must come back as normal words
 # with finish "stop"; a one-token canary isn't enough) runs before the next request. Log lines name the rule only.
+# "repeat" and "control" (CONTENT_RULES) first get an immediate probe: when it passes, see ModelGarbage.
 FAULT_TEXT = "The local model isn't healthy right now."
 FAULT_BACKOFF_S = 15 * 60
 FAULT_REPEAT = 25          # one token this many times in a row
@@ -1155,6 +1156,21 @@ _SPECIAL = re.compile(r"<\|[^<>|\s]{0,40}\|>")
 _GRAMMAR = re.compile(r"empty grammar stack|grammar stack after accepting|ggml_assert")
 _UNIT_REPEAT = re.compile(r"((?=\w)\S{2,12}?)\1{%d,}" % (FAULT_REPEAT - 1))
 _WORDY = re.compile(r"\w")
+
+
+# "repeat" and "control" can be provoked by text in a message (a mail asking for one word 30 times): they get an
+# immediate health probe; when it passes, only that request failed (ModelGarbage: no mark, no backoff).
+CONTENT_RULES = ("repeat", "control")
+GARBAGE_TEXT = "The local model's answer wasn't usable."
+
+
+class ModelGarbage(WriterError):
+    """0.8.5: one answer tripped a content-provokable rule (.rule) but the health probe passed: a model error for
+    that request only (the caller falls back to the rules for it). Never retried."""
+
+    def __init__(self, rule):
+        super().__init__(GARBAGE_TEXT)
+        self.rule = rule
 
 
 class ServerFault(WriterError):
@@ -1435,6 +1451,13 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
                 _sleep(LOAD_WAIT)
                 res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
             rule = fault_of(res)
+            if rule in CONTENT_RULES:  # 0.8.5: text in a message can provoke these: probe at once before blaming
+                pr = _probe(base, key, model, body.get("id_slot") if isinstance(body, dict) else None,
+                            max(5, min(PROBE_TIMEOUT, int(opts.get("timeout") or PROBE_TIMEOUT))))
+                if pr is None:
+                    _log_line(log, f"Callsheet writer: local answer tripped {rule}; the health check passed, so it "
+                                   "counts as a model error for this request (no backoff)")
+                    raise ModelGarbage(rule)
             if rule:  # 0.8.5: garbage is a server fault, never retried
                 raise ServerFault(rule)
         except ServerFault as e:

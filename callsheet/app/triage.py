@@ -1475,7 +1475,12 @@ class Sorter:
             self._remember(src["key"], meta, card.get("area"))
         body = request_body(s["model"], cards, ctx.system(), ctx.today, ctx.tz_name)
         t0 = self.monotonic()
-        res = self._post(body, timeout)
+        try:
+            res = self._post(body, timeout)
+        except writer.ModelGarbage as e:   # 0.8.5: one unusable answer (the health check passed): rules for these
+            self.log(f"Callsheet sorting: a batch's answer wasn't usable ({e.rule}); rules labels for its "
+                     f"{len(cards)} cards")
+            res = None
         secs = self.monotonic() - t0
         content = None
         try:
