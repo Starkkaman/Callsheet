@@ -230,7 +230,8 @@ class UidCollisionSyncTest(Base):
     def test_real_event_is_never_altered(self):
         tz = zoneinfo.ZoneInfo("UTC")
         now = dt.datetime.now(tz).replace(second=0, microsecond=0)
-        start = now + dt.timedelta(hours=2)
+        # early in today's UTC date, so start + 6 h is still today whatever time the suite runs
+        start = now.replace(hour=1, minute=0)
         email = "me@example.com"
         user = self.fake.add_user(email, events={email: [event("Real meeting", start, start + dt.timedelta(hours=1),
                                                                iCalUID="real-1@google.com")]})
