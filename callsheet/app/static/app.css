@@ -1219,7 +1219,8 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .bv-layer .toast b{font-weight:700}
 .bv-layer .toast .d{flex:1 1 140px;min-width:0;overflow-wrap:anywhere}
 .bv-layer .toast .tbtn{color:inherit}
-.bv-layer .toast .tx{display:grid;place-items:center;width:28px;height:28px;color:inherit;border-radius:var(--radius)}
+.bv-layer .toast .tx{display:grid;place-items:center;width:44px;height:44px;margin:-6px -4px -6px 0;flex:none;color:inherit;border-radius:var(--radius)}  /* 0.9.0: a full 44 px Close */
+.bv-layer .toast [data-undo]{min-width:44px;min-height:44px;margin-block:-6px;padding:0 8px}
 .bv-layer .toast .ico{width:14px;height:14px}
 /* phone: bottom tab bar, full-screen sheet */
 @media (max-width:700px){
@@ -2184,3 +2185,112 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
   .app .pp .pchip .cx{width:44px;height:44px}
   .pprow .acts .sw{min-height:44px}
 }
+
+/* ================= 0.9.0 next release (design audit 2026-11; theme tokens only) =================
+   Setup in four places (Home, Connections, Your day, AI, Advanced), Find or ask, One at a time on Replies, the Start
+   your day card on Briefing, and the per-device density (Compact or Comfortable). Spacing 4/8/12/16/24/32. */
+.rail{grid-template-columns:auto repeat(4,1fr)}
+.rail[aria-label="First-run steps"]{grid-template-columns:repeat(3,1fr)}
+.lrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:4px 0 12px}
+.lrow.src{margin:0;padding:8px 0;border-top:var(--rule-w) solid var(--rule)}
+.srcs .lrow.src:last-of-type{border-bottom:var(--rule-w) solid var(--rule)}
+.sfind{max-width:560px;margin:0 0 16px}
+.sfind .inp{width:100%}
+.sfind ul{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.sfind .sres{text-decoration:none;text-align:left;white-space:normal;text-transform:none;letter-spacing:0;font-size:var(--fs-sm)}
+.sfind .sres>span:first-child{text-decoration:underline;text-underline-offset:3px}
+.areachips{margin:4px 0 16px}
+.areachips .chip{text-transform:none;letter-spacing:0;font-size:var(--fs-sm)}
+.adot{display:inline-block;width:10px;height:10px;margin-right:6px;border-radius:50%;background:var(--a);box-shadow:inset 0 0 0 1px var(--rule);vertical-align:-1px}
+.acct .rd{color:var(--muted);font-size:var(--fs-sm)}
+.acb{margin:8px 0 4px;padding-left:12px;border-left:var(--rule-mid) solid var(--rule)}
+.plain{margin:12px 0 16px}
+.dens .chip{text-transform:none;letter-spacing:0;font-size:var(--fs-sm)}
+.advs{display:grid;gap:8px;max-width:960px}
+.adv{border-radius:var(--radius);background:var(--bg);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.adv.danger{box-shadow:inset 4px 0 0 var(--alert),inset 0 0 0 var(--rule-w) var(--rule)}
+.advt{margin:0;font-size:inherit}
+.advh{display:flex;width:100%;min-height:44px;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;color:var(--text);text-align:left;
+  font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-lg);line-height:1.1}
+.advh .chev{font-family:var(--font-body);font-weight:700;font-size:var(--fs-lg);color:var(--muted)}
+.adv.open .advh{border-bottom:var(--rule-w) solid var(--rule)}
+.advb{padding:16px}
+.advb>section:first-child,.advb>.where:first-child{margin-top:0}
+.app[data-look=nerv] .adv{clip-path:var(--cut)}
+.app[data-look=depth] .adv{box-shadow:var(--elev),inset 0 0 0 1px var(--rule)}
+
+/* Find or ask: a dialog with a combobox and a listbox; on phones a sheet from the top (clear of the keyboard) */
+html.fa-lock{overflow:hidden}
+.fa-wrap{position:fixed;inset:0;z-index:120}
+.fa-back{position:absolute;inset:0;background:var(--text);opacity:.35}
+.fa{position:absolute;left:50%;top:12vh;transform:translateX(-50%);width:min(640px,calc(100vw - 32px));max-height:72vh;display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  background:var(--bg);color:var(--text);border-radius:var(--radius);box-shadow:var(--elev),inset 0 0 0 var(--rule-w) var(--rule);overflow:hidden}
+.fa-top{display:flex;align-items:center;gap:8px;padding:4px 4px 4px 16px;border-bottom:var(--rule-w) solid var(--rule)}
+.fa-top>.ico{width:18px;height:18px;flex:none;color:var(--muted)}
+.app .fa-in{flex:1;min-width:0;min-height:44px;border:0;box-shadow:none;background:transparent;color:var(--text);font-size:var(--fs-lg);padding:8px 4px}
+.fa-x{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:var(--radius);color:var(--text)}
+.fa-x .ico{width:16px;height:16px}
+.fa-list{overflow:auto;padding:4px 0 8px;overscroll-behavior:contain}
+.fa-g{padding:12px 16px 4px;font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
+.fa-o{display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 16px;cursor:pointer}
+.fa-o.on{background:var(--sel);color:var(--on-sel)}
+.fa-l{flex:none;max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.fa-s{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--fs-sm)}
+.fa-o.on .fa-s{color:inherit}
+.fa-o kbd,.bv .oatcard kbd{flex:none;font-family:var(--font-body);font-size:var(--fs-xs);font-weight:700;line-height:1;padding:3px 5px;border-radius:var(--tag-radius);box-shadow:inset 0 0 0 1px currentColor}
+.fa-none{margin:0;padding:16px}
+.fa-foot{margin:0;padding:8px 16px;border-top:var(--rule-w) solid var(--rule);font-size:var(--fs-xs)}
+@media (max-width:700px){
+  .fa{top:0;left:0;right:0;transform:none;width:auto;max-height:100dvh;border-radius:0 0 var(--radius) var(--radius);padding-top:env(safe-area-inset-top,0px)}
+  .fa-foot{display:none}
+  .fa-o{min-height:48px}
+}
+
+/* Replies: the tools row, One at a time (a card, progress, quiet actions), Comfortable rows */
+.bv .rtools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}
+.bv .rtools .sp,.bv .oathead .sp{flex:1}
+.bv .rmain .why{display:none}
+.app[data-density=comfortable] .bv .rmain{padding:12px 0;align-items:flex-start}
+.app[data-density=comfortable] .bv .rmain .tx{flex-wrap:wrap;row-gap:4px}
+.app[data-density=comfortable] .bv .rmain .sum{flex:1 1 0}
+.app[data-density=comfortable] .bv .rmain .why{display:block;flex:0 0 100%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:var(--fs-sm)}
+.app[data-density=comfortable] .bv .row.sel .rmain .why{color:inherit}
+.bv .oathead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 12px}
+.bv .oathead .sec-h{margin:0}
+.bv .oatn{font-weight:700;font-variant-numeric:tabular-nums}
+.bv .oathead .bar{display:block;width:140px;height:8px;margin:0;background:var(--track);border-radius:var(--radius);overflow:hidden}
+.bv .oathead .bar i{display:block;height:100%;background:var(--fill);transition:width .3s ease}
+.bv .oatcard{max-width:760px;padding:24px;border-radius:var(--radius);background:var(--bg);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);touch-action:pan-y;transition:transform .2s ease,box-shadow .2s ease}
+.bv .oatcard.drag{transition:none}
+.bv .oatcard[data-dir=done]{box-shadow:inset 6px 0 0 var(--fill),inset 0 0 0 var(--rule-w) var(--rule)}
+.bv .oatcard[data-dir=later]{box-shadow:inset -6px 0 0 var(--muted),inset 0 0 0 var(--rule-w) var(--rule)}
+.bv .oatmeta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;color:var(--muted);font-size:var(--fs-sm)}
+.bv .oatmeta .ri .ico{width:16px;height:16px}
+.bv .oatwho{margin:12px 0 4px;font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-h2);line-height:1.1;outline-offset:4px}
+.bv .oatwant{margin:0 0 16px;font-size:var(--fs-lg);max-width:60ch}
+.bv .oatdraft{margin:0 0 16px;padding:12px 16px;border-radius:var(--radius);background:var(--surface)}
+.bv .oatdraft p{margin:4px 0 0;white-space:pre-wrap;max-width:65ch;overflow-wrap:anywhere}
+.bv .oatgo{display:flex;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px}
+.bv .oatgo .btn{display:inline-flex;align-items:center;gap:8px}
+.bv .oatq{display:flex;flex-wrap:wrap;gap:4px 16px}
+.bv .oatq .oq{display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.bv .oathint{margin:12px 0 0;font-size:var(--fs-sm)}
+.bv .oatend .go{display:flex;justify-content:center;margin-top:8px}
+.app[data-look=nerv] .bv .oatcard{clip-path:var(--cut)}
+.app[data-look=depth] .bv .oatcard{box-shadow:var(--elev),inset 0 0 0 1px var(--rule)}
+@media (max-width:700px){
+  .bv .oatcard{padding:16px}
+  .bv .oathead .bar{order:5;width:100%}
+  .bv .oatgo .btn{flex:1 1 auto;justify-content:center}
+  .bv .oatcard kbd{display:none}
+}
+
+/* Briefing: Start your day (once each morning) */
+.bv .startday{display:grid;gap:8px;margin:0 0 16px;padding:16px 24px;border-radius:var(--radius);background:var(--panel);color:var(--on-panel);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.bv .sd-h{margin:0;font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-h2);line-height:1.1}
+.bv .sd-l{display:flex;flex-wrap:wrap;gap:4px 24px;margin:0;padding:0;list-style:none;font-size:var(--fs-md)}
+.bv .sd-l .disp{font-size:var(--fs-lg)}
+.bv .sd-go{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:4px}
+.app[data-look=nerv] .bv .startday{clip-path:var(--cut)}
+@media (max-width:700px){.bv .startday{padding:16px}.bv .sd-go .btn{flex:1 1 auto}}
+@media (prefers-reduced-motion:reduce){.bv .oatcard,.bv .oathead .bar i{transition:none}}

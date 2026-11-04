@@ -270,6 +270,7 @@
     if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', PREFS.look, t); }
     else if (t.dataset.setMode) { setMode(t.dataset.setMode, true); pushLook('mode', PREFS.mode, t); }
     else if (t.dataset.setAuto) setAuto(t.dataset.setAuto);
+    else if (t.dataset.dens) setDensity(t.dataset.dens);  /* 0.9.0: per device */
   });
 
   /* ---------- header: route buttons, last refreshed, refresh ---------- */
@@ -490,7 +491,7 @@
       h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id, title: reasonWords(r) || null,
         'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') + (r.uses_name ? ', uses ' + r.uses_name + '’s name' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
-        h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
+        h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r)), reasonWords(r) ? h('span', { class: 'why' }, reasonWords(r)) : null]),
         claimMark(r), nameMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
@@ -532,15 +533,15 @@
   }
   /* 0.7.1: All clear, when no reply is waiting. Flat shapes drop in and the stamp lands once per day (the day
      is kept on this device); after that, and under reduced motion, it is still. No sound. */
-  function allClear() {
+  function allClear(later) {
     var day = (B && B.date) || new Date().toDateString(), played = load(KEY_CLEAR) === day;
-    if (!played) save(KEY_CLEAR, day);
+    if (!played) { save(KEY_CLEAR, day); tick(); }   /* 0.9.0: the opt-in tick (Your day › Look and sound) */
     var nd = ((B && B.done) || []).length, ne = events().length, nn = B && B.notes && typeof B.notes === 'object' ? Object.keys(B.notes).length : 0;
     function stat(n, one, many) { return h('li', null, [h('b', null, String(n)), n === 1 ? one : many]); }
     return h('section', { class: 'clear' + (played ? ' still' : ''), 'aria-labelledby': 'bv-clear' }, [
       h('div', { class: 'shapes', 'aria-hidden': 'true' }, [h('i', { class: 'c' }), h('i', { class: 's' }), h('i', { class: 't' })]),
       h('h2', { class: 'stamp', id: 'bv-clear' }, 'All clear'),
-      h('p', { class: 'say' }, 'Nobody is waiting on you.'),
+      h('p', { class: 'say' }, later ? plural(later, 'reply', 'replies') + ' saved for later. Nobody else is waiting.' : 'Nobody is waiting on you.'),
       h('ul', { class: 'stats', 'aria-label': 'Today' }, [stat(nd, 'reply done', 'replies done'), stat(ne, 'event', 'events'), stat(nn, 'note', 'notes')])]);
   }
   function foot() {
@@ -600,16 +601,18 @@
     gl.push(h('li', null, [h('span', { class: 'label' }, 'Waiting'), h('span', { class: 'disp' }, String(nRep)),
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
-    return [h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
+    return [startCard(), h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
       changedSection(), comingSection(), sortedSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted */
   }
   function T_replies() {
+    if (U.oat) return oatView();  /* 0.9.0 */
     var all = openReplies(), nNew = B.previous_at ? all.filter(function (r) { return r.new; }).length : 0;
     if (!all.length) return [allClear(), hiddenLine(), doneRows()];  /* 0.7.1: All clear */
     var rs = U.area ? all.filter(function (r) { return r.area === U.area; }) : all;  /* 0.6.0 chat: the area chips */
     var used = legendUsed();
     return [h('div', { class: 'rhead' }, [h('h2', { class: 'sec-h' }, ['Needs a reply ', h('span', { class: 'n' }, all.length + (nNew ? ' · ' + nNew + ' new since ' + B.previous_at : '') + (vipCount() ? ' · VIPs first' : ''))]),
         h('span', { class: 'sp' }), meter(), used && rs.length ? legendBtn() : null]),
+      h('div', { class: 'rtools' }, [h('button', { type: 'button', class: 'btn primary', 'data-oatgo': '1' }, 'One at a time'), h('span', { class: 'sp' }), densSeg()]),  /* 0.9.0 */
       areaChips(all),
       rs.length && (!used || U.legend) ? legend() : null,
       rs.length ? h('div', { class: 'list' }, rs.map(function (r) { return rowEl(r, 'rl'); })) : h('p', { class: 'empty' }, U.area ? 'Nothing waiting in this area.' : 'Nothing waiting.'),
@@ -1563,7 +1566,8 @@
       else delete B.notes[ref];
       MEM.data = null; /* Setup → Memory loads the file again */
       if (U.pop === P) U.pop = null;
-      showToast(d.nsave ? 'Note saved.' : 'Note deleted.', d.nsave ? 'Callsheet reads it before each brief when it fits the day.' : 'It’s gone from the memory too.');
+      showToast(d.nsave ? 'Note saved.' : 'Note deleted.', d.nsave ? 'Callsheet reads it before each brief when it fits the day.' : 'It’s gone from the memory too.',
+        U.oat && /^oat-/.test(anc || '') ? { kind: 'note', ref: ref, id: P.id, prev: nt ? nt.text : null } : undefined);  /* 0.9.0: Undo in One at a time */
       renderBrief('[data-anc="' + cssq(anc) + '"]');
     }, function (e) {
       if (U.pop !== P) return;
@@ -1632,7 +1636,8 @@
       h('p', null, 'This is sample data. Set up Callsheet to see your own day.'),
       btn('btn primary', 'Start setup', null, function () { wizGo(0); })]) : null;
     var nOpen = openReplies().length;
-    var tabs = h('nav', { class: 'tabbar', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(function (t) {
+    if (U.tab === 'chat' && chatOff()) U.tab = 'briefing';  /* 0.9.0 */
+    var tabs = h('nav', { class: 'tabbar', role: 'tablist', 'aria-label': 'Sections' }, TABS.filter(function (t) { return liveTabs().indexOf(t[0]) >= 0 || t[0] === 'tasks'; }).map(function (t) {
       var on = U.tab === t[0], later = t[0] === 'tasks';
       return h('button', { type: 'button', role: 'tab', id: 'tab-' + t[0], 'data-tab': t[0], 'aria-selected': String(on), 'aria-controls': later ? null : 'bv-pane',
         tabindex: on ? '0' : '-1', disabled: later, class: later ? 'later' : null, title: later ? 'Coming later' : null }, [
@@ -1790,7 +1795,7 @@
     renderBrief(o ? '[data-open="' + cssq(o.kind + ':' + o.id) + '"]' : null);
   }
   function setTab(t, focus) {
-    if (LIVE_TABS.indexOf(t) < 0) return;
+    if (liveTabs().indexOf(t) < 0) return;
     U.tab = t; U.pop = null; save(KEY_TAB, t);
     if (tabFromHash(location.hash) && history.replaceState) history.replaceState(null, '', '#' + t);  /* 0.6.0 chat: a tab link follows the tab */
     if (t !== 'replies') U.area = null;
@@ -1843,10 +1848,17 @@
     else if (d.sup && P) suppress(P.id, d.sup);
     else if ((d.pnote || d.ncancel || d.nsave || d.nsaveany || d.ndel) && P) noteAction(d, P);
     else if (d.dismiss && P) dismiss(P);
+    else if (d.oat) oatAct(d.oat, t);  /* 0.9.0: One at a time */
+    else if (d.oatgo || d.start) oatStart();
+    else if (d.oatx) oatExit();
+    else if (d.startno) { save(KEY_START, todayKey()); renderBrief('#tab-briefing'); }
     else if (d.undo) {
       var u = U.toast && U.toast.undo;
       if (!u) return;
-      if (u.kind === 'done') unDone(u.id, '[data-open="reply:' + cssq(u.id) + '"]');
+      if (U.oat) { var ub = u.id || (u.rows && u.rows[0] && u.rows[0].id); if (ub) U.oat.cur = ub; }  /* 0.9.0: back to that card */
+      if (u.kind === 'done') unDone(u.id, U.oat ? '#oat-h' : '[data-open="reply:' + cssq(u.id) + '"]');
+      else if (u.kind === 'later') { setLater(laterIds().filter(function (x) { return x !== u.id; })); U.toast = null; renderBrief(U.oat ? '#oat-h' : null); }
+      else if (u.kind === 'note') noteUndo(u);
       else if (u.kind === 'suppress') unSuppress(u);
       else if (u.kind === 'dismiss') { setDismissed(u.key, false); U.toast = null; renderBrief(); }
       else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
@@ -1916,24 +1928,26 @@
     return true;
   }
   document.addEventListener('keydown', function (e) {
-    if (ui.view !== 'brief' || !B) return;
+    if (ui.view !== 'brief' || !B || FA.open) return;
     if (e.key === 'Escape' && U.keys) { closeKeys(); e.preventDefault(); return; }  /* 0.7.1 */
     if (e.key === 'Escape') {
       if (U.pop) { var anc = U.pop.anc; U.pop = null; renderLayer(); var a = main.querySelector('[data-anc="' + cssq(anc) + '"]'); if (a) { a.setAttribute('aria-expanded', 'false'); a.focus(); } e.preventDefault(); }
+      else if (U.oat && U.tab === 'replies' && lookPanel.hidden) { oatExit(); e.preventDefault(); }  /* 0.9.0 */
       else if (U.open && lookPanel.hidden) { closePanel(); e.preventDefault(); }
       return;
     }
     var t = e.target;
     if (t.dataset && t.dataset.tab && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End')) {
-      var i = LIVE_TABS.indexOf(t.dataset.tab), n = LIVE_TABS.length;
+      var lt = liveTabs(), i = lt.indexOf(t.dataset.tab), n = lt.length;
       i = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
-      setTab(LIVE_TABS[i], true); e.preventDefault();
+      setTab(lt[i], true); e.preventDefault();
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || typing(t)) return;  /* 0.7.1: never steal keys while typing */
     if (e.key === '?') { if (U.keys) closeKeys(); else openKeys(); e.preventDefault(); return; }
     if (U.pop || U.keys) return;
     var k = e.key.length === 1 ? e.key.toLowerCase() : '';
+    if (U.oat && U.tab === 'replies') { if (k && !e.shiftKey && 'codlnxjk'.indexOf(k) >= 0 && oatAct(k)) e.preventDefault(); return; }  /* 0.9.0 */
     if (k === 'j' || k === 'k') { keyMove(k === 'j' ? 1 : -1); e.preventDefault(); }
     else if ((k === 'd' || k === 'c' || k === 'o' || k === 'n') && !e.shiftKey && keyAct(k)) e.preventDefault();
   });
@@ -2491,6 +2505,7 @@
       if (!nm) { err.textContent = 'Give the area a name.'; return; }
       run([addB], err, function () { return api('POST', 'api/areas', { name: nm, colour: na.colour }); }, function (r) {
         ui.newArea = { name: '', colour: na.colour % 4 + 1 };
+        if (r && r.id) { ui.areaSel = r.id; ui.newAreaOpen = false; }  /* 0.9.0: the new area's chip is picked */
         return reload(r && r.id ? 'areah:' + r.id : 'add-name');
       });
     });
@@ -5599,6 +5614,290 @@
       h('p', { class: 'note' }, 'Chats are kept on this box for ' + c.retention_days + ' days after the last message, then deleted. Nothing you ask is added to Memory.')]);
   }
   /* ---------- end 0.6.0 chat ---------- */
+
+  /* ---------- 0.9.0: Start your day (top of Briefing) ----------
+     Replies, clashes, the next event and invites to answer, with Start (One at a time) and Not now. It shows on the
+     first visits of each day until Start or Not now (kept on this device for the day). */
+  var KEY_START = 'callsheet.startday';
+  function todayKey() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function startCard() {
+    if (!B || B.sample || load(KEY_START) === todayKey()) return null;
+    var later = laterIds(), rs = openReplies().filter(function (r) { return later.indexOf(r.id) < 0; });
+    var evs = events(), now = nowMin(), clashes = evs.filter(function (e) { return e.clash; });
+    var next = evs.filter(function (e) { var m = startMin(e); return m != null && m >= now; })[0] || null;
+    var inv = invites().filter(function (v) { return v.status !== 'cancelled' && !!invAnswer(v); }).length;
+    if (!rs.length && !clashes.length && !next && !inv) return null;
+    var vips = rs.filter(function (r) { var x = reasonOf(r); return x && x[0] === 'vip'; }).length;
+    var name = S && S.settings && S.settings.name ? S.settings.name.split(' ')[0] : '';
+    var hello = new Date().getHours() < 12 ? 'Good morning' + (name ? ', ' + name : '') + '.' : 'Start your day';
+    var bits = [rs.length ? [h('b', { class: 'disp' }, String(rs.length)), ' ' + (rs.length === 1 ? 'reply' : 'replies') + (vips ? ', ' + vips + ' from VIPs' : '')] : null,
+      clashes.length ? [h('b', { class: 'disp' }, String(clashes.length)), ' ' + (clashes.length === 1 ? 'clash' : 'clashes') + (clashes[0].time ? ' at ' + clashes[0].time : '')] : null,
+      next ? ['Next ', h('b', null, next.time || ''), ' ' + (next.title || '')] : null,
+      inv ? [h('b', { class: 'disp' }, String(inv)), ' ' + (inv === 1 ? 'invite' : 'invites') + ' to answer'] : null].filter(Boolean);
+    return h('section', { class: 'startday', 'aria-labelledby': 'sd-h' }, [
+      h('h2', { class: 'sd-h', id: 'sd-h' }, hello),
+      h('ul', { class: 'sd-l' }, bits.map(function (x) { return h('li', null, x); })),
+      h('div', { class: 'sd-go' }, [rs.length ? h('button', { type: 'button', class: 'btn primary', 'data-start': '1' }, 'Start: one at a time') : null,
+        h('button', { type: 'button', class: 'btn', 'data-startno': '1' }, 'Not now')])]);
+  }
+
+  /* ---------- 0.9.0: One at a time (Replies) ----------
+     One card with the draft ready. Keys: C copy, O open, D done, L later, N note, X not for me (the existing
+     "Doesn't need a reply" menu), J/K move, Esc back to the list. Phones: swipe right for done, left for later. Done,
+     Later, Not for me and a note each show Undo in the message below (OAT_UNDO). Later keeps a reply out of the
+     queue until the next brief (this device). Copy and open only: nothing is sent. Ends in All clear. */
+  var KEY_LATER = 'callsheet.later';
+  var OAT_KEYS = { c: 'Copy', o: 'Open', d: 'Done', l: 'Later', n: 'Note', x: 'Not for me' };
+  var OAT_UNDO = { d: 'done', l: 'later', x: 'suppress', n: 'note' };   /* the toast's undo kind for each action that changes something */
+  function briefStamp() { return B ? String(B.date || '') + ' ' + String(B.written_at || '') : ''; }
+  function laterIds() {
+    var o = null; try { o = JSON.parse(load(KEY_LATER) || 'null'); } catch (e) { o = null; }
+    return o && B && o.at === briefStamp() && Array.isArray(o.ids) ? o.ids : [];
+  }
+  function setLater(ids) { save(KEY_LATER, JSON.stringify({ at: briefStamp(), ids: ids })); }
+  function oatQueue() { var later = laterIds(); return U.oat ? U.oat.ids.filter(function (id) { return replyById(id) && later.indexOf(id) < 0; }) : []; }
+  function oatHidden(r) { return Object.prototype.hasOwnProperty.call(HIDDEN_LINES, r.suggestion_hidden) ? HIDDEN_LINES[r.suggestion_hidden] : null; }
+  function oatCur() {   /* the current card; when it has gone (done, later, hidden), the next one in the original order */
+    var q = oatQueue(), c = U.oat && U.oat.cur;
+    if (!q.length) return null;
+    if (q.indexOf(c) >= 0) return c;
+    var all = U.oat.ids, i = all.indexOf(c);
+    for (var j = i + 1; i >= 0 && j < all.length; j++) if (q.indexOf(all[j]) >= 0) return all[j];
+    return q[0];
+  }
+  function oatStart() {
+    var later = laterIds();
+    var ids = openReplies().map(function (r) { return r.id; }).filter(function (id) { return later.indexOf(id) < 0; });
+    U.oat = { ids: ids, n: ids.length, cur: ids[0] || null, t0: Date.now() };
+    U.open = null; U.pop = null; U.kcur = null;
+    save(KEY_START, todayKey());
+    if (ui.view === 'brief' && B) { U.tab = 'replies'; save(KEY_TAB, 'replies'); if (location.hash !== '#replies') history.replaceState(null, '', '#replies'); renderBrief('#oat-h'); }
+    else { U.tab = 'replies'; save(KEY_TAB, 'replies'); location.hash = 'replies'; }
+  }
+  function oatExit() { var id = U.oat && U.oat.cur; U.oat = null; U.pop = null; renderBrief(id && replyById(id) ? '[data-open="reply:' + cssq(id) + '"]' : '[data-oatgo]'); }
+  function oatQuiet(k, extra) {
+    return h('button', Object.assign({ type: 'button', class: 'tbtn oq', 'data-oat': k, 'aria-keyshortcuts': k.toUpperCase() }, extra || {}),
+      [OAT_KEYS[k], h('kbd', { 'aria-hidden': 'true' }, k.toUpperCase())]);
+  }
+  function oatView() {
+    var q = oatQueue(), id = oatCur();
+    if (!id) return [oatEnd()];
+    U.oat.cur = id;
+    var r = replyById(id), n = Math.max(U.oat.n, q.length), k = n - q.length + q.indexOf(id) + 1, d = draftOf(r), link = safeHttps(r.link);
+    var vip = reasonOf(r) && reasonOf(r)[0] === 'vip';
+    var fill = h('i'); fill.style.width = Math.round((k - 1) / n * 100) + '%';
+    var main1 = d ? h('button', { type: 'button', class: 'btn primary', 'data-oat': 'c', 'aria-keyshortcuts': 'C' }, ['Copy draft', h('kbd', { 'aria-hidden': 'true' }, 'C')])
+      : link ? h('button', { type: 'button', class: 'btn primary', 'data-oat': 'o', 'aria-keyshortcuts': 'O' }, ['Open in ' + srcName(r), h('kbd', { 'aria-hidden': 'true' }, 'O')]) : null;
+    var card = h('article', { class: 'oatcard', 'aria-labelledby': 'oat-h', 'data-oatcard': id }, [
+      h('div', { class: 'oatmeta' }, [h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))), tagOf(r.area), vip ? h('span', { class: 'tag vip' }, 'VIP') : null,
+        h('span', { class: 'age' }, waitShort(r) || ageOf(r))]),
+      h('h2', { class: 'oatwho', id: 'oat-h', tabindex: '-1' }, r.who),
+      h('p', { class: 'oatwant' }, gistSum(r)),
+      claimMark(r),
+      d ? h('div', { class: 'oatdraft' }, [h('div', { class: 'label' }, 'Draft'), h('p', null, d)])
+        : h('p', { class: 'muted' }, oatHidden(r) || 'No draft for this one.'),
+      h('div', { class: 'oatgo' }, [main1, h('button', { type: 'button', class: 'btn', 'data-oat': 'd', 'aria-keyshortcuts': 'D' }, ['Done', h('kbd', { 'aria-hidden': 'true' }, 'D')])]),
+      h('div', { class: 'oatq' }, [d && link ? oatQuiet('o') : null, oatQuiet('l'), oatQuiet('n', { 'data-anc': 'oat-n-' + id }),
+        oatQuiet('x', { 'data-anc': 'oat-x-' + id, 'aria-haspopup': 'true', 'aria-expanded': String(!!(U.pop && U.pop.anc === 'oat-x-' + id)) })])]);
+    oatSwipe(card);
+    return [h('div', { class: 'oathead' }, [h('h2', { class: 'sec-h' }, 'One at a time'),
+        h('span', { class: 'oatn', role: 'status' }, k + ' of ' + n), h('span', { class: 'bar', 'aria-hidden': 'true' }, fill), h('span', { class: 'sp' }),
+        h('button', { type: 'button', class: 'tbtn', 'data-oatx': '1' }, 'Back to the list')]),
+      card,
+      h('p', { class: 'oathint muted' }, isPhone() ? 'Swipe right for done, left for later.' : 'Keys: C copy · O open · D done · L later · N note · X not for me · J/K move · Esc list')];
+  }
+  function oatEnd() {
+    var later = laterIds().filter(function (id) { return replyById(id); }).length;
+    return h('div', { class: 'oatend' }, [allClear(later), h('div', { class: 'go' }, [h('button', { type: 'button', class: 'btn', 'data-oatx': '1' }, 'Back to the list')])]);
+  }
+  /* phones: a horizontal swipe on the card (vertical scrolling stays the browser's) */
+  function oatSwipe(card) {
+    var x0 = null, y0 = 0, dx = 0, pid = null;
+    function reset() { x0 = null; card.classList.remove('drag'); card.style.transform = ''; card.removeAttribute('data-dir'); }
+    on(card, 'pointerdown', function (e) {
+      if (e.pointerType === 'mouse' || (e.target.closest && e.target.closest('button, a, textarea'))) return;
+      x0 = e.clientX; y0 = e.clientY; dx = 0; pid = e.pointerId;
+    });
+    on(card, 'pointermove', function (e) {
+      if (x0 == null || e.pointerId !== pid) return;
+      dx = e.clientX - x0;
+      if (Math.abs(e.clientY - y0) > Math.abs(dx) && Math.abs(dx) < 12) return;
+      if (Math.abs(dx) > 8) { card.classList.add('drag'); card.style.transform = 'translateX(' + dx + 'px)'; card.setAttribute('data-dir', dx > 0 ? 'done' : 'later'); }
+    });
+    on(card, 'pointerup', function () { if (x0 == null) return; var v = dx; reset(); if (Math.abs(v) > 90) oatAct(v > 0 ? 'd' : 'l'); });
+    on(card, 'pointercancel', reset);
+  }
+  function oatAct(k, b) {
+    var id = oatCur();
+    if (!id) return false;
+    var r = replyById(id), q = oatQueue(), i = q.indexOf(id);
+    if (k === 'c') { if (!draftOf(r)) return false; copyReply(id, b || main.querySelector('[data-oat="c"]')); }
+    else if (k === 'o') { var link = safeHttps(r.link); if (!link) return false; window.open(link, '_blank', 'noopener,noreferrer'); }
+    else if (k === 'd') markDone(id);
+    else if (k === 'l') {
+      setLater(laterIds().concat([id]));
+      showToast('Later.', r.who + ' · back at the next brief', { kind: 'later', id: id });
+      renderBrief('[data-undo]');
+    }
+    else if (k === 'n') {
+      var ok = !B.sample && !!noteRef('reply', id);
+      U.pop = { kind: 'reply', id: id, anc: 'oat-n-' + id, sub: false, mode: ok ? 'note' : null, text: null };
+      renderLayer(); focusLayer(ok ? '[data-ntext]' : '[data-pop] button');
+    }
+    else if (k === 'x') { U.pop = { kind: 'reply', id: id, anc: 'oat-x-' + id, sub: true }; renderLayer(); focusLayer('[data-sup]'); }
+    else if (k === 'j' || k === 'k') {
+      var j = i + (k === 'j' ? 1 : -1);
+      if (j < 0 || j >= q.length) return true;
+      U.oat.cur = q[j]; U.pop = null; renderBrief('#oat-h');
+    }
+    else return false;
+    return true;
+  }
+
+  /* ---------- 0.9.0: Find or ask (⌘K, Ctrl+K or "/"; the Find button in the header) ----------
+     One box: actions on the open reply, people and threads, today's events, projects, tabs and Setup places, every
+     setting (SETTINGS), and "Ask: …", which opens Chat with the text. Every item only reads, copies or opens (its
+     kind is one of FA_KINDS): nothing marks done, hides, deletes, changes an account or sends. ARIA combobox and
+     listbox; text only. "/" is ignored while typing; ⌘K and Ctrl+K work anywhere. */
+  var FA_KINDS = ['open', 'copy', 'read'];
+  var FA = { open: false, q: '', i: 0, items: [], from: null };
+  var faRoot = h('div', { class: 'fa-wrap', hidden: '' });
+  app.appendChild(faRoot);
+  function faGo(tab, item) {
+    U.oat = null; U.pop = null;
+    if (item) { U.open = item; }
+    if (ui.view === 'brief' && B) { U.tab = tab; save(KEY_TAB, tab); history.replaceState(null, '', '#' + tab); renderBrief(item ? '.panel [data-close]' : '#tab-' + tab); }
+    else { U.tab = tab; save(KEY_TAB, tab); location.hash = tab; }
+  }
+  function faItems(q) {
+    var out = [], ql = String(q || '').trim().toLowerCase(), ws = ql.split(/\s+/).filter(Boolean);
+    function hit(s) { s = String(s || '').toLowerCase(); return ws.every(function (w) { return s.indexOf(w) >= 0; }); }
+    function item(group, kind, label, sub, fn, key) { out.push({ group: group, kind: kind, label: String(label || ''), sub: String(sub || ''), run: fn, key: key || '' }); }
+    var cur = ui.view === 'brief' && B && U.open && U.open.kind === 'reply' ? replyById(U.open.id) : null;
+    if (cur) {
+      if (draftOf(cur) && hit('copy draft ' + cur.who)) item('This reply', 'copy', 'Copy the draft', cur.who, function () { copyReply(cur.id, null); }, 'C');
+      if (safeHttps(cur.link) && hit('open ' + srcName(cur) + ' ' + cur.who)) item('This reply', 'open', 'Open in ' + srcName(cur), cur.who, function () { window.open(safeHttps(cur.link), '_blank', 'noopener,noreferrer'); }, 'O');
+    }
+    if (B) {
+      if (replies().length && hit('one at a time triage replies start')) item('Go to', 'open', 'One at a time', plural(openReplies().length, 'reply', 'replies'), oatStart);
+      if (ws.length) {
+        replies().filter(function (r) { return hit(r.who + ' ' + gistSum(r) + ' ' + areaOf(r.area).name); }).slice(0, 6).forEach(function (r) {
+          item('People and threads', 'open', r.who, gistSum(r), function () { faGo('replies', { kind: 'reply', id: r.id }); });
+        });
+        events().filter(function (e) { return hit(e.title + ' ' + (e.time || '')); }).slice(0, 4).forEach(function (e) {
+          item('Today', 'open', e.title, e.time || '', function () { faGo('agenda', { kind: 'event', id: e.id }); });
+        });
+        (PJ.d && PJ.d.projects ? PJ.d.projects : []).filter(function (p) { return hit(p.name); }).slice(0, 4).forEach(function (p) {
+          item('Projects', 'open', p.name, 'Project', function () { faGo('projects'); pjOpen(p.id); });
+        });
+      }
+    }
+    TABS.filter(function (t) { return LIVE_TABS.indexOf(t[0]) >= 0 && !(t[0] === 'chat' && chatOff()); }).forEach(function (t) {
+      if (hit(t[1] + ' tab')) item('Go to', 'open', t[1], 'Tab', function () { faGo(t[0]); });
+    });
+    [['home', 'Setup']].concat(PLACES.map(function (x) { return [x[0], 'Setup: ' + x[1]]; })).forEach(function (x) {
+      if (ws.length && hit(x[1])) item('Go to', 'open', x[1], 'Setup', function () { ui.wiz = null; openSetup(x[0]); });
+    });
+    if (ws.length) findSettings(ql).slice(0, 8).forEach(function (x) { item('Settings', 'open', x[2], setWhere(x), function () { openSetting(x); }); });
+    if (ws.length && !chatOff()) item('Ask', 'read', 'Ask: ' + String(q).trim(), 'Chat looks in your own mail, calendar and notes', function () { faAsk(String(q).trim()); }, '↵');
+    return out;
+  }
+  function faAsk(text) {
+    faGo('chat');
+    var tries = 0;
+    (function again() {   /* the Chat tab loads its state first */
+      if (U.tab !== 'chat') return;
+      if (CH.ov && !chatPending()) { chatAsk(text); return; }
+      if (++tries > 20) { CH.input = text; chatRender('[data-ask-in]'); return; }
+      setTimeout(again, 150);
+    })();
+  }
+  function faOpen() {
+    if (FA.open) return;
+    FA.open = true; FA.q = ''; FA.i = 0; FA.from = document.activeElement;
+    lookPanel.hidden = true; lookBtn.setAttribute('aria-expanded', 'false');
+    faRoot.textContent = ''; faRoot.hidden = false;
+    var inp = h('input', { class: 'inp fa-in', id: 'fa-in', type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'fa-list',
+      'aria-autocomplete': 'list', 'aria-label': 'Find or ask', autocomplete: 'off', spellcheck: 'false', placeholder: 'Find a person, a setting, or ask…' });
+    var list = h('div', { class: 'fa-list', id: 'fa-list', role: 'listbox', 'aria-label': 'Results' });
+    var box = h('div', { class: 'fa', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Find or ask' }, [
+      h('div', { class: 'fa-top' }, [ico('search'), inp, h('button', { type: 'button', class: 'fa-x', 'data-fax': '1', 'aria-label': 'Close' }, ico('close'))]),
+      list, h('p', { class: 'fa-foot muted' }, '↑ ↓ move · Enter opens · Esc closes · copy and open only, nothing is sent')]);
+    add(faRoot, [h('div', { class: 'fa-back', 'data-fax': '1' }), box]);
+    on(inp, 'input', function () { FA.q = inp.value; FA.i = 0; faList(); });
+    on(inp, 'keydown', faKeys);
+    on(faRoot, 'mousedown', function (e) { if (e.target.closest('[role=option]')) e.preventDefault(); });
+    on(faRoot, 'click', function (e) {
+      var o = e.target.closest('[role=option]'); if (o) { faRun(+o.getAttribute('data-fa')); return; }
+      if (e.target.closest('[data-fax]')) faClose(true);
+    });
+    ['header.top', '#main', '.bv-layer'].forEach(function (sel) { var el = document.querySelector(sel); if (el && !el.hasAttribute('inert')) { el.setAttribute('inert', ''); el.setAttribute('data-fa-inert', ''); } });
+    document.documentElement.classList.add('fa-lock');
+    faList();
+    inp.focus();
+  }
+  function faClose(back) {
+    if (!FA.open) return;
+    FA.open = false; faRoot.textContent = ''; faRoot.hidden = true;
+    document.querySelectorAll('[data-fa-inert]').forEach(function (el) { el.removeAttribute('inert'); el.removeAttribute('data-fa-inert'); });
+    document.documentElement.classList.remove('fa-lock');
+    if (back && FA.from && document.contains(FA.from)) FA.from.focus();
+  }
+  function faList() {
+    var list = faRoot.querySelector('#fa-list'), inp = faRoot.querySelector('#fa-in');
+    if (!list) return;
+    var items = FA.items = faItems(FA.q);
+    FA.i = Math.max(0, Math.min(FA.i, items.length - 1));
+    list.textContent = '';
+    var groups = [];
+    items.forEach(function (x, i) {
+      var g = groups[groups.length - 1];
+      if (!g || g.name !== x.group) { g = { name: x.group, el: h('div', { role: 'group', 'aria-labelledby': 'fa-g' + groups.length }, h('div', { class: 'fa-g', id: 'fa-g' + groups.length, role: 'presentation' }, x.group)) }; groups.push(g); add(list, g.el); }
+      add(g.el, h('div', { role: 'option', id: 'fa-o-' + i, class: 'fa-o' + (i === FA.i ? ' on' : ''), 'aria-selected': String(i === FA.i), 'data-fa': String(i) }, [
+        h('span', { class: 'fa-l' }, x.label), x.sub ? h('span', { class: 'fa-s' }, x.sub) : null, x.key ? h('kbd', { 'aria-hidden': 'true' }, x.key) : null]));
+    });
+    if (!items.length) add(list, h('p', { class: 'fa-none muted', role: 'status' }, FA.q.trim() ? 'Nothing found.' : 'Type a name, a setting, or a question for Chat.'));
+    if (items.length) inp.setAttribute('aria-activedescendant', 'fa-o-' + FA.i); else inp.removeAttribute('aria-activedescendant');
+    var on1 = list.querySelector('.fa-o.on'); if (on1 && on1.scrollIntoView) on1.scrollIntoView({ block: 'nearest' });
+  }
+  function faKeys(e) {
+    var n = FA.items.length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (n) { FA.i = (FA.i + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; faList(); } e.preventDefault(); }
+    else if (e.key === 'Enter') { if (n) faRun(FA.i); e.preventDefault(); }
+    else if (e.key === 'Escape') { faClose(true); e.preventDefault(); e.stopPropagation(); }
+    else if (e.key === 'Tab') e.preventDefault();   /* the box keeps focus while it is open */
+  }
+  function faRun(i) {
+    var x = FA.items[i];
+    if (!x || FA_KINDS.indexOf(x.kind) < 0) return;
+    faClose(false);
+    x.run();
+  }
+  document.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); if (FA.open) faClose(true); else faOpen(); return; }
+    if (FA.open) return;   /* the box's own keys (faKeys); the other key handlers check FA.open */
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.isComposing && !typing(e.target)) { e.preventDefault(); faOpen(); }
+  }, true);
+  document.getElementById('find-btn').addEventListener('click', faOpen);
+  applyDensity();
+
+  /* undo a note written in One at a time: back to the text before (or no note) */
+  function noteUndo(u) {
+    var cur = B.notes && B.notes[u.ref], req = null;
+    if (u.prev == null) { if (cur && cur.id) req = function () { return api('DELETE', 'api/memory/notes/' + encodeURIComponent(cur.id)); }; }
+    else if (cur && cur.id) req = function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(cur.id), { text: u.prev, confirm: true }); };
+    else req = function () { return api('POST', 'api/memory/notes', { kind: u.kind, id: u.id, ref: u.ref, text: u.prev, confirm: true }); };
+    var back = function (res) {
+      B.notes = B.notes && typeof B.notes === 'object' ? B.notes : {};
+      if (u.prev == null) delete B.notes[u.ref]; else B.notes[u.ref] = { id: (res && res.id) || (cur && cur.id), text: u.prev };
+      MEM.data = null; U.toast = null;
+      if (U.oat) U.oat.cur = u.id;
+      renderBrief(U.oat ? '#oat-h' : null);
+    };
+    if (!req) { back(null); return; }
+    mutate(req).then(back, failToast);
+  }
+  function liveTabs() { return chatOff() ? LIVE_TABS.filter(function (t) { return t !== 'chat'; }) : LIVE_TABS; }   /* Chat off on this device */
 
   route();
 })();
