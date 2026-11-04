@@ -2206,7 +2206,7 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
 .acb{margin:8px 0 4px;padding-left:12px;border-left:var(--rule-mid) solid var(--rule)}
 .plain{margin:12px 0 16px}
 .dens .chip{text-transform:none;letter-spacing:0;font-size:var(--fs-sm)}
-.advs{display:grid;gap:8px;max-width:960px}
+.advs{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;max-width:960px}
 .adv{border-radius:var(--radius);background:var(--bg);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
 .adv.danger{box-shadow:inset 4px 0 0 var(--alert),inset 0 0 0 var(--rule-w) var(--rule)}
 .advt{margin:0;font-size:inherit}
