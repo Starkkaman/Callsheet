@@ -1047,10 +1047,13 @@ class Sorter:
             s["mode"] = "shadow"
         if not isinstance(s["model"], str) or not MODEL.fullmatch(s["model"]):
             s["model"] = GEMMA
-        if not s.get("shadow_since"):   # the shadow week starts the first time this runs (the 0.8.4 install)
+        if not s.get("shadow_since"):   # the shadow week starts with the first labels (stored then: reads write nothing)
             s["shadow_since"] = self._today().isoformat()
-            self.store._set_meta("sorting", s)  # noqa: SLF001
+            s["_unsaved"] = True
         return s
+
+    def _save_settings(self, s):
+        self.store._set_meta("sorting", {k: v for k, v in s.items() if not k.startswith("_")})  # noqa: SLF001
 
     def update_settings(self, patch):
         if not isinstance(patch, dict):
@@ -1095,7 +1098,7 @@ class Sorter:
                 s["backfill"] = b
             else:
                 raise InputError("Unknown setting.")
-        self.store._set_meta("sorting", s)  # noqa: SLF001
+        self._save_settings(s)
         return self.view()
 
     # time ------------------------------------------------------------------------------------------------------------
@@ -1185,6 +1188,8 @@ class Sorter:
         srcs = [x for x in srcs if x]
         if not srcs:
             return 0
+        if s.get("_unsaved"):   # the first labels: the shadow week starts today
+            self._save_settings(s)
         ctx = ctx or context(self.store, self.people)
         known = self.labels.hashes(x["key"] for x in srcs)
         now_ts, day, n = self.clock(), self._today().isoformat(), 0

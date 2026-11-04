@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.4 ("AI sorting", the groundwork)
+
+- **AI sorting, in a shadow week first**: after each refresh Callsheet labels new and changed items (mail, also the
+  mail the rules leave out today; Slack, Signal and Drive from Know me) with your local model, Gemma by default.
+  For the first week the labels show only on **Setup → AI sorting**; your brief doesn't change. Turn sorting on there
+  when you're happy with the numbers (Callsheet never switches it on by itself).
+- **Labels never hide anything**: each item lands in exactly one group. VIPs, people you know writing to you, security
+  and bank alerts, mail that names you, invites and messages whose text tries to steer the sorting or had hidden
+  text always show, whatever the model says. "From you" comes only from Gmail's Sent label, your own address with
+  a passing sender check, your linked Signal and your Slack user, never from what a message says.
+- **Check the sorting**: up to ten items a day, **Right** or **Wrong** (and the right label). Only the counts are
+  kept; **Copy the numbers** copies counts only, no names, subjects or addresses.
+- **When sorting is on**: a reply's panel has **Why is this here?** (the rules' label, the AI's label and the
+  sentence it pointed to, and the rule that placed it) and three fixes (**Needs a reply**, **Not for me**, **This
+  is a promo**, with Undo). Fixes are stored as labels only, for the next version to learn from.
+- **It stays out of the way**: a run takes at most 3 minutes, ends at least 10 minutes before a brief, waits 10
+  minutes after one, never runs while a refresh or the brief writer works and steps aside for Chat. A daily limit
+  (1,200 items, 25 model minutes). At night (01:30 to 04:30) it reads your last 30 days, over two nights at most,
+  picking up where it stopped and pausing when the server is busy.
+- **Stored**: labels, codes, sentence numbers and checked dates only; no message text is stored for sorting.
+- **Security alerts**: "card ending 2290 was declined", "transaction declined", "your payment didn't go through"
+  and "we couldn't process your payment" now count as bank alerts.
+- **Dates**: a promise or deadline with a date ("I'll send the contract on Friday 6 Nov", "the deadline is 14 Nov")
+  counts without a meeting word; dates in signatures and quoted replies don't.
+- **Had hidden text**: mail whose HTML hid text from a reader is marked so in Chat's results (and in the sorting).
+
 ## 0.8.2 ("People")
 
 - **People**: Callsheet now knows that an email address, a second address, a Slack user and a Signal contact can be

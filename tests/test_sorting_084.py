@@ -682,7 +682,7 @@ class PageStatic(unittest.TestCase):
         part = js[a:b]
         self.assertNotIn("innerHTML", part)
         self.assertNotIn("'/api", part)
-        self.assertIn("api('GET', 'sorting')", part)
+        self.assertIn("api('GET', 'api/sorting')", part)
         self.assertIn("Copy the numbers", part)
         self.assertIn("function sortSettings(", part)
         c = css[css.index("0.8.4 AI sorting"):css.index("end 0.8.4 AI sorting")]

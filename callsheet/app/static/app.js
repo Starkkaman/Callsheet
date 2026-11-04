@@ -491,7 +491,7 @@
         'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') + (r.uses_name ? ', uses ' + r.uses_name + '’s name' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
         h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r))]),
-        claimMark(r), nameMark(r), h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
+        claimMark(r), nameMark(r), srMark(r) /* 0.8.4, sorting on only */, h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
   function doneRows() {
@@ -1384,6 +1384,7 @@
       link ? h('a', { class: 'act', href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + srcName(r)) : null,
       h('button', { type: 'button', class: 'act ghost', 'data-markdone': r.id }, 'Mark done'),
       npBtn('reply', r.id, 'pa-' + r.id, true)]),
+    srWhy(r),  /* 0.8.4: sorting on only */
     panelSame(r)];
   }
   /* 0.8.2: a likely match for this sender: the Same person? card in the panel; the answer shows in its place */
@@ -1851,6 +1852,7 @@
       else if (u.kind === 'dismiss') { setDismissed(u.key, false); U.toast = null; renderBrief(); }
       else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
       else if (u.kind === 'memory') chatUndoNote(u);  /* 0.8.1: a note saved from a chat Save card */
+      else if (u.kind === 'srfix') srUnfix(u);  /* 0.8.4 */
     }
     else if (d.toastx) { U.toast = null; renderLayer(); }
     /* 0.8.0 */
@@ -2004,7 +2006,7 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : location.hash === '#people' ? 'people' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
+    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : location.hash === '#people' ? 'people' : location.hash === '#sorting' ? 'sorting' : 'brief';  /* 0.8.4: #sorting */  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
     var changed = v !== ui.view;
     ui.view = v;
     setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
@@ -2027,6 +2029,7 @@
     else if (v === 'knowme') showKnow('#kn-title');  /* 0.6.0 index */
     else if (v === 'profile' || v === 'profileq') showProfile(v);  /* 0.6.0 profile */
     else if (v === 'people') { PP.said = ''; showPeople('#pp-title'); }  /* 0.8.2 people */
+    else if (v === 'sorting') { SR.said = ''; SR.wrong = null; showSorting('#sr-title'); }  /* 0.8.4 AI sorting */
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -3132,6 +3135,7 @@
         h('h2', { class: 'h3', id: 'sh-pp' }, 'People'),
         h('ul', { class: 'ln' }, [h('li', null, S.people && S.people.open ? plural(S.people.open, 'Same person? suggestion', 'Same person? suggestions') : 'One person across mail, Slack and Signal')]),
         btn('btn sm', 'Open', { 'aria-label': 'Open People', 'data-fk': 'home:people' }, function () { location.hash = 'people'; })]),
+      srHomeCard(),  /* 0.8.4 AI sorting */
       h('div', { class: 'go' }, [first ? btn('btn primary', 'Start: About you', null, function () { go(1); }) : null, refresh]),
       err,
       ls.at && ls.ok === false ? h('p', { class: 'syncst bad' }, 'Last refresh had problems:') : null,
@@ -4208,6 +4212,214 @@
     var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
     if (f) f.focus({ preventScroll: !!keep });
   }
+
+  /* ---------- 0.8.4 AI sorting (#sorting): Check the sorting, the counts, the sorting settings; the brief's
+     "Why is this here?" and one-click fixes (only when sorting is on). GET api/sorting; POST api/sorting/check
+     {key, right, label}; GET api/sorting/numbers (counts only); PATCH api/sorting/settings; POST api/sorting/fix
+     {key, action}; DELETE api/sorting/fix/<id>. Shadow mode (the default for the first week): labels show only on this
+     page and the brief doesn't change. Data is text (h()). ---------- */
+  var SR = { v: null, seq: 0, err: null, wrong: null, said: '', adv: false };
+  var SR_MODES = [['off', 'Off'], ['shadow', 'Shadow week'], ['on', 'On']];
+  var SR_MODE_NOTE = { off: 'Nothing is sorted.', shadow: 'Callsheet sorts quietly and shows its labels only here. Your brief doesn’t change.',
+    on: 'The brief shows why each item is there, with one-click fixes. Nothing is ever hidden.' };
+  var SR_GROUP = { needs_you: 'Needs you', your_day: 'Your day', what_changed: 'What changed', for_your_info: 'For your info',
+    probably_not_for_you: 'Probably not for you', sorted_promos: 'Looks like a promo', sorted_updates: 'Automated update', heads_up_security: 'Security' };
+  var SR_PRE = { reply: 'Needs a reply', fyi: 'For your info', promo: 'Promo', update: 'Automated update', meeting: 'Meeting or date', others: 'For someone else', security: 'Security' };
+  var SR_CODE = { to_only_owner: 'Sent only to you', owner_cc: 'You’re in Cc', bcc_or_list: 'A list or Bcc', greeting_owner: 'Starts with your name',
+    greeting_other: 'Starts with someone else’s name', mention_owner: 'Mentions you', question: 'Asks a question', deadline_word: 'Names a deadline',
+    known_person: 'Someone you know', vip: 'A VIP', automated: 'Sent by a machine', ics: 'Has an invite', dmarc_fail: 'Sender not verified',
+    uses_owner_name: 'Uses your name', owner_cc_only: 'You’re only copied', list_or_bcc: 'Bulk mail or Bcc', question_to_group: 'Asks a group' };
+  var SR_MARK = { hidden_text: 'Had hidden text', uses_owner_name: 'Uses your name', uses_vip_name: 'Uses a VIP’s name',
+    sender_not_verified: 'Sender not verified', lure: 'Looks like a known sender', unverified_invite: 'Invite not checked' };
+  var SR_WHY = { rules_only: 'The rules placed it (no AI answer).', 'override:security': 'Security alerts always show.',
+    'override:invite': 'Invites always show.', 'override:flagged': 'Its text tries to steer the sorting, so the AI’s label isn’t used.',
+    'rules:strong_reply': 'The rules are sure it needs a reply.', 'rules:weak_reply': 'The rules think it needs a reply.',
+    'ai:found': 'The AI found a request for you.', 'ai:demoted_weak': 'The AI thinks it’s for someone else.', 'ai:security': 'The AI read it as a security alert.' };
+  var SR_FIX = [['needs_reply', 'Needs a reply'], ['not_for_me', 'Not for me'], ['promo', 'This is a promo']];
+  function srWhyText(why) {
+    if (SR_WHY[why]) return SR_WHY[why];
+    if (/^override:/.test(why)) return 'From a VIP or someone you know, or addressed to you: always shows.';
+    return 'The AI’s label.';
+  }
+  function srCodes(list) {
+    var xs = (Array.isArray(list) ? list : []).map(function (c) { return SR_CODE[c]; }).filter(Boolean);
+    return xs.length ? h('ul', { class: 'srcodes' }, xs.map(function (x) { return h('li', null, x); })) : null;
+  }
+  function srMarks(list) {
+    var xs = (Array.isArray(list) ? list : []).filter(function (c) { return SR_MARK[c]; });
+    return xs.length ? h('div', { class: 'srmarks' }, xs.map(function (c) { return mk8(c === 'hidden_text' || c === 'lure' || c === 'sender_not_verified' ? 'sender_fail' : c, SR_MARK[c]); })) : null;
+  }
+  function showSorting(focusSel) {
+    var seq = ++SR.seq;
+    return api('GET', 'api/sorting').then(function (r) {
+      if (seq !== SR.seq || ui.view !== 'sorting') return;
+      SR.v = r; SR.err = null; renderSorting(focusSel);
+    }, function (e) { if (seq !== SR.seq || ui.view !== 'sorting') return; SR.err = e.message; renderSorting(focusSel); });
+  }
+  function srAfter(r, focusSel, said) { SR.v = r; SR.wrong = null; SR.said = said || ''; renderSorting(focusSel); }
+  function srCheck(v) {
+    var c = v.check, items = c.items || [], err = errBox(), names = c.names || {};
+    var pips = h('div', { class: 'srpips', 'aria-hidden': 'true' }, Array.apply(null, Array(c.per_day)).map(function (_, i) { return h('i', { class: i < c.done ? 'on' : '' }); }));
+    var head = [h('h2', { id: 'sr-ch' }, 'Check the sorting'), h('p', { class: 'note' }, 'Is each label right? Up to ' + c.per_day + ' a day; only the counts are kept.')];
+    if (!items.length) {
+      return h('section', { class: 'srsec srcheck', 'aria-labelledby': 'sr-ch' }, head.concat([pips,
+        h('p', { class: 'srdone', role: 'status', tabindex: '-1', 'data-fk': 'sr-done' }, c.done >= c.per_day ? 'That’s today’s ' + c.per_day + '. Thank you.' : c.done ? 'All checked for now. Thank you.' : 'Nothing to check yet. Labels show up here after the next refresh.')]));
+    }
+    var it = items[0], body;
+    function send(right, label) {
+      return run([].slice.call(card.querySelectorAll('button')), err, function () { return api('POST', 'api/sorting/check', { key: it.key, right: right, label: label || null }); },
+        function (r) { srAfter(r, '[data-fk="sr-right"], [data-fk="sr-done"]', right ? 'Counted as right.' : 'Counted: it’s ' + (names[label] || label) + '.'); });
+    }
+    if (SR.wrong === it.key) {
+      body = [h('h3', { class: 'label', id: 'sr-what', tabindex: '-1' }, 'What is it?'),
+        h('div', { class: 'srpick', role: 'group', 'aria-labelledby': 'sr-what' }, Object.keys(names).filter(function (k) { return k !== it.label; }).map(function (k) {
+          return btn('btn sm', names[k], { 'data-fk': 'sr-pick-' + k }, function () { send(false, k); });
+        })),
+        h('div', { class: 'btns' }, [btn('tbtn', 'Cancel', { 'data-fk': 'sr-cancel' }, function () { SR.wrong = null; renderSorting('[data-fk="sr-wrong"]'); })])];
+    } else {
+      body = [h('p', { class: 'srq' }, ['Callsheet put this in ', h('b', null, it.label_name), '. Is that right?']),
+        h('div', { class: 'btns' }, [btn('btn primary', 'Right', { 'data-fk': 'sr-right' }, function () { send(true); }),
+          btn('btn', 'Wrong', { 'data-fk': 'sr-wrong', 'aria-expanded': 'false' }, function () { SR.wrong = it.key; renderSorting('#sr-what'); })])];
+    }
+    var card = h('div', { class: 'srcard', role: 'group', 'aria-label': 'Item ' + (c.done + 1) + ' of ' + c.per_day }, [
+      h('div', { class: 'srwho' }, [ico(it.src === 'mail' ? 'mail' : it.src, it.src), h('b', null, it.who || 'Someone'), h('span', { class: 'muted' }, (c.done + 1) + ' of ' + c.per_day)]),
+      it.quote ? h('blockquote', { class: 'srquote' }, it.quote) : null,
+      srCodes(it.codes), srMarks(it.marks)].concat(body, [err]));
+    return h('section', { class: 'srsec srcheck', 'aria-labelledby': 'sr-ch' }, head.concat([pips,
+      SR.said ? h('p', { class: 'srsaid', role: 'status' }, SR.said) : null, card]));
+  }
+  function srCounts(v) {
+    var c = v.counts, names = v.check.names || {}, host = h('div', { class: 'srcopy' }), err = errBox();
+    var rows = (c.labels || []).filter(function (x) { return x.right + x.wrong > 0; });
+    var cp = btn('btn', 'Copy the numbers', { 'data-fk': 'sr-copy' }, function () {
+      run([cp], err, function () { return api('GET', 'api/sorting/numbers'); }, function (n) { copyText(JSON.stringify(n, null, 2), cp, 'Copy the numbers', host); });
+    });
+    return h('section', { class: 'srsec', 'aria-labelledby': 'sr-cn' }, [
+      h('h2', { id: 'sr-cn' }, 'This week'),
+      rows.length ? h('table', { class: 'srtable' }, [h('thead', null, h('tr', null, [h('th', { scope: 'col' }, 'Label'), h('th', { scope: 'col' }, 'Right'), h('th', { scope: 'col' }, 'Wrong')])),
+        h('tbody', null, rows.map(function (x) { return h('tr', null, [h('th', { scope: 'row' }, names[x.label] || x.label), h('td', null, String(x.right)), h('td', null, String(x.wrong))]); }))])
+        : h('p', { class: 'muted' }, 'No checks yet this week.'),
+      c.right_pct != null ? h('p', { class: 'note' }, c.right_pct + '% right of ' + plural(c.checked, 'check', 'checks') + (c.security_missed ? ' · ' + plural(c.security_missed, 'security alert', 'security alerts') + ' missed' : '') + '.') : null,
+      c.ready && v.settings.mode === 'shadow' ? h('p', { class: 'srready' }, 'The numbers are good enough to turn sorting on.') : null,
+      h('div', { class: 'btns' }, [cp, h('span', { class: 'hint' }, 'Counts only: no names, subjects or addresses.')]), host, err]);
+  }
+  function srNight(st, b) {
+    var n = st.night;
+    if (!b.on) return 'Night reading is off.';
+    if (n.state === 'done') return 'Your last ' + b.days + ' days are read.';
+    if (n.state !== 'running') return 'Reads your last ' + b.days + ' days at night, ' + b.start + '–' + b.end + '.';
+    return 'Reading your last ' + b.days + ' days: night ' + Math.max(1, n.nights) + ' of ' + b.nights + ', ' + n.done.toLocaleString() + ' of ' + n.total.toLocaleString() +
+      (n.paused ? ' (paused: the model server is busy)' : '') + '.';
+  }
+  /* self-contained: the sorting settings (mode, status, the Advanced drawer); it can move to another Setup page as is */
+  function sortSettings(v) {
+    var s = v.settings, st = v.status, err = errBox();
+    var seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': 'sr-st' }, SR_MODES.map(function (m) {
+      var b = btn('', m[1], { role: 'radio', 'aria-checked': String(s.mode === m[0]), 'data-fk': 'sr-mode-' + m[0] }, function () {
+        if (s.mode === m[0]) return;
+        run([].slice.call(seg.querySelectorAll('button')), err, function () { return api('PATCH', 'api/sorting/settings', { mode: m[0] }); },
+          function (r) { srAfter(r, '[data-fk="sr-mode-' + m[0] + '"]'); });
+      });
+      return b;
+    }));
+    var model = h('input', { class: 'inp', id: 'sr-model', type: 'text', autocomplete: 'off', spellcheck: 'false' }); model.value = s.model;
+    var cards = h('input', { class: 'inp', id: 'sr-cards', type: 'number', min: '50', max: '5000', step: '50', inputmode: 'numeric' }); cards.value = String(s.day_cards);
+    var from = h('input', { class: 'inp', id: 'sr-from', type: 'time' }); from.value = s.backfill.start;
+    var to = h('input', { class: 'inp', id: 'sr-to', type: 'time' }); to.value = s.backfill.end;
+    var days = h('input', { class: 'inp', id: 'sr-days', type: 'number', min: '1', max: '90', inputmode: 'numeric' }); days.value = String(s.backfill.days);
+    var aerr = errBox();
+    var save = btn('btn', 'Save', { 'data-fk': 'sr-save' }, function () {
+      run([save], aerr, function () {
+        return api('PATCH', 'api/sorting/settings', { model: model.value.trim(), day_cards: parseInt(cards.value, 10), backfill: { start: from.value, end: to.value, days: parseInt(days.value, 10) } });
+      }, function (r) { srAfter(r, '[data-fk="sr-save"]', 'Saved.'); });
+    });
+    var advP = h('div', { class: 'sradv', id: 'sr-adv' }, [
+      h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-model' }, 'Model'), model, h('p', { class: 'fhint' }, 'As your local model server lists it. Gemma is the default.')]),
+      h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-cards' }, 'Items a day'), cards]),
+      h('div', { class: 'srwin' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-from' }, 'Night reading from'), from]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-to' }, 'to'), to]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-days' }, 'Days back'), days])]),
+      h('div', { class: 'btns' }, [save]), aerr]);
+    advP.hidden = !SR.adv;
+    var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(SR.adv), 'aria-controls': 'sr-adv', 'data-fk': 'sr-adv' }, function () {
+      SR.adv = !SR.adv; adv.setAttribute('aria-expanded', String(SR.adv)); advP.hidden = !SR.adv;
+    });
+    var line = plural(st.waiting, 'item', 'items') + ' waiting · today ' + st.today.cards + ' sorted' + (st.capped ? ' · today’s limit reached' : '') +
+      (st.server ? '' : ' · needs a local model server (Setup: Writing)');
+    return h('section', { class: 'srsec srset', 'aria-labelledby': 'sr-st' }, [
+      h('h2', { id: 'sr-st' }, 'Sorting'), seg, h('p', { class: 'note' }, SR_MODE_NOTE[s.mode] || ''), err,
+      s.mode === 'off' ? null : h('p', { class: 'muted srstat' }, line),
+      s.mode === 'off' ? null : h('p', { class: 'muted srstat' }, srNight(st, s.backfill)),
+      adv, advP]);
+  }
+  function renderSorting(focusSel) {
+    var v = SR.v, body;
+    if (!v) body = [SR.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the sorting (' + SR.err + ').') : h('p', { class: 'muted' }, 'Loading…')];
+    else body = [v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v)];
+    var mode = v ? v.settings.mode : null;
+    var sheet = h('div', { class: 'sheet wiz aisort' }, [
+      h('div', { class: 'mast two' }, [
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'sr-title', tabindex: '-1' }, 'AI sorting')]),
+        h('div', { class: 'box call' }, mode === 'shadow' ? [h('div', { class: 'label' }, 'Shadow week'), h('div', { class: 'disp' }, 'Day ' + Math.min(v.shadow_day, 99))]
+          : [h('div', { class: 'label' }, 'Sorting'), h('div', { class: 'disp' }, mode === 'on' ? 'On' : mode === 'off' ? 'Off' : '–')])]),
+      h('section', { class: 'step', 'aria-labelledby': 'sr-title' }, body),
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Setup', null, function () { ui.step = 0; location.hash = 'setup'; })])]);
+    var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
+    main.textContent = '';
+    add(main, sheet);
+    pressLook();
+    syncBg();
+    var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
+    if (f) f.focus({ preventScroll: focusSel === '#sr-title' });
+  }
+  /* Setup home's card */
+  function srHomeCard() {
+    var s = S && S.sorting;
+    var line = !s ? 'Labels for mail, Slack and Signal' : s.mode === 'shadow' ? 'Shadow week: day ' + s.shadow_day + ' of ' + s.shadow_days + ' · ' + plural(s.checked_week, 'check', 'checks') + ' this week'
+      : s.mode === 'on' ? 'On' + (s.right_pct != null ? ' · ' + s.right_pct + '% right this week' : '') : 'Off';
+    return h('section', { class: 'scard srcard-home', 'aria-labelledby': 'sh-sr' }, [
+      h('h2', { class: 'h3', id: 'sh-sr' }, 'AI sorting'),
+      h('ul', { class: 'ln' }, [h('li', null, line)]),
+      btn('btn sm', 'Open', { 'aria-label': 'Open AI sorting', 'data-fk': 'home:sorting' }, function () { location.hash = 'sorting'; })]);
+  }
+  /* the brief (only when sorting is on: B.sorting is absent otherwise) */
+  function srRow(r) { return B && B.sorting && B.sorting.on && B.sorting.rows ? B.sorting.rows[r.id] || null : null; }
+  function srMark(r) {
+    var x = srRow(r);
+    return x && ['probably_not_for_you', 'sorted_promos', 'sorted_updates'].indexOf(x.group) >= 0 ? h('span', { class: 'mk8 srmk' }, SR_GROUP[x.group]) : null;
+  }
+  function srWhy(r) {
+    var x = srRow(r);
+    if (!x) return null;
+    var names = B.sorting.names || {}, err = errBox(), fixed = (x.fixed || [])[0];
+    var fixes = h('div', { class: 'srfix', role: 'group', 'aria-label': 'Fix the sorting' }, SR_FIX.map(function (f) {
+      var b = btn('act ghost', f[1], { 'aria-pressed': String(fixed === f[0]) }, function () {
+        run([].slice.call(fixes.querySelectorAll('button')), err, function () { return api('POST', 'api/sorting/fix', { key: x.key, action: f[0] }); }, function (res) {
+          x.fixed = [f[0]];
+          showToast('Noted: ' + f[1] + '.', 'Callsheet learns from this in a later version.', { kind: 'srfix', id: res.id, rid: r.id }, false, 4000);
+          renderBrief('[data-undo]');
+        });
+      });
+      return b;
+    }));
+    return h('details', { class: 'srwhy' }, [h('summary', null, 'Why is this here?'),
+      h('dl', { class: 'srdl' }, [
+        h('div', null, [h('dt', null, 'Rules'), h('dd', null, (SR_PRE[x.pre] || 'For your info') + (x.strength === 'strong' ? ' (sure)' : x.strength === 'weak' ? ' (a guess)' : ''))]),
+        srCodes(x.codes),
+        x.ai ? h('div', null, [h('dt', null, 'AI'), h('dd', null, names[x.ai] || x.ai)]) : null,
+        x.ai ? srCodes(x.ai_codes) : null,
+        x.quote ? h('blockquote', { class: 'srquote' }, x.quote) : null,
+        h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + srWhyText(x.why))])]),
+      srMarks(x.marks), fixes, err]);
+  }
+  function srUnfix(u) {
+    run([], null, function () { return api('DELETE', 'api/sorting/fix/' + encodeURIComponent(u.id)); }, function () {
+      var x = B && B.sorting && B.sorting.rows ? B.sorting.rows[u.rid] : null;
+      if (x) x.fixed = [];
+      U.toast = null; renderBrief();
+    }).catch(function () { });
+  }
+  /* ---------- end 0.8.4 AI sorting ---------- */
 
   /* ---------- 0.8.2 People (#people): Same person? cards, You, Everyone, History ----------
      GET api/people; answers POST api/people/proposals/<id> {answer: same|different|later} (into a VIP: needs_confirm
