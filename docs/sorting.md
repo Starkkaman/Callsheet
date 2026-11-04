@@ -52,13 +52,13 @@ Log lines are counts only (cards, batches, rules-only, tokens, ms, cards/min, wa
 
 Server faults (0.8.5, `docs/server-faults.md`): garbage or a llama.cpp internal error from the server stops the run
 (reason `unhealthy`, the batch stays queued with its rules labels); while the server is in its 15-minute backoff
-`run_pass` and the night step return `unhealthy` without sending. Setup -> AI sorting shows "Local model unhealthy
+`run_pass` and the night step return `unhealthy` without sending. Setup → AI → Sorting shows "Local model unhealthy
 since ..." with **Check again** (`POST api/sorting/model-check`).
 
 ## Modes (settings in meta `sorting`)
 
 - `shadow` (default; `shadow_since` is the first day): labels are computed and stored and shown only on
-  **Setup -> AI sorting**. `api/brief` is byte-identical to sorting off.
+  **Check the sorting** (0.9.0: Setup → AI → Sorting links to it). `api/brief` is byte-identical to sorting off.
 - `on` (the owner's choice; never automatic): `brief.sorting` = per reply row: group, why code, rules label and
   codes, AI label and codes, overrides, marks and the quoted evidence sentence (from memory, defanged, never a
   flagged sentence). The page shows a mark on demoted rows and **Why is this here?** with three fixes.
@@ -93,7 +93,21 @@ settings. `POST api/sorting/check {key, right, label}` adds one to the counts an
 
 `GET api/sorting`, `PATCH api/sorting/settings`, `POST api/sorting/check`, `GET api/sorting/numbers`,
 `POST api/sorting/fix {key, action: needs_reply|not_for_me|promo}` (409 unless sorting is on),
-`DELETE api/sorting/fix/<id>` (Undo). `api/state` has a `sorting` summary for Setup home.
+`DELETE api/sorting/fix/<id>` (Undo). `api/state` has a `sorting` summary for Setup home (0.9.0: the AI card's
+"Sorting ..." line).
+
+## Where it lives (0.9.0)
+
+- **Setup → AI → Sorting** (`sortingBlock`, through 0.9.0's `sortingSlot`): the health line and **Check again**
+  (`lmHealth`), the settings (`sortSettings`, its model, items a day and night reading behind its own closed
+  Advanced), the **Check the sorting** link (with today's count) and **What it learned** (`srLearned`). It loads
+  `GET api/sorting` when the place opens (again after a minute).
+- **#sorting** is the Check the sorting page only (the items to check, the week's counts, Copy the numbers);
+  Back goes to Setup → AI.
+- The settings index (`SETTINGS`: Find a setting and Find or ask) has AI sorting, the sorting model and limits, the
+  local model's health, Check the sorting and What it learned.
+- When sorting is on, One at a time walks the sections in order (Needs you, For your info, Sorted for you;
+  `srSplit`), Start your day counts Needs you, and the One at a time card shows the row's sorting mark.
 
 ## Also in 0.8.4
 

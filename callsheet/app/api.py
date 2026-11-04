@@ -672,7 +672,7 @@ class App:
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "people": {"open": self.people.open_count()},  # 0.8.2: Setup home's People card
-                "sorting": self._sorting_summary(),  # 0.8.4: Setup home's AI sorting card
+                "sorting": self._sorting_summary(),  # 0.8.4; 0.9.0: the sorting line on Setup home's AI card
                 "suppress": self.store.suppress_rules(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),

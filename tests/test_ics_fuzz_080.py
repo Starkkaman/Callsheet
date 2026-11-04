@@ -228,10 +228,10 @@ class Fuzz(unittest.TestCase):
 class UidCollisionSyncTest(Base):
     """F2 end to end: an email cancel or move of a real calendar event's UID changes nothing that is shown."""
     def test_real_event_is_never_altered(self):
-        tz = zoneinfo.ZoneInfo("UTC")
-        now = dt.datetime.now(tz).replace(second=0, microsecond=0)
-        # early in today's UTC date, so start + 6 h is still today whatever time the suite runs
-        start = now.replace(hour=1, minute=0)
+        # the app's day is the machine's local date when no time zone is set (TZ may be anything): 01:00 local
+        # today, so start + 6 h is still today whatever time and zone the suite runs in
+        now = dt.datetime.now().astimezone().replace(second=0, microsecond=0)
+        start = now.replace(hour=1, minute=0).astimezone(zoneinfo.ZoneInfo("UTC"))
         email = "me@example.com"
         user = self.fake.add_user(email, events={email: [event("Real meeting", start, start + dt.timedelta(hours=1),
                                                                iCalUID="real-1@google.com")]})

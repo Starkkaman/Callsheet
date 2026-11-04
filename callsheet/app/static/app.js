@@ -3241,7 +3241,7 @@
         (pp.at_call_times || pp.urgent) ? 'Phone alerts on' : 'Phone alerts off',
         plural(S.vips.length, 'VIP', 'VIPs') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days')],
       ai: ['Writer: ' + writerName(w) + (w.provider === 'local' ? ' · Morning ' + (mapM === 'fast' ? 'Fast' : 'Careful') : ''),
-        'Chat ' + (chatOff() ? 'off' : 'on') + ' on this device', 'Memory, Get to know me, People'],
+        srHomeLine(), 'Chat ' + (chatOff() ? 'off' : 'on') + ' on this device', 'Memory, Get to know me, People'],
       advanced: ['Keys, model server, presets, limits, rules, Start over']};
   }
 
@@ -3284,8 +3284,9 @@
 
   /* ----- AI: who writes, Careful or Fast in plain words, chat, memory and people, writing style (and Sorting) ----- */
   function placeAI() { return [writerBlock('ai'), aiChat(), memoryBlock('ai'), aiStyle(), sortingSlot()]; }
-  /* 0.8.4 merge slot: the Sorting settings (sortingBlock, built on the 0.8.4 branch) show here; nothing until then */
-  function sortingSlot() { return typeof sortingBlock === 'function' ? sortingBlock() : null; }  /* eslint-disable-line no-undef */
+  /* AI › Sorting: the 0.8.4 sorting settings, the 0.8.5 health line and What it learned, and the Check the sorting link
+     (sortingBlock, in the 0.8.4 AI sorting block) */
+  function sortingSlot() { return sortingBlock(); }
   var KEY_CHATOFF = 'callsheet.chatoff', KEY_SOUND = 'callsheet.sound', KEY_DENSITY = 'callsheet.density';
   function chatOff() { return load(KEY_CHATOFF) === '1'; }
   function aiChat() {
@@ -3402,6 +3403,11 @@
     ['ai', null, 'Get to know me', '[data-fk="kn-open"]', 'know me profile scan index', []],
     ['ai', null, 'People', '[data-fk="pp-open"]', 'same person merge', ['people']],
     ['ai', null, 'Writing style', '[data-fk="ai-style"]', 'profile tone', ['active_profile']],
+    ['ai', null, 'AI sorting', '#sr-st', 'sorting sort labels shadow week on off promos updates needs you', ['sorting.mode']],
+    ['ai', null, 'Sorting model, items a day and night reading', '[data-fk="sr-adv"]', 'sorting gemma model limit backfill night days back', ['sorting.model', 'sorting.day_cards', 'sorting.backfill']],
+    ['ai', null, 'Local model health', '#sr-st', 'unhealthy check again server broken garbage', []],
+    ['ai', null, 'Check the sorting', '[data-fk="sr-check-open"]', 'sorting right wrong labels numbers copy', []],
+    ['ai', null, 'What it learned', '#sr-ln', 'sorting learned forget senders domains taught', ['sorting.learned']],
     ['advanced', 'key', 'Google sign-in key', '[data-fk="adv:key"]', 'client id secret oauth cloud console', ['google_client']],
     ['advanced', 'server', 'Claude key and model', '#w-ckey', 'anthropic api key cost usd', ['claude.api_key', 'claude.model']],
     ['advanced', 'server', 'Model server', '#w-lurl', 'local url openai llama ollama lm studio api key', ['local.base_url', 'local.model', 'local.api_key']],
@@ -3430,7 +3436,7 @@
       return ws.every(function (w) { return hay.indexOf(w) >= 0; });
     });
   }
-  function openSetting(x) { ui.wiz = null; openSetup(x[0], x[3], x[1]); }
+  function openSetting(x) { ui.wiz = null; if (x[0] === 'ai' && !SR.v && /sr-/.test(x[3])) SR.focus = x[3]; openSetup(x[0], x[3], x[1]); }
   /* Setup home's "Find a setting" (the results update as you type; Enter opens the first) */
   function setFind() {
     var list = h('ul', { class: 'sfind-l', id: 'sfind-l', 'aria-live': 'polite' });
@@ -4589,11 +4595,13 @@
       SR.v = r; SR.err = null; renderSorting(focusSel);
     }, function (e) { if (seq !== SR.seq || ui.view !== 'sorting') return; SR.err = e.message; renderSorting(focusSel); });
   }
-  function srAfter(r, focusSel, said) { SR.v = r; SR.wrong = null; SR.said = said || ''; renderSorting(focusSel); }
+  function srAfter(r, focusSel, said) { SR.v = r; SR.at = Date.now(); SR.wrong = null; SR.said = said || ''; srRender(focusSel); }
+  /* 0.9.0: the settings, the health line and What it learned live in Setup › AI; Check the sorting keeps its page */
+  function srRender(focusSel) { if (ui.view === 'sorting') renderSorting(focusSel); else if (inPlace('ai')) renderSetup(focusSel); }
   function srCheck(v) {
     var c = v.check, items = c.items || [], err = errBox(), names = c.names || {};
     var pips = h('div', { class: 'srpips', 'aria-hidden': 'true' }, Array.apply(null, Array(c.per_day)).map(function (_, i) { return h('i', { class: i < c.done ? 'on' : '' }); }));
-    var head = [h('h2', { id: 'sr-ch' }, 'Check the sorting'), h('p', { class: 'note' }, 'Is each label right? Up to ' + c.per_day + ' a day; only the counts are kept.')];
+    var head = [h('h2', { id: 'sr-ch' }, 'Today'), h('p', { class: 'note' }, 'Is each label right? Up to ' + c.per_day + ' a day; only the counts are kept.')];  /* 0.9.0: the page's title says Check the sorting */
     if (!items.length) {
       return h('section', { class: 'srsec srcheck', 'aria-labelledby': 'sr-ch' }, head.concat([pips,
         h('p', { class: 'srdone', role: 'status', tabindex: '-1', 'data-fk': 'sr-done' }, c.done >= c.per_day ? 'That’s today’s ' + c.per_day + '. Thank you.' : c.done ? 'All checked for now. Thank you.' : 'Nothing to check yet. Labels show up here after the next refresh.')]));
@@ -4678,9 +4686,9 @@
       SR.adv = !SR.adv; adv.setAttribute('aria-expanded', String(SR.adv)); advP.hidden = !SR.adv;
     });
     var line = plural(st.waiting, 'item', 'items') + ' waiting · today ' + st.today.cards + ' sorted' + (st.capped ? ' · today’s limit reached' : '') +
-      (st.server ? '' : ' · needs a local model server (Setup: Writing)');
+      (st.server ? '' : ' · needs a local model server (Advanced › Model server)');
     return h('section', { class: 'srsec srset', 'aria-labelledby': 'sr-st' }, [
-      h('h2', { id: 'sr-st' }, 'Sorting'), seg, h('p', { class: 'note' }, SR_MODE_NOTE[s.mode] || ''), err,
+      h('h2', { class: 'h3', id: 'sr-st', tabindex: '-1' }, 'Sorting'), seg, h('p', { class: 'note' }, SR_MODE_NOTE[s.mode] || ''), err,
       s.mode === 'off' ? null : h('p', { class: 'muted srstat' }, line),
       s.mode === 'off' ? null : h('p', { class: 'muted srstat' }, srNight(st, s.backfill)),
       adv, advP]);
@@ -4688,16 +4696,16 @@
   function renderSorting(focusSel) {
     var v = SR.v, body;
     if (!v) body = [SR.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the sorting (' + SR.err + ').') : h('p', { class: 'muted' }, 'Loading…')];
-    else body = [lmHealth(v) /* 0.8.5 server faults */, v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v),
-      v.settings.mode === 'off' ? null : srLearned(v)];  /* 0.8.5 What it learned */
+    /* 0.9.0: this page is Check the sorting; the settings, the health line and What it learned are in Setup › AI */
+    else body = v.settings.mode === 'off' ? [h('p', { class: 'note' }, 'Sorting is off. Turn it on in Setup, AI.')] : [srCheck(v), srCounts(v)];
     var mode = v ? v.settings.mode : null;
     var sheet = h('div', { class: 'sheet wiz aisort' }, [
       h('div', { class: 'mast two' }, [
-        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'sr-title', tabindex: '-1' }, 'AI sorting')]),
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup › AI'), h('h1', { id: 'sr-title', tabindex: '-1' }, 'Check the sorting')]),
         h('div', { class: 'box call' }, mode === 'shadow' ? [h('div', { class: 'label' }, 'Shadow week'), h('div', { class: 'disp' }, 'Day ' + Math.min(v.shadow_day, 99))]
           : [h('div', { class: 'label' }, 'Sorting'), h('div', { class: 'disp' }, mode === 'on' ? 'On' : mode === 'off' ? 'Off' : '–')])]),
       h('section', { class: 'step', 'aria-labelledby': 'sr-title' }, body),
-      h('div', { class: 'wnav' }, [btn('btn', 'Back: Setup', null, function () { ui.step = 0; location.hash = 'setup'; })])]);
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: AI', null, function () { openSetup('ai', '[data-fk="sr-check-open"]'); })])]);
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
@@ -4706,15 +4714,40 @@
     var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
     if (f) f.focus({ preventScroll: focusSel === '#sr-title' });
   }
-  /* Setup home's card */
-  function srHomeCard() {
+  /* 0.9.0: Setup home's AI summary line */
+  function srHomeLine() {
     var s = S && S.sorting;
-    var line = !s ? 'Labels for mail, Slack and Signal' : s.mode === 'shadow' ? 'Shadow week: day ' + s.shadow_day + ' of ' + s.shadow_days + ' · ' + plural(s.checked_week, 'check', 'checks') + ' this week'
-      : s.mode === 'on' ? 'On' + (s.right_pct != null ? ' · ' + s.right_pct + '% right this week' : '') : 'Off';
-    return h('section', { class: 'scard srcard-home', 'aria-labelledby': 'sh-sr' }, [
-      h('h2', { class: 'h3', id: 'sh-sr' }, 'AI sorting'),
-      h('ul', { class: 'ln' }, [h('li', null, line)]),
-      btn('btn sm', 'Open', { 'aria-label': 'Open AI sorting', 'data-fk': 'home:sorting' }, function () { location.hash = 'sorting'; })]);
+    return !s ? 'Sorting: labels for mail, Slack and Signal' : s.mode === 'shadow' ? 'Sorting: shadow week, day ' + s.shadow_day + ' of ' + s.shadow_days
+      : s.mode === 'on' ? 'Sorting on' + (s.right_pct != null ? ' · ' + s.right_pct + '% right this week' : '') : 'Sorting off';
+  }
+  /* 0.9.0: Setup › AI › Sorting (sortingSlot): the health line (0.8.5), the settings (0.8.4), the Check the sorting
+     link and What it learned (0.8.5). GET api/sorting when the place opens (again after a minute). */
+  function srSetupLoad() {
+    var seq = ++SR.seq;
+    SR.loading = true;
+    function done() {
+      SR.at = Date.now();
+      if (!inPlace('ai')) return;
+      var fs = SR.focus; SR.focus = null;
+      var ae = document.activeElement, fk = ae && ae.getAttribute && ae.getAttribute('data-fk');
+      renderSetup(fs || (fk ? '[data-fk="' + cssq(fk) + '"]' : null));
+    }
+    return api('GET', 'api/sorting').then(function (r) { SR.loading = false; if (seq !== SR.seq) return; SR.v = r; SR.err = null; done(); },
+      function (e) { SR.loading = false; if (seq !== SR.seq) return; SR.err = e && e.message ? e.message : 'error'; done(); });
+  }
+  function sortingBlock() {
+    if (!SR.loading && (!SR.at || Date.now() - SR.at > 60000)) srSetupLoad();
+    var v = SR.v;
+    if (!v) {
+      return h('section', { class: 'where aisort', 'aria-labelledby': 'sr-st' }, [h('h2', { class: 'h3', id: 'sr-st' }, 'Sorting'),
+        SR.err ? h('p', { class: 'err', role: 'alert' }, ['Couldn’t load the sorting (' + SR.err + '). ',
+          btn('tbtn', 'Try again', { 'data-fk': 'sr-retry' }, function () { SR.err = null; SR.at = 0; renderSetup('[data-fk="sr-retry"]'); })]) : h('p', { class: 'muted' }, 'Loading…')]);
+    }
+    var off = v.settings.mode === 'off', c = v.check || {};
+    var check = off ? null : h('div', { class: 'lrow srcheck-l' }, [
+      h('span', null, [h('b', null, 'Check the sorting'), h('span', { class: 'muted' }, ' · ' + (c.done || 0) + ' of ' + (c.per_day || 10) + ' today')]),
+      btn('btn sm', 'Open', { 'data-fk': 'sr-check-open', 'aria-label': 'Open Check the sorting' }, function () { location.hash = 'sorting'; })]);
+    return h('div', { class: 'where aisort' }, [lmHealth(v), sortSettings(v), check, off ? null : srLearned(v)]);
   }
   /* the brief (only when sorting is on: B.sorting is absent otherwise) */
   function srRow(r) { return B && B.sorting && B.sorting.on && B.sorting.rows ? B.sorting.rows[r.id] || null : null; }
@@ -4794,6 +4827,22 @@
     }
     return h('div', { class: 'srsecs' }, out);
   }
+  /* 0.9.0: the open replies in the brief's section order (Needs you, For your info, Sorted for you) when sorting is on;
+     rows the server didn't place count as Needs you, as in srSections. null when sorting is off. */
+  function srSplit(rs) {
+    var secs = B && B.sorting && B.sorting.on && Array.isArray(B.sorting.sections) ? B.sorting.sections : null;
+    if (!secs) return null;
+    var by = {}, placed = {}, out = { need: [], fyi: [], sorted: [] };
+    rs.forEach(function (r) { by[r.id] = r; });
+    function pick(ids, to) { (ids || []).forEach(function (id) { if (by[id] && !placed[id]) { placed[id] = 1; to.push(by[id]); } }); }
+    secs.forEach(function (sc) {
+      if (sc.id === 'needs_you') pick(sc.rows, out.need);
+      else if (sc.id === 'for_your_info') pick(sc.rows, out.fyi);
+      else if (sc.id === 'sorted') (sc.parts || []).forEach(function (pt) { if (SR_PART[pt.id]) pick(pt.rows, out.sorted); });
+    });
+    out.need = out.need.concat(rs.filter(function (r) { return !placed[r.id]; }));
+    return out;
+  }
   function srUnfix(u) {
     run([], null, function () { return api('DELETE', 'api/sorting/fix/' + encodeURIComponent(u.id)); }, function () {
       var x = B && B.sorting && B.sorting.rows ? B.sorting.rows[u.rid] : null;
@@ -4843,7 +4892,7 @@
   }
   function srLearned(v) {
     var L = v.learned || {}, items = L.items || [], err = errBox();
-    var head = [h('h2', { id: 'sr-ln', tabindex: '-1' }, 'What it learned'),
+    var head = [h('h2', { class: 'h3', id: 'sr-ln', tabindex: '-1' }, 'What it learned'),
       h('p', { class: 'note' }, 'From your fixes, checks and Done. Two of the same for one sender, and none against, sorts their items that way.')];
     if (!items.length) return h('section', { class: 'srsec srlearn', 'aria-labelledby': 'sr-ln' }, head.concat([h('p', { class: 'muted' }, 'Nothing yet.')]));
     function forget(btns, body, said) {
@@ -4862,8 +4911,8 @@
     var all = LN.sure
       ? h('div', { class: 'btns', role: 'group', 'aria-label': 'Forget everything it learned?' }, [
         btn('btn', 'Forget all ' + items.length, { 'data-fk': 'ln-all-yes' }, function () { forget([].slice.call(all.querySelectorAll('button')), { all: true }); }),
-        btn('tbtn', 'Cancel', { 'data-fk': 'ln-all-no' }, function () { LN.sure = false; renderSorting('[data-fk="ln-all"]'); })])
-      : h('div', { class: 'btns' }, [btn('tbtn', 'Forget all', { 'data-fk': 'ln-all' }, function () { LN.sure = true; renderSorting('[data-fk="ln-all-yes"]'); })]);
+        btn('tbtn', 'Cancel', { 'data-fk': 'ln-all-no' }, function () { LN.sure = false; srRender('[data-fk="ln-all"]'); })])
+      : h('div', { class: 'btns' }, [btn('tbtn', 'Forget all', { 'data-fk': 'ln-all' }, function () { LN.sure = true; srRender('[data-fk="ln-all-yes"]'); })]);
     return h('section', { class: 'srsec srlearn', 'aria-labelledby': 'sr-ln' }, head.concat([list, all, err]));
   }
   /* ---------- end 0.8.5 Learning ---------- */
@@ -5956,9 +6005,13 @@
     var inv = invites().filter(function (v) { return v.status !== 'cancelled' && !!invAnswer(v); }).length;
     if (!rs.length && !clashes.length && !next && !inv) return null;
     var vips = rs.filter(function (r) { var x = reasonOf(r); return x && x[0] === 'vip'; }).length;
+    var need = srSplit(rs);  /* sorting on: count what needs you; the rest waits in its section */
+    need = need ? need.need.length : null;
     var name = S && S.settings && S.settings.name ? S.settings.name.split(' ')[0] : '';
     var hello = new Date().getHours() < 12 ? 'Good morning' + (name ? ', ' + name : '') + '.' : 'Start your day';
-    var bits = [rs.length ? [h('b', { class: 'disp' }, String(rs.length)), ' ' + (rs.length === 1 ? 'reply' : 'replies') + (vips ? ', ' + vips + ' from VIPs' : '')] : null,
+    var bits = [need != null && rs.length ? (need ? [h('b', { class: 'disp' }, String(need)), ' need' + (need === 1 ? 's' : '') + ' you' + (vips ? ', ' + vips + ' from VIPs' : '') + (rs.length > need ? ' · ' + (rs.length - need) + ' more sorted' : '')]
+        : ['Nothing needs you · ' + rs.length + ' sorted'])
+      : rs.length ? [h('b', { class: 'disp' }, String(rs.length)), ' ' + (rs.length === 1 ? 'reply' : 'replies') + (vips ? ', ' + vips + ' from VIPs' : '')] : null,
       clashes.length ? [h('b', { class: 'disp' }, String(clashes.length)), ' ' + (clashes.length === 1 ? 'clash' : 'clashes') + (clashes[0].time ? ' at ' + clashes[0].time : '')] : null,
       next ? ['Next ', h('b', null, next.time || ''), ' ' + (next.title || '')] : null,
       inv ? [h('b', { class: 'disp' }, String(inv)), ' ' + (inv === 1 ? 'invite' : 'invites') + ' to answer'] : null].filter(Boolean);
@@ -5995,7 +6048,8 @@
   }
   function oatStart() {
     var later = laterIds();
-    var ids = openReplies().map(function (r) { return r.id; }).filter(function (id) { return later.indexOf(id) < 0; });
+    var sp = srSplit(openReplies());  /* sorting on: Needs you first, then For your info, then Sorted for you */
+    var ids = (sp ? sp.need.concat(sp.fyi, sp.sorted) : openReplies()).map(function (r) { return r.id; }).filter(function (id) { return later.indexOf(id) < 0; });
     U.oat = { ids: ids, n: ids.length, cur: ids[0] || null, t0: Date.now() };
     U.open = null; U.pop = null; U.kcur = null;
     save(KEY_START, todayKey());
@@ -6017,7 +6071,7 @@
     var main1 = d ? h('button', { type: 'button', class: 'btn primary', 'data-oat': 'c', 'aria-keyshortcuts': 'C' }, ['Copy draft', h('kbd', { 'aria-hidden': 'true' }, 'C')])
       : link ? h('button', { type: 'button', class: 'btn primary', 'data-oat': 'o', 'aria-keyshortcuts': 'O' }, ['Open in ' + srcName(r), h('kbd', { 'aria-hidden': 'true' }, 'O')]) : null;
     var card = h('article', { class: 'oatcard', 'aria-labelledby': 'oat-h', 'data-oatcard': id }, [
-      h('div', { class: 'oatmeta' }, [h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))), tagOf(r.area), vip ? h('span', { class: 'tag vip' }, 'VIP') : null,
+      h('div', { class: 'oatmeta' }, [h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))), tagOf(r.area), vip ? h('span', { class: 'tag vip' }, 'VIP') : null, srMark(r) /* 0.8.4 */,
         h('span', { class: 'age' }, waitShort(r) || ageOf(r))]),
       h('h2', { class: 'oatwho', id: 'oat-h', tabindex: '-1' }, r.who),
       h('p', { class: 'oatwant' }, gistSum(r)),

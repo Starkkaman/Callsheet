@@ -303,7 +303,7 @@ class Actions(L):
         self.assertEqual(app.handle("POST", "sorting/forget", {"all": True})["learned"]["items"], [])
         with self.assertRaises(api.InputError):
             app.handle("POST", "sorting/forget", {"id": "x"})
-        self.assertEqual(api.APP_VERSION, "0.8.5")
+        self.assertTrue(api.APP_VERSION)  # 0.9.0 pins the current version (test_design_090)
 
 
 class PageStatic(unittest.TestCase):

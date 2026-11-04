@@ -1,8 +1,21 @@
 # Changelog
 
-## 0.9.0 ("Next release": Setup in four places, Find or ask, One at a time)
+## 0.9.0 (AI sorting, Learning, Setup in four places, Find or ask, One at a time)
 
-Page only: the writer, its instructions, the safety rules and every server setting work as before.
+This release brings 0.8.4 ("AI sorting") and 0.8.5 ("Learning"), described below, together with a calmer page. In
+short: your local model can sort mail, Slack and Signal into **Needs you**, **For your info** and **Sorted for you**
+(a shadow week first, nothing ever hidden), it learns from your fixes, a broken model server is noticed and left
+alone, and Setup, finding things and working through replies are simpler. The writer, its instructions and the
+safety rules work as before.
+
+- **Sorting lives in Setup → AI**: **Sorting** (Off, Shadow week, On, with its own closed Advanced part for the
+  model, items a day and night reading), "Local model unhealthy since ..." with **Check again** when the model server
+  is broken, **Check the sorting** (opens its page: up to ten items a day, **Right** or **Wrong**, the week's counts
+  and **Copy the numbers**) and **What it learned** with **Forget**. Setup's home page shows the sorting's state on
+  the AI card, and **Find a setting** and **Find or ask** know every sorting setting.
+- **When sorting is on**, **One at a time** walks **Needs you** first, then For your info, then Sorted for you, and
+  **Start your day** counts what needs you (the rest waits in its section). A sorted row's mark (Promo, Automated
+  update, Probably not for you) shows on its One at a time card too.
 
 - **Setup in four places**: **Connections** (Google, Slack, Signal, notes folders, GitHub; areas as chips; one line
   per account saying what it reads, with **Change** for its switches and calendars), **Your day** (name, time zone,

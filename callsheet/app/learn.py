@@ -15,7 +15,7 @@ per person (People) and per domain.
 - Applied after the model's label (`apply_prior`, deterministic, read time): it may move a row between groups, but
   never out of Needs you when an override or the rules' sure reply put it there, never moves security or invites,
   and never hides anything (every row stays in exactly one section).
-- Setup -> AI sorting -> What it learned lists every sender, person and domain with its counts; Forget and Forget all
+- Setup -> AI -> Sorting -> What it learned lists every sender, person and domain with its counts; Forget and Forget all
   delete the events."""
 import re
 import time

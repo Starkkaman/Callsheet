@@ -58,7 +58,10 @@ class Design090(unittest.TestCase):
     def test_ai_place_has_plain_presets_and_a_sorting_slot(self):
         ai = func(self.js, "placeAI")
         self.assertIn("sortingSlot()", ai)
-        self.assertIn("typeof sortingBlock === 'function' ? sortingBlock() : null", self.js)
+        self.assertIn("return sortingBlock();", func(self.js, "sortingSlot"))     # the 0.8.4/0.8.5 merge
+        sb = func(self.js, "sortingBlock")
+        for part in ("lmHealth(v)", "sortSettings(v)", "srLearned(v)", "'sr-check-open'", "location.hash = 'sorting'"):
+            self.assertIn(part, sb)
         wb = func(self.js, "writerBlock")
         for word in ("'Off'", "'On this box'", "'Claude'"):
             self.assertIn(word, wb)
@@ -219,6 +222,28 @@ class Design090(unittest.TestCase):
         self.assertNotRegex(self.js, r"api\('[A-Z]+', '/")
         self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}\b", self.block), "use theme tokens, not hex colours")
         self.assertNotRegex(self.block, r"rgba?\(|hsl\(")
+
+    # ----- the 0.8.4/0.8.5 merge: sorting in the AI place, the index, One at a time and Start your day -----
+    def test_sorting_merged_into_the_ai_place(self):
+        block = self.js[self.js.index("var SETTINGS = ["):self.js.index("function setWhere(")]
+        for key in ("'sorting.mode'", "'sorting.model'", "'sorting.day_cards'", "'sorting.backfill'", "'sorting.learned'"):
+            self.assertIn(key, block)
+        for label in ("'AI sorting'", "'Check the sorting'", "'What it learned'", "'Local model health'"):
+            self.assertIn("['ai', null, " + label, block)
+        rs = func(self.js, "renderSorting")
+        self.assertNotIn("sortSettings(", rs)                 # each setting in one place: Setup › AI
+        self.assertNotIn("srLearned(", rs)
+        self.assertIn("'Back: AI'", rs)
+        self.assertIn("srHomeLine()", func(self.js, "placeLines"))
+        self.assertNotIn("srHomeCard", self.js)
+        self.assertIn("inPlace('ai')", func(self.js, "srRender"))
+
+    def test_sorting_order_in_one_at_a_time_and_start(self):
+        sp = func(self.js, "srSplit")
+        self.assertIn("out.need.concat(rs.filter(function (r) { return !placed[r.id]; }))", sp)   # nothing dropped
+        self.assertIn("sp.need.concat(sp.fyi, sp.sorted)", func(self.js, "oatStart"))
+        self.assertIn("srSplit(rs)", func(self.js, "startCard"))
+        self.assertIn("srMark(r)", func(self.js, "oatView"))
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")

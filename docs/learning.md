@@ -65,7 +65,7 @@ pinned and was measured as is (0.8.3 screen), a change can't be measured here wi
 example built from synthetic templates carries no sender signal that the priors don't already give,
 deterministically and after the model. The request body is unchanged (tested).
 
-## What it learned (Setup -> AI sorting)
+## What it learned (Setup → AI → Sorting, 0.9.0)
 
 A self-contained block (`srLearned` in app.js, `.ln*` in app.css, their own `0.8.5 Learning` sections). Each sender,
 person and domain with its counts per label and what it learned ("Not sure yet" below the threshold), newest

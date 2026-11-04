@@ -49,7 +49,7 @@ fallback are unchanged).
   the night step return `unhealthy` without sending.
 - **Chat**: "The local model isn't working right now. Try again in a few minutes." (with Try again); nothing of the
   garbage is stored or goes into history.
-- **Setup -> AI sorting**: "Local model unhealthy since 14:05" (the owner's time format; with the date when it isn't
+- **Setup → AI → Sorting** (0.9.0): "Local model unhealthy since 14:05" (the owner's time format; with the date when it isn't
   today) and **Check again**, which runs the probe now (`POST api/sorting/model-check`, returns the sorting view; 409
   when Callsheet's own requests keep the server busy for 30 s). `GET api/sorting` has `local_health`:
   `{healthy: true}` or `{healthy: false, since, since_text, next_check}`. No addresses or keys.

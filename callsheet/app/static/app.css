@@ -2375,3 +2375,5 @@ html.fa-lock{overflow:hidden}
 .bv .startday .btn:not(.primary){background:transparent;color:var(--on-panel);box-shadow:inset 0 0 0 var(--rule-w) currentColor}
 @media (max-width:700px){.bv .startday{padding:16px}.bv .sd-go .btn{flex:1 1 auto}.rail button{min-width:56px;justify-content:center}}
 @media (prefers-reduced-motion:reduce){.bv .oatcard,.bv .oathead .bar i{transition:none}}
+/* the 0.8.4/0.8.5 merge: AI › Sorting's Check the sorting row */
+.aisort .srcheck-l{margin:0 0 32px}

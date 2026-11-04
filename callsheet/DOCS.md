@@ -456,7 +456,8 @@ Pick a look under **Look** in the header or in Setup > About you.
 
 - **Setup** has four places: **Connections** (accounts and areas), **Your day** (name, time zone, brief times and
   their days, phone alerts, VIPs, "needs a reply after", look and sound), **AI** (who writes, Careful or Fast, Chat,
-  Memory, Get to know me, People) and **Advanced** (closed until you open a part: Google sign-in key, model server,
+  Memory, Get to know me, People, and Sorting: its mode, the local model's health, **Check the sorting** and **What
+  it learned**) and **Advanced** (closed until you open a part: Google sign-in key, model server,
   presets, chat engine, alert limits, writing instructions and safety rules, memory file, writer evaluation, Signal
   history import, clearing chats or memory). Setup's home page sums up each place; **Find a setting** finds any of
   them. Old Setup links still work and open the matching place.
@@ -466,7 +467,7 @@ Pick a look under **Look** in the header or in Setup > About you.
 - **One at a time** (Replies): one reply at a time with its draft. **C** copy, **O** open, **D** done, **L** later,
   **N** note, **X** not for me, **Esc** back to the list; on a phone swipe right for done, left for later. Every
   change has **Undo**. **Start your day** on Briefing starts it, once each morning; **Not now** hides the card for
-  the day.
+  the day. When AI sorting is on, it walks **Needs you** first and the card counts what needs you.
 - **Compact or Comfortable** (Replies, or Your day → Look and sound) is kept on this device, like the sound and
   "Chat on this device".
 
@@ -513,7 +514,7 @@ Pick a look under **Look** in the header or in Setup > About you.
   again in a minute.
 - "The local model isn't healthy right now, so this brief was made by the rules": the model server sent garbage
   or an internal error. Callsheet leaves it alone for 15 minutes, then checks it with a short answer. Restart the
-  model server if it keeps happening; **Check again** on Setup -> AI sorting checks it at once.
+  model server if it keeps happening; **Check again** in Setup → AI → Sorting checks it at once.
 - "Couldn't reach the local model": check the Server URL and that the server is running; **Test
   connection** should list your model.
 - "The Anthropic API key was refused": create a new key and save it again.
