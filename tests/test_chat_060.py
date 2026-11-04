@@ -825,7 +825,7 @@ class PageTest(unittest.TestCase):
                      "data-cnew", "data-cclear", "'Back to chat'", "rel: 'noopener noreferrer'"):
             self.assertIn(name, self.chat)
         self.assertIn("if (U.open.kind === 'item') return itemPanel();", self.js)
-        self.assertIn("chatBlock(), writingBlock()", self.js)
+        self.assertIn("['chat', 'Chat engine', function () { return chatBlock('adv'); }]", self.js)  # 0.9.0: Setup > Advanced
         css = self.css[self.css.index("/* 0.6.0 chat"):]
         self.assertNotRegex(css, r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(")  # design tokens only
 

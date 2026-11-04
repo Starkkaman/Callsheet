@@ -452,6 +452,24 @@ Pick a look under **Look** in the header or in Setup > About you.
   setting.
 - The fonts are bundled (latin letters only) and only the current look's fonts are loaded.
 
+## Setup and finding things (0.9.0)
+
+- **Setup** has four places: **Connections** (accounts and areas), **Your day** (name, time zone, brief times and
+  their days, phone alerts, VIPs, "needs a reply after", look and sound), **AI** (who writes, Careful or Fast, Chat,
+  Memory, Get to know me, People) and **Advanced** (closed until you open a part: Google sign-in key, model server,
+  presets, chat engine, alert limits, writing instructions and safety rules, memory file, writer evaluation, Signal
+  history import, clearing chats or memory). Setup's home page sums up each place; **Find a setting** finds any of
+  them. Old Setup links still work and open the matching place.
+- **Urgent checks** run on the days picked in their own row under Brief times (the old working days).
+- **Find or ask**: press **Ctrl+K**, **⌘K** or **/** (or **Find** in the header) and type a name, a setting or a
+  question. **Enter** opens the first result; "Ask: …" sends the text to Chat. It only reads, copies and opens.
+- **One at a time** (Replies): one reply at a time with its draft. **C** copy, **O** open, **D** done, **L** later,
+  **N** note, **X** not for me, **Esc** back to the list; on a phone swipe right for done, left for later. Every
+  change has **Undo**. **Start your day** on Briefing starts it, once each morning; **Not now** hides the card for
+  the day.
+- **Compact or Comfortable** (Replies, or Your day → Look and sound) is kept on this device, like the sound and
+  "Chat on this device".
+
 ## Finding your way (0.7.1)
 
 - **Setup** opens on a home page with each part's current settings and an **Edit** button. Small **?** buttons

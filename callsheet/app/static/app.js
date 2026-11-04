@@ -1,8 +1,9 @@
 /* Callsheet: Daily Brief page + Setup.
-   Hash routes: #brief (default), #setup (the step lives in memory), #eval (the owner-run writer evaluation,
+   Hash routes: #brief (default), #setup and #setup/<place> (0.9.0: connections, day, ai, advanced; old step links
+   map to a place), #eval (the owner-run writer evaluation,
    only when its tools are turned on in Setup, Delivery, Advanced) and #knowme (0.6.0: Get to know me, from Memory).
    Fetches api/brief and api/state (relative URLs: works under the HA ingress prefix). Brief: v3 frame A on desktop,
-   v3 frame B's structure and order under 700px. Setup: v3 setup view, six steps wired to the step-2 API.
+   v3 frame B's structure and order under 700px. Setup: home plus four places, same API as before.
    Data is only ever inserted as text (textContent), never as HTML. */
 (function () {
   'use strict';
