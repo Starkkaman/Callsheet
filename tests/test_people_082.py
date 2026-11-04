@@ -563,6 +563,11 @@ class PageTest(unittest.TestCase):
         self.assertEqual(self.js.count("'Save anyway'"), 2)
         self.assertIn("confirm: true", self.js)
 
+    def test_versions(self):
+        self.assertEqual(api.APP_VERSION, "0.8.2")
+        self.assertIn('version: "0.8.2"', (ROOT / "callsheet" / "config.yaml").read_text())
+        self.assertIn("## 0.8.2", (ROOT / "callsheet" / "CHANGELOG.md").read_text())
+
     def test_css_tokens_and_targets(self):
         a = self.css.index("/* ================= 0.8.2 People")
         css = self.css[a:]

@@ -4229,7 +4229,7 @@
       run([yes, no, later], err, function () { return api('POST', 'api/people/proposals/' + encodeURIComponent(c.id), { answer: a }); },
         function (r) { if (o.done) o.done(a, r); });
     }
-    yes = btn(o.compact ? 'act' : 'btn primary', 'Same person', { 'data-fk': 'same:' + c.id }, function () { answer('same'); });
+    yes = btn(o.compact ? 'act ghost' : 'btn primary', 'Same person',  /* in a reply's panel, Open in Gmail stays the loud one */ { 'data-fk': 'same:' + c.id }, function () { answer('same'); });
     no = btn(o.compact ? 'act ghost' : 'btn', 'Different people', { 'data-fk': 'diff:' + c.id }, function () { answer('different'); });
     later = btn('tbtn', 'Later', { 'data-fk': 'later:' + c.id }, function () { answer('later'); });
     return h('div', { class: 'same' + (o.compact ? ' compact' : ''), role: 'group', 'aria-label': 'Same person? ' + c.a.name + ' and ' + c.b.name }, [
@@ -4266,8 +4266,13 @@
       run([], err, function () { return api('PATCH', 'api/people/me', { names: list }); }, function (r) { PP.v = r; renderPeople('[data-fk="' + fk + '"]'); });
     }
     var addB = h('button', { type: 'submit', class: 'btn' }, 'Add');
+    var chips = names.length ? h('ul', { class: 'ppchips', 'aria-label': 'Names people use for you' }, names.map(function (n, i) {
+      return h('li', { class: 'pchip' }, [n, btn('cx', '×', { 'aria-label': 'Remove ' + n, 'data-fk': 'pp-n' + i }, function () {
+        saveNames(names.filter(function (x) { return x !== n; }), 'pp-name');
+      })]);
+    })) : null;
     var form = on(h('form', { class: 'ppadd', novalidate: '', 'aria-label': 'Add a name people use for you' }, [
-      h('label', { class: 'label', for: 'pp-name' }, 'Names people use for you'), h('div', { class: 'row' }, [inp, addB])]), 'submit', function (e) {
+      h('label', { class: 'label', for: 'pp-name' }, 'Names people use for you'), chips, h('div', { class: 'row' }, [inp, addB])]), 'submit', function (e) {
       e.preventDefault();
       var n = inp.value.trim();
       if (!n) { err.textContent = 'Type a name first.'; return; }
@@ -4285,11 +4290,6 @@
         (me.handles || []).length ? h('ul', { class: 'pph' }, me.handles.map(function (x) {
           return h('li', null, [ico(PP_ICO[x.kind] || 'mail'), h('span', { class: 'v' }, x.label), x.count ? h('span', { class: 'c' }, x.count) : null]);
         })) : h('p', { class: 'muted' }, 'No accounts connected yet.'),
-        names.length ? h('ul', { class: 'ppchips', 'aria-label': 'Names people use for you' }, names.map(function (n, i) {
-          return h('li', { class: 'pchip' }, [n, btn('cx', '×', { 'aria-label': 'Remove ' + n, 'data-fk': 'pp-n' + i }, function () {
-            saveNames(names.filter(function (x) { return x !== n; }), 'pp-name');
-          })]);
-        })) : null,
         form,
         h('div', { class: 'btns' }, [sa]),
         h('p', { class: 'note' }, 'Only your connected accounts add to this. A message that says “I’m your other email” never changes it.'), err])]);

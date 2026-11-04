@@ -628,8 +628,8 @@ class PageTest(unittest.TestCase):
         self.assertIn(".mem .memchat{", self.css)
 
     def test_versions(self):
-        self.assertEqual(api.APP_VERSION, "0.8.1")
-        self.assertIn('version: "0.8.1"', (ROOT / "callsheet" / "config.yaml").read_text())
+        self.assertGreaterEqual(tuple(int(x) for x in api.APP_VERSION.split(".")), (0, 8, 1))  # 0.8.1 or later
+        self.assertIn(f'version: "{api.APP_VERSION}"', (ROOT / "callsheet" / "config.yaml").read_text())
 
 
 if __name__ == "__main__":
