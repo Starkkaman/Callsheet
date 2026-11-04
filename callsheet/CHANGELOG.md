@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.5 ("Learning")
+
+- **AI sorting learns from you**: your fixes (**Needs a reply**, **Not for me**, **This is a promo**), your
+  **Right** / **Wrong** answers on Check the sorting and **Done** on a row in Needs you teach it about that sender,
+  that person (from People) and that mail domain. Two of the same and none against, and their next items are sorted
+  that way; one is never enough.
+- **Only you teach it**: messages can't, however many arrive. It keeps labels and counts only, never message text.
+  Mail whose sender isn't verified, looks like someone else's or uses your name or a VIP's teaches nothing.
+- **Never hides anything, never demotes what always shows**: what it learned can move an item between Needs you,
+  For your info and Sorted for you, but VIPs, people you know writing to you, mail that names you, security alerts,
+  invites and the replies the rules are sure of stay where they are. **Why is this here?** says what you taught it.
+- **A fix moves that item right away**; Undo takes it back, and what it learned with it.
+- **What it learned** (Setup -> AI sorting): every sender, person and domain with its counts, **Forget** for one and
+  **Forget all**. What you taught it fades after 45 days and is gone after 90.
+
 ## 0.8.4 ("AI sorting", the groundwork)
 
 - **AI sorting, in a shadow week first**: after each refresh Callsheet labels new and changed items (mail, also the

@@ -38,6 +38,7 @@ import dates
 import facts
 import ics
 import inject
+import learn
 import rules
 import writer
 
@@ -669,6 +670,7 @@ def build(src, ctx):
                 meta["marks"].append("unverified_invite")
             card["ics"] = True
         meta["from_owner"], meta["from_kind"], meta["you"] = owner, kind, you
+        meta["sender_id"] = addr      # 0.8.5: what the owner's corrections are learned by (memory only)
     elif ch in ("slack", "signal"):
         owner = bool(src.get("owner"))        # the API's user id or Signal's outgoing flag, never the text
         hk = ctx.handles.get((ch, src.get("from_id"))) if src.get("from_id") else None
@@ -695,6 +697,7 @@ def build(src, ctx):
         if ch == "slack" and src.get("bot") and rules.SECURITY.search(text):
             meta["sec"] = {"marks": [], "brand": None, "lure": None}
         meta["from_owner"], meta["from_kind"], meta["you"] = owner, kind, you
+        meta["sender_id"] = str(src.get("from_id") or "").lower()
     else:  # drive
         p = src.get("actor_email") or ""
         kind = "vip" if p in ctx.vips else "known" if p in ctx.known else "new"
@@ -710,6 +713,7 @@ def build(src, ctx):
             src.get("event"), "Edited: ") + str(src.get("doc") or "")
         meta["automated"] = src.get("event") != "comment"
         meta["from_owner"], meta["from_kind"], meta["you"] = False, card["from"]["kind"], you
+        meta["sender_id"] = str(p).lower()
     sents = _sentences(text) or [subject or "(no text)"]
     ids = [f"s{i + 1}" for i in range(len(sents))]
     sents = [s[:MAX_SENT_CHARS] for s in sents]
@@ -1213,6 +1217,7 @@ class Sorter:
         self.log = log
         self._post_fn = post
         self.labels = Labels(store)
+        self.learner = learn.Learner(store, people, clock)   # 0.8.5: the owner's corrections -> priors
         self.lock = threading.Lock()        # one run at a time
         self.plock = threading.Lock()       # the queue's texts and the card cache
         self.pending = Queue(store)         # the work queue: callsheet.db, references only (restart-safe)
@@ -1359,7 +1364,8 @@ class Sorter:
     def _remember(self, key, meta, area):
         self.cache[key] = {"who": meta["who"], "src": meta["ch"], "subject": meta["subject"], "area": area,
                            "sents": {k: ics.defang(v) for k, v in meta["sent_text"].items()},
-                           "flagged": sorted(set(meta["flagged"]) | set(meta["steer"])), "ix": meta.get("ix")}
+                           "flagged": sorted(set(meta["flagged"]) | set(meta["steer"])), "ix": meta.get("ix"),
+                           "sender": meta.get("sender_id") or "", "owner": bool(meta.get("from_owner"))}
         self.cache.move_to_end(key)
         while len(self.cache) > CACHE_MAX:
             self.cache.popitem(last=False)
@@ -1796,7 +1802,7 @@ class Sorter:
         """"Copy the numbers": counts only (no names, subjects, addresses or keys)."""
         s = self.settings()
         c = self.counts()
-        return {"callsheet": "0.8.4", "week": c["week"], "model": s["model"], "prompt": PROMPT_VERSION,
+        return {"callsheet": "0.8.5", "week": c["week"], "model": s["model"], "prompt": PROMPT_VERSION,
                 "mode": s["mode"], "shadow_day": self.shadow_day(s),
                 "counts": {x["label"]: [x["right"], x["wrong"]] for x in c["labels"]},
                 "confusion": c["confusion"], "checked": c["checked"], "security_missed": c["security_missed"]}
@@ -1881,6 +1887,7 @@ class Sorter:
                                  lab["ai_kind"], truth)
         rd["n"] += 1
         self.store._set_meta("sorting_review_day", rd)  # noqa: SLF001
+        self._learn("check_right" if right else "check_wrong", learn.KIND_LABEL.get(truth), key, lab)
         return self.view()
 
     def status(self):
@@ -1901,7 +1908,8 @@ class Sorter:
         return {"settings": {k: s[k] for k in ("mode", "model", "batch", "day_cards", "day_gpu_min", "backfill")},
                 "shadow_day": self.shadow_day(s), "shadow_days": SHADOW_DAYS, "status": self.status(),
                 "check": {"items": items, "done": done, "per_day": CHECK_PER_DAY,
-                          "names": KIND_NAMES}, "counts": self.counts(), "fixes": list(FIXES)}
+                          "names": KIND_NAMES}, "counts": self.counts(), "fixes": list(FIXES),
+                "learned": self.learned_view()}
 
     # the brief (only when sorting is on) -------------------------------------------------------------------------------
     def for_brief(self, brief):
@@ -1910,7 +1918,7 @@ class Sorter:
         s = self.settings()
         if s["mode"] != "on" or brief.get("sample"):
             return
-        rows = {}
+        rows, refs = {}, self.store.brief_refs()
         for r in brief.get("replies") or []:
             key = r.get("key")
             if not isinstance(key, str) or not KEY.fullmatch(key):
@@ -1925,6 +1933,8 @@ class Sorter:
                              "ai_codes": lab["ai_evidence"], "overrides": lab["overrides"], "marks": lab["marks"],
                              "quote": self._quote(c, lab) if lab["status"] == "ai" else None,
                              "fixed": [x["action"] for x in self.labels.corrections(key)][-1:]}
+            row = rows[r["id"]]
+            row["group"], row["learned"] = self.placed(key, lab, row, refs.get(r["id"]))
         brief["sorting"] = {"on": True, "rows": rows, "waiting": len(self.pending), "names": KIND_NAMES,
                             "sections": sections(brief.get("replies") or [], rows)}
 
@@ -1939,12 +1949,82 @@ class Sorter:
         if not lab:
             raise InputError("That item isn't sorted yet.")
         cid = self.labels.correct(key, action, self.clock(), lab, lab["model"], lab["prompt"])
+        self._learn("fix_" + action, learn.FIX_LABEL[action], key, lab, cid)
         return {"id": cid, "action": action}
 
     def unfix(self, cid):
         if not self.labels.uncorrect(int(cid)):
             raise InputError("That correction is already gone.")
+        self.learner.unrecord(cid=int(cid))
         return {"ok": True}
+
+    # 0.8.5 learning: owner actions only ------------------------------------------------------------------------------
+    def _ident(self, key, ref=None):
+        """Who an item is from, by verified fields only: the brief's row reference (the From address, the API's user
+        id, signal-cli's sender) or the sorter's memory of the item. Never the text or a signature."""
+        if ref is None:
+            ref = next((r for r in self.store.brief_refs().values() if isinstance(r, dict) and r.get("key") == key),
+                       None)
+        if ref and ref.get("sender"):
+            label = str((ref.get("labels") or {}).get("sender") or "")
+            name = label.split("<")[0] if "<" in label else ""
+            return self.learner.ident(ref.get("source"), ref.get("sender"), name, ref.get("domain"))
+        c = self.cache.get(key)
+        if c and c.get("sender") and not c.get("owner"):
+            return self.learner.ident(c.get("src"), c.get("sender"), c.get("who"))
+        return None
+
+    def _learn(self, action, label, key, lab, cid=None, ref=None):
+        """Record one owner action (never in off mode; never with a doubt mark). Returns the event id or None."""
+        if self.settings()["mode"] == "off" or label not in learn.LEARNED or not lab:
+            return None
+        try:
+            return self.learner.record(action, label, self._ident(key, ref), key, lab.get("marks") or (), cid)
+        except Exception as e:  # noqa: BLE001 (learning never breaks a fix or a check)
+            self.log(f"Callsheet learning: not recorded ({type(e).__name__})")
+            return None
+
+    def learn_done(self, ref, done):
+        """Done on a reply row (api.set_done): a row the sorter put in Needs you teaches "needs a reply"; Undo takes it
+        back. Rows elsewhere teach nothing (ticking a promo away isn't a label)."""
+        key = (ref or {}).get("key")
+        if not isinstance(key, str) or not KEY.fullmatch(key):
+            return None
+        if not done:
+            return self.learner.unrecord(key=key, action="done")
+        lab = self.labels.get(key)
+        if not lab or lab["grp"] != "needs_you":
+            return None
+        return self._learn("done", "needs_reply", key, lab, None, ref)
+
+    def placed(self, key, lab, row, ref=None):
+        """(group, learned) for one brief row: the owner's own fix of this item, else the prior for its sender,
+        person or domain, applied after the model's label (learn.apply_prior: never demotes an override or the
+        rules' sure reply, never moves security or invites). learned: what the Why panel says, or None."""
+        group = lab["grp"]
+        fixes = self.labels.corrections(key)
+        prior = {"label": learn.FIX_LABEL[fixes[-1]["action"]], "by": "item", "n": 1, "name": ""} \
+            if fixes and fixes[-1]["action"] in learn.FIX_LABEL else None
+        if prior is None:
+            prior = self.learner.prior(self._ident(key, ref))
+        if not prior:
+            return group, None
+        new, how = learn.apply_prior(group, row, prior)
+        if how is None:
+            return group, None
+        return new, {"label": prior["label"], "by": prior["by"], "n": prior["n"], "name": prior["name"], "how": how}
+
+    def learned_view(self):
+        return {"items": self.learner.learned(), "names": learn.NAMES}
+
+    def forget(self, body):
+        if not isinstance(body, dict):
+            raise InputError("Pick what to forget.")
+        if body.get("all") is True:
+            self.learner.forget_all()
+        elif not self.learner.forget(body.get("id")):
+            raise InputError("That's already forgotten.")
+        return self.view()
 
 
 # --- the brief's sections when sorting is on (0.8.4) -------------------------------------------------------------------

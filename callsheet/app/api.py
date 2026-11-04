@@ -42,7 +42,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.8.4"
+APP_VERSION = "0.8.5"
 
 
 class MethodNotAllowed(Exception):
@@ -259,7 +259,10 @@ class App:
                 ("POST", r"sorting/check", self.sorting_check),
                 ("GET", r"sorting/numbers", self.sorting_numbers),
                 ("POST", r"sorting/fix", self.sorting_fix),
-                ("DELETE", r"sorting/fix/(\d{1,12})", self.sorting_unfix)]
+                ("DELETE", r"sorting/fix/(\d{1,12})", self.sorting_unfix),
+                # 0.8.5 learning (learn.py, docs/learning.md): What it learned and Forget
+                ("GET", r"sorting/learned", self.sorting_learned),
+                ("POST", r"sorting/forget", self.sorting_forget)]
 
     @staticmethod
     def _srt(fn, *args):
@@ -289,6 +292,12 @@ class App:
 
     def sorting_unfix(self, _body, cid):
         return self._srt(self.sorter.unfix, cid)
+
+    def sorting_learned(self, _body=None):
+        return self.sorter.learned_view()
+
+    def sorting_forget(self, body):
+        return self._srt(self.sorter.forget, body)
 
     def _sorting_summary(self):
         try:
@@ -899,6 +908,7 @@ class App:
         now_iso = dt.datetime.fromtimestamp(now_ts, tz).isoformat(timespec="seconds")
         refs = self.store.brief_refs()
         ref = refs.get(row_id) if isinstance(row_id, str) else None
+        learn_done = None
         with self.store.lock:
             brief = self.store.cached_brief() or {}
             replies, done_rows = brief.get("replies") or [], brief.get("done") or []
@@ -913,13 +923,20 @@ class App:
                 brief["replies"] = [r for r in replies if r is not row]
                 brief["done"] = done_rows + [dict(row, done_at=now_iso)]
                 self.store.set_cached_brief(brief)
+                learn_done = True
             elif not done:
+                learn_done = False
                 self.store.clear_done([ref["done_key"]], now_ts)
                 if drow is not None:
                     back = {k: v for k, v in drow.items() if k != "done_at"}
                     brief["done"] = [r for r in done_rows if r is not drow]
                     brief["replies"] = sorted(replies + [back], key=lambda r: int(str(r.get("id") or "r0")[1:] or 0))
                     self.store.set_cached_brief(brief)
+        if done is learn_done:   # 0.8.5: Done teaches "needs a reply" (owner action only); Undo takes it back
+            try:
+                self.sorter.learn_done(ref, done)
+            except Exception as e:  # noqa: BLE001 (learning never breaks Done)
+                sys.stderr.write(f"Callsheet learning: Done not recorded ({type(e).__name__})\n")
         return {"ok": True, "done": rules.done_list(brief.get("done"), tz, rules.time_format(s),
                                                     self.store.writer_config()["provider"] != "off")}
 

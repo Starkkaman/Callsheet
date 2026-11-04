@@ -4355,7 +4355,8 @@
   function renderSorting(focusSel) {
     var v = SR.v, body;
     if (!v) body = [SR.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the sorting (' + SR.err + ').') : h('p', { class: 'muted' }, 'Loading…')];
-    else body = [v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v)];
+    else body = [v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v),
+      v.settings.mode === 'off' ? null : srLearned(v)];  /* 0.8.5 What it learned */
     var mode = v ? v.settings.mode : null;
     var sheet = h('div', { class: 'sheet wiz aisort' }, [
       h('div', { class: 'mast two' }, [
@@ -4396,8 +4397,9 @@
       var b = btn('act ghost', f[1], { 'aria-pressed': String(fixed === f[0]) }, function () {
         run([].slice.call(fixes.querySelectorAll('button')), err, function () { return api('POST', 'api/sorting/fix', { key: x.key, action: f[0] }); }, function (res) {
           x.fixed = [f[0]];
-          showToast('Noted: ' + f[1] + '.', 'Callsheet learns from this in a later version.', { kind: 'srfix', id: res.id, rid: r.id }, false, 4000);
+          showToast('Noted: ' + f[1] + '.', 'Do it twice for one sender and Callsheet sorts their items that way.', { kind: 'srfix', id: res.id, rid: r.id }, false, 4000);
           renderBrief('[data-undo]');
+          lnRefetch('[data-undo]');  /* 0.8.5: the row moves to its new section */
         });
       });
       return b;
@@ -4409,7 +4411,8 @@
         x.ai ? h('div', null, [h('dt', null, 'AI'), h('dd', null, names[x.ai] || x.ai)]) : null,
         x.ai ? srCodes(x.ai_codes) : null,
         x.quote ? h('blockquote', { class: 'srquote' }, x.quote) : null,
-        h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + srWhyText(x.why))])]),
+        lnWhy(x),  /* 0.8.5 */
+        h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + (x.learned && x.learned.how === 'prior' ? 'what you taught it.' : srWhyText(x.why)))])]),
       srMarks(x.marks), fixes, err]);
   }
   /* sorting on: the reply rows in sections (B.sorting.sections, built by the server; every row in exactly one). Needs you
@@ -4463,9 +4466,54 @@
       var x = B && B.sorting && B.sorting.rows ? B.sorting.rows[u.rid] : null;
       if (x) x.fixed = [];
       U.toast = null; renderBrief();
+      lnRefetch();  /* 0.8.5 */
     }).catch(function () { });
   }
   /* ---------- end 0.8.4 AI sorting ---------- */
+
+  /* ---------- 0.8.5 Learning: "What it learned" (self-contained block for Setup -> AI sorting; it can move to another
+     Setup page as is) and the Why panel's "You taught it" line. Data: GET api/sorting -> v.learned {items: [{id, kind:
+     sender|person|domain, name, detail, counts: [{label, n}], prior}]}; POST api/sorting/forget {id} or {all: true}
+     returns the view. Labels and counts only, never message text. Data is text (h()). ---------- */
+  var LN_NAME = { needs_reply: 'Needs a reply', fyi: 'For your info', promo: 'Promo', update: 'Automated update', not_for_me: 'Not for you' };
+  var LN_KIND = { sender: 'Sender', person: 'Person', domain: 'Domain' };
+  var LN = { sure: false };
+  function lnRefetch(focusSel) { refetch().then(function () { renderBrief(focusSel); }, function () { }); }
+  function lnWhy(x) {
+    var l = x && x.learned;
+    if (!l || !LN_NAME[l.label]) return null;
+    var what = LN_NAME[l.label].toLowerCase();
+    var t = l.by === 'item' ? 'You marked this: ' + what + '.'
+      : 'You marked ' + (l.by === 'domain' ? 'mail from ' : '') + (l.name || 'this sender') + ' as ' + what + (l.n > 1 ? ' ' + l.n + ' times.' : '.');
+    if (l.how === 'prior_blocked') t += ' It still shows here: VIPs, people you know and replies the rules are sure of always do.';
+    return h('div', null, [h('dt', null, 'You taught it'), h('dd', null, t)]);
+  }
+  function srLearned(v) {
+    var L = v.learned || {}, items = L.items || [], err = errBox();
+    var head = [h('h2', { id: 'sr-ln', tabindex: '-1' }, 'What it learned'),
+      h('p', { class: 'note' }, 'From your fixes, checks and Done. Two of the same for one sender, and none against, sorts their items that way.')];
+    if (!items.length) return h('section', { class: 'srsec srlearn', 'aria-labelledby': 'sr-ln' }, head.concat([h('p', { class: 'muted' }, 'Nothing yet.')]));
+    function forget(btns, body, said) {
+      return run(btns, err, function () { return api('POST', 'api/sorting/forget', body); }, function (r) { LN.sure = false; srAfter(r, '#sr-ln', said); });
+    }
+    var list = h('ul', { class: 'lnlist' }, items.map(function (e) {
+      var counts = (e.counts || []).map(function (c) { return (LN_NAME[c.label] || c.label) + ' ' + c.n; }).join(' · ');
+      var fb = btn('btn sm', 'Forget', { 'aria-label': 'Forget ' + (e.name || 'this'), 'data-fk': 'ln:' + e.id }, function () { forget([fb], { id: e.id }); });
+      return h('li', { class: 'lnrow' }, [
+        h('div', { class: 'lnwho' }, [h('b', null, e.name || 'Someone'), e.detail ? h('span', { class: 'muted' }, e.detail) : null]),
+        h('p', { class: 'lnline' }, [h('span', { class: 'lnkind' }, LN_KIND[e.kind] || ''),
+          e.prior ? h('span', { class: 'lnprior' }, 'Sorts as ' + LN_NAME[e.prior]) : h('span', { class: 'muted' }, 'Not sure yet'),
+          h('span', { class: 'muted' }, counts)]),
+        fb]);
+    }));
+    var all = LN.sure
+      ? h('div', { class: 'btns', role: 'group', 'aria-label': 'Forget everything it learned?' }, [
+        btn('btn', 'Forget all ' + items.length, { 'data-fk': 'ln-all-yes' }, function () { forget([].slice.call(all.querySelectorAll('button')), { all: true }); }),
+        btn('tbtn', 'Cancel', { 'data-fk': 'ln-all-no' }, function () { LN.sure = false; renderSorting('[data-fk="ln-all"]'); })])
+      : h('div', { class: 'btns' }, [btn('tbtn', 'Forget all', { 'data-fk': 'ln-all' }, function () { LN.sure = true; renderSorting('[data-fk="ln-all-yes"]'); })]);
+    return h('section', { class: 'srsec srlearn', 'aria-labelledby': 'sr-ln' }, head.concat([list, all, err]));
+  }
+  /* ---------- end 0.8.5 Learning ---------- */
 
   /* ---------- 0.8.2 People (#people): Same person? cards, You, Everyone, History ----------
      GET api/people; answers POST api/people/proposals/<id> {answer: same|different|later} (into a VIP: needs_confirm

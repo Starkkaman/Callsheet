@@ -657,8 +657,8 @@ class PageTest(unittest.TestCase):
         self.assertIn("confirm: true", self.js)
 
     def test_versions(self):
-        self.assertEqual(api.APP_VERSION, "0.8.4")
-        self.assertIn('version: "0.8.4"', (ROOT / "callsheet" / "config.yaml").read_text())
+        self.assertEqual(api.APP_VERSION, "0.8.5")
+        self.assertIn('version: "0.8.5"', (ROOT / "callsheet" / "config.yaml").read_text())
         self.assertIn("## 0.8.2", (ROOT / "callsheet" / "CHANGELOG.md").read_text())
 
     def test_css_tokens_and_targets(self):

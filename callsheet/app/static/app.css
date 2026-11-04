@@ -2239,3 +2239,19 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
   .srcard .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 }
 /* ================= end 0.8.4 AI sorting ================= */
+/* ================= 0.8.5 Learning (What it learned, a self-contained block on #sorting) =================
+   Tokens only; 44 px targets on phones. */
+.lnlist{display:grid;margin:0;padding:0;list-style:none;max-width:620px}
+.lnrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:12px 0;border-top:var(--rule-w) solid var(--rule)}
+.lnrow:last-child{border-bottom:var(--rule-w) solid var(--rule)}
+.lnwho{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;min-width:0}
+.lnwho b,.lnwho .muted{overflow-wrap:anywhere}
+.lnwho .muted{font-size:var(--fs-sm)}
+.lnline{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font-size:var(--fs-sm);grid-column:1}
+.lnrow>.btn{grid-column:2;grid-row:1 / span 2}
+.lnkind{font-size:var(--fs-xs);font-weight:var(--label-weight);text-transform:var(--label-case);letter-spacing:var(--label-track);color:var(--muted)}
+.lnprior{font-weight:700;color:var(--text)}
+@media (max-width:700px){
+  .lnrow>.btn,.srlearn .btns button{min-height:44px;min-width:44px}
+}
+/* ================= end 0.8.5 Learning ================= */

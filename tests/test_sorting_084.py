@@ -638,7 +638,7 @@ class ApiGate(unittest.TestCase):
             self.app.handle("POST", "sorting/check", {"key": "a" * 16, "right": True})
         self.assertIn("counts", self.app.handle("GET", "sorting/numbers", None))
         self.assertEqual(self.app.state()["sorting"]["mode"], "shadow")
-        self.assertEqual(api.APP_VERSION, "0.8.4")
+        self.assertEqual(api.APP_VERSION, "0.8.5")
 
 
 class Gaps(unittest.TestCase):
