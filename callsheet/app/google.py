@@ -26,7 +26,10 @@ CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"  # 0.6.0: only asked for by "Grant Drive access"
 REDIRECT_URI = "http://127.0.0.1:8765/"
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date", "List-Id", "List-Unsubscribe", "Precedence",
-                    "Auto-Submitted", "Reply-To", "Authentication-Results")  # 0.8.0: Gmail's sender check
+                    "Auto-Submitted", "Reply-To", "Authentication-Results",  # 0.8.0: Gmail's sender check
+                    # 0.9.0: bulk-sender anchors for the sorter's promo rule (triage.bulk_markers; codes only)
+                    "Feedback-ID", "X-Mailgun-Sid", "X-SG-EID", "X-Campaign", "X-CampaignID", "X-MC-User",
+                    "X-Mandrill-User")
 TIMEOUT = 15
 
 

@@ -335,7 +335,9 @@ class SyncTest(Base):
         self.assertEqual(gets[0]["format"], ["metadata"])
         self.assertEqual(gets[0]["metadataHeaders"], ["From", "To", "Cc", "Subject", "Date", "List-Id",
                                                       "List-Unsubscribe", "Precedence", "Auto-Submitted",
-                                                      "Reply-To", "Authentication-Results"])  # 0.8.0
+                                                      "Reply-To", "Authentication-Results",  # 0.8.0
+                                                      "Feedback-ID", "X-Mailgun-Sid", "X-SG-EID", "X-Campaign",
+                                                      "X-CampaignID", "X-MC-User", "X-Mandrill-User"])  # 0.9.0
         ev = [q for m, p, q in reqs if p.endswith("/events")]
         self.assertEqual(len(ev), 1)  # only the selected (primary) calendar
         self.assertEqual((ev[0]["singleEvents"], ev[0]["orderBy"]), (["true"], ["startTime"]))

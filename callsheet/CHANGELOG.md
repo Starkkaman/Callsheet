@@ -52,9 +52,17 @@ safety rules work as before.
   in To are never touched.
 - **Dates only from the AI** (0.9.x): the dates and deadlines the model points at (by sentence, checked against the
   text's own dates) are the only facts used. Decisions and commitments are kept as labels but hidden.
-- **Throughput set to the measured 21-36 cards a minute**: 60 model minutes a day (room for 1,200 cards at the slow
-  end); the night reading runs batches back to back (about 3,800-6,500 cards a night) and picks up where it stopped,
-  for up to 7 nights.
+- **Promos sent in bulk are "not for you"**: when the model calls a mail a promo and the mail carries a bulk-sender
+  header (List-Unsubscribe, Precedence: bulk, a mailing service's own header or Feedback-ID) or the rules already see
+  it as a promo, it's marked not addressed to you. A message that only *says* it's a promo is never touched, and VIPs,
+  people you know writing to you, your name, security alerts, invites and suspicious text still win. On the measured
+  hard set this lifts "is it for you" from 81% to 88% right, with no right answer made wrong.
+- **Sorting stays out of the way**: by day it sorts only new items, 6 at a time (so Chat and Home Assistant never
+  wait more than about 30 seconds), on its own server slot (Chat keeps its slot); it pauses while a Careful (Swift)
+  brief is due within 10 minutes or being written. 60 model minutes a day at most (room for 1,200 cards at the
+  measured 21-36 a minute).
+- **Night reading in two windows**: 22:00-01:00 and 04:00-06:00 by default (the server's own night jobs get the hours
+  between; the windows are settings), 12 at a time, back to back, picking up where it stopped, for up to 7 nights.
 ## 0.8.5 ("Learning")
 
 - **AI sorting learns from you**: your fixes (**Needs a reply**, **Not for me**, **This is a promo**), your

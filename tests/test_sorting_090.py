@@ -235,7 +235,9 @@ class Throughput(unittest.TestCase):
         lo, hi = triage.MEASURED_CPM
         self.assertEqual((lo, hi), (21, 36))
         self.assertGreaterEqual(triage.DAY_GPU_MIN * lo, triage.DAY_CARDS)     # 1,200 cards fit at 21 a minute
-        self.assertTrue(lo <= triage.BATCH / triage.EST_BATCH_S * 60 <= hi)
+        self.assertTrue(lo <= 60 / triage.EST_CARD_S <= hi)
+        self.assertEqual((triage.BATCH, triage.NIGHT_BATCH), (6, 12))
+        self.assertLessEqual(triage.BATCH * triage.EST_CARD_S, 30)           # Chat never waits more than ~30 s
         self.assertEqual(triage.BACKFILL["nights"], 7)
 
 
@@ -253,14 +255,14 @@ class NightResumes(t84.Base):
 
     def test_a_night_runs_batches_back_to_back_and_the_next_night_resumes(self):
         self.sorter._last_ix = self.clock.now()       # no incremental index read in this test
-        self.clock.at(TUE.replace(hour=2))
+        self.clock.at(TUE.replace(hour=23))
         self.sorter._last_ix = self.clock.now()
         self.assertEqual(self.sorter.tick(), "night:ran")
         first = len(self.post.calls)
         self.assertGreater(first, 1)                  # not one batch per 30 s tick
-        self.assertLess(first * triage.BATCH, 40)     # ... but within one run's budget
+        self.assertLess(first * triage.NIGHT_BATCH, 40)   # ... but within one run's budget
         for d in (1, 2, 3):                           # later nights continue from the cursor
-            self.clock.at((TUE + dt.timedelta(days=d)).replace(hour=2))
+            self.clock.at((TUE + dt.timedelta(days=d)).replace(hour=23))
             self.sorter._last_ix = self.clock.now()
             self.sorter.tick()
         st = self.store._get_meta("sorting_backfill")

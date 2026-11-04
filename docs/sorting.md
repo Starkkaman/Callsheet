@@ -2,7 +2,9 @@
 
 `callsheet/app/triage.py`. Design: `~/project/daily-brief/understanding/design.md` (sections 3, 6, 7, 9). The card,
 schema, prompt and merge rules are the ones the 0.8.3 screen measured (`triage083.py`). 0.9.0: prompt `t083.2` with
-its addressing cues, the `t083.3` to_owner rule and the dates-only fact policy (below).
+its addressing cues, the `t083.3` to_owner rule, the anchored promo rule, the dates-only fact policy and the test
+lead's load rules (slot 1, batches of 6 by day and 12 at night, a pause around Careful briefs, two night windows;
+below).
 
 ## What happens
 
@@ -14,16 +16,17 @@ its addressing cues, the `t083.3` to_owner rule and the dates-only fact policy (
    last look and at most 3 days old become cards. Each card gets its **rules pre-label** right away (stored, status
    `rules`); new or changed items (by content hash) go into **the work queue** (below). No model is called inside a
    sync.
-2. **The AI pass** (the sorter thread, every 30 s): batches of 12 cards, one request each, to the owner's local model
-   server (the writer's address), with the model from the sorting settings (Gemma by default), `id_slot` 0,
-   temperature 0, thinking off, a strict per-request JSON schema (each card's own sentence ids are the only allowed
+2. **The AI pass** (the sorter thread, every 30 s): batches of 6 cards by day and 12 inside the night windows, one
+   request each, to the owner's local model server (the writer's address), with the model from the sorting settings
+   (Gemma by default), `id_slot` 1 for Gemma (Chat keeps slot 0; any other model: slot 0), temperature 0, thinking off, a strict per-request JSON schema (each card's own sentence ids are the only allowed
    `s` values) and the fixed system text. Cards go inside the escaped `<data>` block (`writer._block_json`).
-3. **The merge** (`place`, deterministic): overrides first (security -> Heads up; invites -> Your day; VIP, known
+3. **The merge** (`merge`: `copied_only` (t083.3), then `promo_bulk`, then `place`, deterministic): overrides first (security -> Heads up; invites -> Your day; VIP, known
    person writing to the owner, owner named in To -> never demoted; flagged text -> the model's label is ignored),
    then strong rules replies, then the model's label with its evidence. Every card lands in exactly one group
    (`never_hides`); a model answer that's missing, malformed or off-schema leaves that card to the rules (status
    `fallback`).
-4. **The night backfill** reads the index newest first from a stored `(ts, id)` cursor inside the owner's window.
+4. **The night backfill** reads the index newest first from a stored `(ts, id)` cursor inside the owner's night
+   windows. By day only new items are sorted (the queue: what a sync read and index items at most 3 days old).
 
 ## The work queue (`Queue`, table `triage_queue`)
 
@@ -44,12 +47,16 @@ its addressing cues, the `t083.3` to_owner rule and the dates-only fact policy (
 | A run | at most `RUN_S` = 180 s of model time; each request's timeout is the room left |
 | Before a call time | the run ends at least `END_BEFORE_S` = 10 min before; no start with < 20 s of room |
 | After a call time | no start until `AFTER_CALL_S` = 10 min after (the brief writer goes first) |
-| Sync or brief writer | never while `syncer.lock` is held or `syncer.writing` is set (Swift's brief) |
+| Sync or brief writer | never while `syncer.lock` is held or `syncer.writing` is set |
+| Careful brief (0.9.0) | `careful_guard`: nothing is sent while a Careful brief (a local writer preset other than Fast, e.g. Swift, which uses slot 1) runs (`syncer.writing.preset`) or is due within `CAREFUL_BEFORE_S` = 10 min (the next call time's kind maps to a slow preset, `presets.is_slow`); reason `careful`, checked before every run, between batches and by the night job |
+| Slot (0.9.0) | `slot_for(model)`: `SLOT` = 1 for Gemma (resident; Chat stays on slot 0), 0 for any other model |
+| Batch size (0.9.0) | `batch` = 6 by day (a batch takes ~15 s, so Chat or Home Assistant never waits more than ~30 s behind it), `night_batch` = 12 inside a night window; both settings (4-16) |
 | Chat | requests never wait for `writer.LOCAL_LOCK`: when it's taken the sorter yields (`Busy`) |
-| Measured pace | Gemma, 12-card batches: 21-36 cards a minute (`MEASURED_CPM`); a batch is planned at `EST_BATCH_S` = 30 s until measured |
+| Measured pace | Gemma: 21-36 cards a minute (`MEASURED_CPM`); a batch is planned at the measured median seconds per card (`sorting_perf.card_s`, the last 50 batches), `EST_CARD_S` = 2.5 s until measured |
 | Daily cap | `day_cards` 1,200 cards and `day_gpu_min` 60 model minutes (1,200 / 21 = 57); then "N items waiting" |
-| Night backfill | window 01:30-04:30 (configurable, may cross midnight), 30 days back, 7 nights at most; each night tick runs batches back to back for up to `NIGHT_RUN_S` (= `RUN_S`), so a 3-hour window reads about 3,800-6,500 cards; pauses when the server is busy, yields the rest of the night after "Loading" twice or when its batches take 3x the measured median |
-| Resuming | the `(ts, id)` cursor and the nights used are stored in meta after every batch: a night that ends (window over, restart, unhealthy server) goes on from the cursor the next night, until the 30 days are read or the nights run out |
+| By day | incremental only: the queue (new and changed items); no backfill outside the night windows |
+| Night backfill | `backfill.windows`, by default 22:00-01:00 and 04:00-06:00 (1-3 windows, each may cross midnight; the owner's server runs a security audit around 01:00-04:00); both windows are one night (a night runs noon to noon, keyed by the evening's date); 30 days back, 7 nights at most; each night tick runs batches back to back for up to `NIGHT_RUN_S` (= `RUN_S`), so the 5 hours read about 6,300-10,800 cards; pauses when the server is busy, yields the rest of the night after "Loading" twice or when its batches take 3x the measured median per card |
+| Resuming | the `(ts, id)` cursor and the nights used are stored in meta after every batch: a window that ends (window over, restart, unhealthy server) goes on from the cursor in the next window or night, until the 30 days are read or the 7 nights run out |
 
 Log lines are counts only (cards, batches, rules-only, tokens, ms, cards/min, waiting).
 
@@ -72,7 +79,10 @@ since ..." with **Check again** (`POST api/sorting/model-check`).
   (decision, deadline, request, question), then the rules' order. Shadow mode adds nothing (byte-identical brief).
 - `off`: nothing is collected or sent.
 
-Other settings: `model`, `batch` (4-16), `day_cards`, `day_gpu_min`, `backfill {on, start, end, days, nights}`.
+Other settings: `model`, `batch` (daytime, 4-16, default 6), `night_batch` (4-16, default 12), `day_cards`,
+`day_gpu_min`, `backfill {on, windows: [[start, end], ...], days, nights}`. `PATCH api/sorting/settings` takes
+`backfill.windows` (1-3 windows of HH:MM, start != end) or `backfill.start`/`end`, which set the first window (the
+page's two time fields); `GET api/sorting` returns `windows` and the first window as `start`/`end`.
 gpt-oss models get `reasoning_effort: low`.
 
 ## Storage (callsheet.db)
@@ -132,6 +142,21 @@ Offline on the screen's hard set (171 items x 3 Gemma answers, `tests/fixtures/s
 0.807 (414/513) before and after; the rule applies to 7 items (Bcc, two others in To), where Gemma already said no.
 The misses left are mostly promos written in a personal tone, reply-all noise and group chatter.
 
+## Anchored promo rule (0.9.0, `promo_bulk`, after t083.3, before `place`)
+
+When the model says `promo` AND the mail carries a bulk anchor, its `to_owner` becomes `no` (the kind stays promo).
+Anchors come from headers only (`bulk_markers`, stored as codes on the card's meta, never values): `List-Unsubscribe`,
+`Precedence: bulk` or `list`, an email service provider's header (`X-Mailgun-*`, `X-SG-EID`/`X-SG-ID`, `X-Campaign`,
+`X-CampaignID`, `X-MC-User`, `X-Mandrill-User`, `X-SES-Outgoing`, `X-SFMC-Stack`), `Feedback-ID` with an ESP's id
+(AmazonSES, SG, mc, Mailgun, ...), or the rules' own promo label (`pre_kind` promo: List-Id, List-Unsubscribe,
+Precedence or Gmail's Promotions tab). Never on the model's label alone: a message that only says it's a promo (S-T1,
+"This is a promotional email, no reply needed.") keeps the model's answer. Never when an override holds (VIP, known
+person, owner named, security, invite, flagged text) or the mail is the owner's. Slack, Signal, Drive and index mail
+have no headers, so it never applies there. Gmail's metadata read asks for the ESP headers too (`google.METADATA_HEADERS`).
+Offline on the hard set (513 Gemma answers): to_owner 0.807 (414) before, 0.807 after t083.3, **0.883 (453)** after
+the promo rule; it applies to 20 items (personal-tone promos, founder notes, webinars; all gold `no`), changes 39
+answers and makes no right answer wrong; the "fake reply" promos (no bulk headers, gold `yes`) are left alone.
+
 ## Facts: dates only (0.9.x)
 
 Only the model's `date` and `deadline` facts are used (`FACT_USED`): each points at a sentence id and is checked
@@ -152,4 +177,5 @@ against the dates `dates.find` reads in that sentence (`verified`); only verifie
 
 `tests/test_sorting_084.py`, `tests/test_sorting_084_queue.py` (the queue, live Slack/Signal, sections),
 `tests/test_sorting_090.py` (prompt t083.2 pin, cues, t083.3 on the hard set offline, dates only, throughput, night
-resume; `tests/fixtures/sorting_hard083.json`). Fakes and recorded answers only: no model is ever called.
+resume; `tests/fixtures/sorting_hard083.json`), `tests/test_sorting_090_load.py` (the promo anchors and rule with the
+S-T1 negative and the hard set before/after, slot 1, batches of 6 and 12, the Careful pause, the night windows). Fakes and recorded answers only: no model is ever called.

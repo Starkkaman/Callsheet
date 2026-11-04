@@ -139,7 +139,8 @@ class PromptAndSchema(unittest.TestCase):
         self.assertEqual(user.count("</data>"), 1)          # only the closing tag Callsheet writes
         self.assertTrue(user.rstrip().endswith("exactly these keys: c1."))
         self.assertNotIn("<system>", user)
-        self.assertEqual(body["id_slot"], 0)
+        self.assertEqual(body["id_slot"], 1)             # 0.9.0: Gemma sorts on slot 1, Chat keeps slot 0
+        self.assertEqual(triage.request_body("Qwen3.5-9B-Q8_0", cards, "x", TUE.date(), "UTC")["id_slot"], 0)
         self.assertEqual(body["temperature"], 0)
         self.assertEqual(body["model"], "gemma-4-26b-a4b-it-qat-q4_0")
         self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
@@ -476,14 +477,15 @@ class Backfill(Base):
         self.sorter.index = self.index
         self.sorter.update_settings({"backfill": {"days": 30, "nights": 2}})
 
-    def night(self, h=2, m=0, day=TUE):
+    def night(self, h=23, m=0, day=TUE):   # 0.9.0: windows 22:00-01:00 and 04:00-06:00
         self.clock.at(day.replace(hour=h, minute=m))
 
     def test_only_inside_the_window(self):
         self.clock.at(TUE.replace(hour=10))
         self.assertEqual(self.sorter.backfill_step(), "outside")
-        self.night(4, 31)
-        self.assertEqual(self.sorter.backfill_step(), "outside")
+        for h, m in ((2, 0), (3, 59), (6, 0), (21, 59), (1, 0)):   # the security audit's hours, and after 06:00
+            self.night(h, m)
+            self.assertEqual(self.sorter.backfill_step(), "outside", (h, m))
         self.sorter.update_settings({"backfill": {"start": "23:00", "end": "02:00"}})
         self.night(1, 0)
         self.assertEqual(self.sorter.night_of(self.sorter._now(), self.sorter.settings()), TUE.date() - dt.timedelta(1))
@@ -492,7 +494,7 @@ class Backfill(Base):
         self.night()
         self.assertEqual(self.sorter.backfill_step(), "ran")
         st = self.store._get_meta("sorting_backfill")
-        self.assertEqual(st["done_n"], triage.BATCH)
+        self.assertEqual(st["done_n"], triage.NIGHT_BATCH)
         self.assertEqual(st["total"], 30)
         # a restart: a new Sorter continues from the stored cursor
         post2 = FakePost(self.clock)
@@ -523,14 +525,14 @@ class Backfill(Base):
         self.post.raise_ = writer._Loading("loading")
         self.assertEqual(self.sorter.backfill_step(), "loading")
         self.post.raise_ = None
-        self.night(3, 0)
+        self.night(5, 0, TUE + dt.timedelta(days=1))                 # the same night's second window
         self.assertEqual(self.sorter.backfill_step(), "yielded")      # the rest of this night
         self.assertEqual(self.store._get_meta("sorting_backfill")["done_n"], 0)
-        self.night(2, 0, TUE + dt.timedelta(days=1))
+        self.night(23, 0, TUE + dt.timedelta(days=1))
         self.assertEqual(self.sorter.backfill_step(), "ran")          # next night, from the start
 
     def test_slow_batches_yield_the_night(self):
-        self.store._set_meta("sorting_perf", {"batch_s": [10.0] * 10})
+        self.store._set_meta("sorting_perf", {"card_s": [10.0 / 12] * 10})
         self.post.secs = 45.0
         self.night()
         for _ in range(3):
@@ -542,15 +544,22 @@ class Backfill(Base):
         self.sorter.update_settings({"backfill": {"nights": 1}})
         self.night()
         self.sorter.backfill_step()
-        self.night(2, 0, TUE + dt.timedelta(days=1))
+        self.night(4, 30, TUE + dt.timedelta(days=1))                # the same night's second window goes on
+        self.assertEqual(self.sorter.backfill_step(), "ran")
+        self.night(23, 0, TUE + dt.timedelta(days=1))
         self.assertEqual(self.sorter.backfill_step(), "done")
-        self.assertEqual(self.post.cards(), triage.BATCH)
+        self.assertEqual(self.post.cards(), 2 * triage.NIGHT_BATCH)
 
 
 class ShadowAndPage(Base):
     def labelled(self, n=12, kind_cycle=triage.KINDS):
-        self.post.reply = lambda ids, body: json.dumps(
-            {c: answer(kind_cycle[i % len(kind_cycle)]) for i, c in enumerate(ids)})
+        seen = [0]
+
+        def reply(ids, body):   # the kinds cycle across batches (a daytime batch is 6 cards)
+            out = {c: answer(kind_cycle[(seen[0] + i) % len(kind_cycle)]) for i, c in enumerate(ids)}
+            seen[0] += len(ids)
+            return json.dumps(out)
+        self.post.reply = reply
         self.sorter.collect_sync(self.threads(n))
         self.sorter.run_pass()
 

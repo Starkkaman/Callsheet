@@ -2,8 +2,8 @@
 the night backfill, the "Check the sorting" counts and the owner's corrections. docs/sorting.md has the design.
 
 Model-agnostic: the model is a setting (Gemma by default); every request goes to the owner's local model server (the
-writer's address) with id_slot 0, under writer.LOCAL_LOCK, one batch of BATCH cards at a time. Triage never goes to
-Claude.
+writer's address) with id_slot 1 for Gemma (0.9.0; Chat keeps slot 0), under writer.LOCAL_LOCK, one batch at a time
+(BATCH = 6 cards by day, NIGHT_BATCH = 12 in the night windows). Triage never goes to Claude.
 
 The rules (binding, tests in tests/test_sorting_084.py):
 - The model sees only cards: compact JSON built by Callsheet, inside the escaped <data> block (writer._block_json).
@@ -19,9 +19,10 @@ The rules (binding, tests in tests/test_sorting_084.py):
 - Shadow mode (the default for the first week): labels are computed and stored and shown only on the Check the
   sorting page; the brief doesn't change. The owner turns sorting on.
 - Budget: an incremental run is at most RUN_S (3 minutes), ends at least END_BEFORE_S (10 minutes) before a call
-  time, starts no sooner than AFTER_CALL_S after one, never while a sync or the brief writer runs, and yields to Chat
-  between batches; a daily cap (cards and model minutes). The night backfill runs only inside the owner's window
-  (01:30-04:30 by default), resumes from its cursor and yields when the server is busy.
+  time, starts no sooner than AFTER_CALL_S after one, never while a sync or the brief writer runs, never while a
+  Careful brief (Swift, slot 1) runs or is due within 10 minutes, and yields to Chat between batches; a daily cap
+  (cards and model minutes). By day only new items are sorted; the night backfill runs only inside the owner's
+  night windows (22:00-01:00 and 04:00-06:00 by default), resumes from its cursor and yields when the server is busy.
 """
 import collections
 import datetime as dt
@@ -39,6 +40,7 @@ import facts
 import ics
 import inject
 import learn
+import presets
 import rules
 import writer
 
@@ -85,15 +87,20 @@ MODEL = re.compile(r"[\w.:/+@-]{1,120}")
 
 # --- settings and the budget ----------------------------------------------------------------------------------------
 GEMMA = "gemma-4-26b-a4b-it-qat-q4_0"   # the default: resident on the owner's server (no swaps)
-BATCH = 12
+# 0.9.0 (the test lead): the sorter's llama.cpp slot. Gemma (resident) serves Chat on slot 0 and the sorter on slot 1;
+# the Careful (Swift) brief also uses slot 1, so the sorter pauses around it (`careful_guard`). Other models: slot 0.
+SLOT = 1
+BATCH = 6                  # daytime batch: a batch takes ~15 s, so Chat or Home Assistant never waits more than ~30 s
+NIGHT_BATCH = 12           # inside the night windows (nobody is waiting)
 RUN_S = 180                # an incremental run: at most 3 minutes of model time
 END_BEFORE_S = 10 * 60     # ... ending at least 10 minutes before a call time
 AFTER_CALL_S = 10 * 60     # ... and starting no sooner than 10 minutes after one (the brief writer goes first)
+CAREFUL_BEFORE_S = 10 * 60   # no request while a Careful (non-Fast preset) brief is due within this long, or runs
 MIN_RUN_S = 20             # not worth starting with less room than this
 # Throughput (0.8.3 screen, Gemma + t083.2 on the owner's server): 21-36 cards a minute, a batch of 12 takes ~29 s
 # (median; p95 71 s). The caps follow from it: 1,200 cards a day need 33-57 model minutes.
 MEASURED_CPM = (21, 36)
-EST_BATCH_S = 30.0         # a batch's planning time until measured (12 cards at ~24 a minute)
+EST_CARD_S = 2.5           # a card's planning time until measured (~24 a minute): a batch of 6 ~15 s, of 12 ~30 s
 DAY_CARDS = 1200
 DAY_GPU_MIN = 60           # room for DAY_CARDS at the slow end (1,200 / 21 = 57 minutes)
 MAX_PENDING = 2000         # the work queue's cap (callsheet.db, references only): the oldest items leave first
@@ -109,11 +116,15 @@ CHECK_PER_DAY = 10
 KEEP_DAYS = 60             # label rows older than this are pruned
 CACHE_MAX = 3000           # cards kept in memory for the Check page and Why (never stored)
 SLOW_FACTOR = 3.0          # the night job yields when its batches take 3x the measured median
-# The night job resumes from its cursor every night until it has read the window (3 h at 21-36 cards a minute is
-# ~3,800-6,500 cards a night; a busy server reads less): `nights` is how many nights it may use.
-BACKFILL = {"on": True, "start": "01:30", "end": "04:30", "days": 30, "nights": 7}
+# 0.9.0: two night windows by default, 22:00-01:00 and 04:00-06:00 (the owner's server runs a security audit around
+# 01:00-04:00); both belong to the same night (a night runs noon to noon). The night job resumes from its cursor
+# every night until it has read `days` back (5 h at 21-36 cards a minute is ~6,300-10,800 cards a night; a busy
+# server reads less): `nights` is how many nights it may use.
+WINDOWS = (("22:00", "01:00"), ("04:00", "06:00"))
+MAX_WINDOWS = 3
+BACKFILL = {"on": True, "windows": [list(w) for w in WINDOWS], "days": 30, "nights": 7}
 NIGHT_RUN_S = RUN_S        # one night tick runs batches for up to this long (then the next tick goes on)
-LIMITS = {"day_cards": (50, 5000), "day_gpu_min": (1, 120), "batch": (4, 16)}
+LIMITS = {"day_cards": (50, 5000), "day_gpu_min": (1, 120), "batch": (4, 16), "night_batch": (4, 16)}
 # request extras per model family (thinking off; gpt-oss reasons at "low"); the screen picks the model
 PROFILES = (("gpt-oss", {"reasoning_effort": "low"}),)
 
@@ -253,15 +264,21 @@ def build_schema(cards):
             "properties": {c["id"]: card_schema(sorted(c["s"], key=lambda k: int(k[1:]))) for c in cards}}
 
 
+def slot_for(model):
+    """0.9.0: the sorter's llama.cpp slot: SLOT (1) for Gemma, the resident model (Chat keeps slot 0); 0 for any other
+    model."""
+    return SLOT if str(model) == GEMMA else 0
+
+
 def request_body(model, cards, system, today, tz_name):
-    """The /chat/completions body: strict json_schema, thinking off, temperature 0, id_slot 0 (the chat's slot; the
-    brief writer keeps its own)."""
+    """The /chat/completions body: strict json_schema, thinking off, temperature 0, id_slot `slot_for(model)` (0.9.0:
+    1 for Gemma, so Chat keeps slot 0)."""
     kwargs = {"enable_thinking": False}
     for part, extra in PROFILES:
         if part in str(model).lower():
             kwargs.update(extra)
-    return {"model": model, "stream": False, "max_tokens": MAX_TOKENS, "temperature": 0, "id_slot": 0,
-            "cache_prompt": True,
+    return {"model": model, "stream": False, "max_tokens": MAX_TOKENS, "temperature": 0,
+            "id_slot": slot_for(model), "cache_prompt": True,
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "triage", "strict": True, "schema": build_schema(cards)}},
             "chat_template_kwargs": kwargs,
@@ -672,7 +689,7 @@ def build(src, ctx):
     card = {"src": {"mail": "email", "slack": "slack", "signal": "signal", "drive": "drive"}[ch]}
     meta = {"key": src["key"], "ch": ch, "marks": [m for m in src.get("marks") or [] if m in MARKS], "overrides": [],
             "sec": None, "event": None, "invite_level": None, "bulk": False, "automated": False, "to_named": False,
-            "n_rcpt": 1, "from_owner": False, "ix": src.get("ix")}
+            "bulk_hdr": [], "n_rcpt": 1, "from_owner": False, "ix": src.get("ix")}
     text, subject, links = "", "", []
     mentions = broadcast = False
     you, who = "", ""
@@ -702,6 +719,7 @@ def build(src, ctx):
         else:
             kind = "new"
         meta["bulk"] = lst or cat == "promotions"
+        meta["bulk_hdr"] = bulk_markers(hdrs)   # 0.9.0: the promo rule's header anchors (never from the text)
         meta["automated"] = auto or cat in ("updates", "social", "forums")
 
         def rcpt(n):
@@ -986,6 +1004,47 @@ def copied_only(meta, ai):
     return out, out != ai
 
 
+# --- 0.9.0: the anchored promo rule (after the model and t083.3, before `place`) ---------------------------------------
+# Bulk-sender headers only (never the text, never the model alone): List-Unsubscribe, Precedence bulk/list, and the
+# headers the big email service providers stamp on campaign mail. Feedback-ID counts only with an ESP's id in it.
+_ESP_HDR = re.compile(r"^(?:x-mailgun-[a-z-]+|x-sg-eid|x-sg-id|x-campaign(?:-?id)?|x-mc-user|x-mandrill-user|"
+                      r"x-ses-outgoing|x-sfmc-stack)$")
+_ESP_FBID = frozenset(("amazonses", "sendgrid", "sg", "mailchimp", "mc", "mandrill", "mailgun", "sparkpost",
+                       "klaviyo", "hubspot", "braze", "sailthru", "iterable", "customerio", "marketo", "sfmc",
+                       "exacttarget", "campaignmonitor", "cmail", "constantcontact", "ctct", "sendinblue", "brevo",
+                       "mailjet"))
+
+
+def bulk_markers(hdrs):
+    """The bulk-sender header codes of one mail (sorted, no values): list_unsubscribe, precedence_bulk, esp."""
+    out = set()
+    for n, v in hdrs or ():
+        n, v = str(n).strip().lower(), str(v or "").strip()
+        if n == "list-unsubscribe" and v:
+            out.add("list_unsubscribe")
+        elif n == "precedence" and v.lower() in ("bulk", "list"):
+            out.add("precedence_bulk")
+        elif _ESP_HDR.match(n) and v:
+            out.add("esp")
+        elif n == "feedback-id" and any(re.sub(r"\d+$", "", t.strip().lower()) in _ESP_FBID for t in v.split(":")):
+            out.add("esp")
+    return sorted(out)
+
+
+def promo_bulk(meta, ai):
+    """0.9.0 (the test lead): the model says promo AND the mail carries a bulk anchor (`bulk_markers`, or the rules'
+    own promo label) -> to_owner "no" (the kind stays promo). Never on the model's label alone: a message that only
+    says it's a promo (S-T1) keeps the model's to_owner. Not when an override holds (VIP, known person, owner named,
+    security, invite, flagged text) or the mail is the owner's. Returns (the label to use, True when it changed)."""
+    if ai is None or ai.get("kind") != "promo" or ai.get("to_owner") == "no":
+        return ai, False
+    if not (meta.get("bulk_hdr") or meta.get("pre_kind") == "promo"):
+        return ai, False
+    if meta.get("overrides") or meta.get("from_owner") or meta.get("from_kind") == "vip" or meta.get("sec"):
+        return ai, False
+    return dict(ai, to_owner="no"), True
+
+
 def _parsed_dates(text, today):
     out = {f["date"].isoformat() for f in dates.find(text, today)}
     d = facts.due(text, today)
@@ -1036,11 +1095,13 @@ def used_dates(fs):
 
 def merge(metas, ai_by_cid, cids, today, owner_first=()):
     """Place every card of a batch: {cid: {"group", "why", "facts", "from_owner", "ai"}}; every cid exactly once.
-    "ai" is the label Callsheet keeps: the model's answer after the t083.3 rule (`copied_only`)."""
+    "ai" is the label Callsheet keeps: the model's answer after the t083.3 rule (`copied_only`) and the 0.9.0 anchored
+    promo rule (`promo_bulk`)."""
     out = {}
     for cid in cids:
         meta = metas[cid]
         ai, ruled = copied_only(meta, ai_by_cid.get(cid))
+        ai, _ = promo_bulk(meta, ai)
         g, why = place(meta, ai)
         if ruled and why == "ai:others":
             why = "rules:copied_only"
@@ -1317,12 +1378,33 @@ class Queue:
 
 # --- the runner ---------------------------------------------------------------------------------------------------------
 def default_settings():
-    return {"mode": "shadow", "model": GEMMA, "batch": BATCH, "day_cards": DAY_CARDS, "day_gpu_min": DAY_GPU_MIN,
-            "backfill": dict(BACKFILL), "shadow_since": None, "on_since": None}
+    return {"mode": "shadow", "model": GEMMA, "batch": BATCH, "night_batch": NIGHT_BATCH, "day_cards": DAY_CARDS,
+            "day_gpu_min": DAY_GPU_MIN, "backfill": dict(BACKFILL, windows=[list(w) for w in WINDOWS]),
+            "shadow_since": None, "on_since": None}
 
 
 def _hhmm(v):
     return isinstance(v, str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", v) is not None
+
+
+def _windows(v):
+    """Night windows as [[start, end], ...] (1 to MAX_WINDOWS, HH:MM, start != end, may cross midnight), else None."""
+    if not isinstance(v, (list, tuple)) or not 1 <= len(v) <= MAX_WINDOWS:
+        return None
+    out = []
+    for w in v:
+        if isinstance(w, dict):
+            w = (w.get("start"), w.get("end"))
+        if not isinstance(w, (list, tuple)) or len(w) != 2 or not all(_hhmm(x) for x in w) or w[0] == w[1]:
+            return None
+        out.append([w[0], w[1]])
+    return out
+
+
+def in_window(t, start, end):
+    """Is the local time t inside [start, end) (HH:MM; the window may cross midnight)?"""
+    st, en = dt.time.fromisoformat(start), dt.time.fromisoformat(end)
+    return st <= t < en if st < en else (t >= st or t < en)
 
 
 class Busy(writer.WriterError):
@@ -1362,11 +1444,18 @@ class Sorter:
         s = default_settings()
         saved = self.store._get_meta("sorting", None)  # noqa: SLF001
         if isinstance(saved, dict):
-            for k in ("mode", "model", "batch", "day_cards", "day_gpu_min", "shadow_since", "on_since"):
+            for k in ("mode", "model", "batch", "night_batch", "day_cards", "day_gpu_min", "shadow_since", "on_since"):
                 if k in saved:
                     s[k] = saved[k]
             if isinstance(saved.get("backfill"), dict):
-                s["backfill"].update({k: v for k, v in saved["backfill"].items() if k in BACKFILL})
+                sb = saved["backfill"]
+                s["backfill"].update({k: v for k, v in sb.items() if k in BACKFILL and k != "windows"})
+                if _windows(sb.get("windows")):
+                    s["backfill"]["windows"] = _windows(sb["windows"])
+        for k in LIMITS:
+            lo, hi = LIMITS[k]
+            if not isinstance(s[k], int) or isinstance(s[k], bool) or not lo <= s[k] <= hi:
+                s[k] = default_settings()[k]
         if s["mode"] not in MODES:
             s["mode"] = "shadow"
         if not isinstance(s["model"], str) or not MODEL.fullmatch(s["model"]):
@@ -1402,23 +1491,31 @@ class Sorter:
             elif k == "backfill":
                 if not isinstance(v, dict):
                     raise InputError("Send the night reading settings as an object.")
-                b = dict(s["backfill"])
+                b = dict(s["backfill"], windows=[list(w) for w in s["backfill"]["windows"]])
                 for bk, bv in v.items():
                     if bk == "on":
                         if not isinstance(bv, bool):
                             raise InputError("Night reading is on or off.")
-                    elif bk in ("start", "end"):
+                        b[bk] = bv
+                    elif bk == "windows":
+                        w = _windows(bv)
+                        if w is None:
+                            raise InputError(f"Send 1 to {MAX_WINDOWS} night windows, each a start and an end "
+                                             "that differ (like 22:00 and 01:00).")
+                        b["windows"] = w
+                    elif bk in ("start", "end"):   # the first window (the page's two time fields)
                         if not _hhmm(bv):
-                            raise InputError("Times look like 01:30.")
+                            raise InputError("Times look like 22:00.")
+                        b["windows"][0][0 if bk == "start" else 1] = bv
                     elif bk in ("days", "nights"):
                         lo, hi = (1, 90) if bk == "days" else (1, 14)
                         if not isinstance(bv, int) or isinstance(bv, bool) or not lo <= bv <= hi:
                             raise InputError(f"Pick a number from {lo} to {hi}.")
+                        b[bk] = bv
                     else:
                         raise InputError("Unknown night reading setting.")
-                    b[bk] = bv
-                if b["start"] == b["end"]:
-                    raise InputError("The night window needs a start and an end that differ.")
+                if any(st == en for st, en in b["windows"]):
+                    raise InputError("A night window needs a start and an end that differ.")
                 s["backfill"] = b
             else:
                 raise InputError("Unknown setting.")
@@ -1435,11 +1532,32 @@ class Sorter:
     def _today(self):
         return self._now().date()
 
+    def careful_guard(self, now=None):
+        """0.9.0: True while a Careful brief (a local writer preset other than Fast: Swift, on slot 1) runs or is due
+        within CAREFUL_BEFORE_S. The sorter sends nothing then."""
+        sy = self.syncer
+        w = getattr(sy, "writing", None) if sy is not None else None
+        if isinstance(w, dict) and w.get("preset") not in (None, presets.FAST_NAME):
+            return True
+        try:
+            wcfg = self.store.writer_config()
+        except Exception:  # noqa: BLE001 (no writer settings: no Careful brief)
+            return False
+        if wcfg.get("provider") != "local":
+            return False
+        now = now or self._now()
+        nxt, call = rules.next_call(self.store.settings(), now)
+        return bool(nxt is not None and (nxt - now).total_seconds() <= CAREFUL_BEFORE_S and
+                    presets.is_slow(wcfg, call.get("id")))
+
     def call_guard(self, now=None):
-        """(seconds a run may take from now, reason). reason None: go. Never within AFTER_CALL_S after a call time
-        or END_BEFORE_S before the next one, never while a sync or the brief writer runs."""
+        """(seconds a run may take from now, reason). reason None: go. Never while a Careful brief runs or is due
+        within CAREFUL_BEFORE_S ("careful"), within AFTER_CALL_S after a call time or END_BEFORE_S before the next one,
+        never while a sync or the brief writer runs."""
         settings = self.store.settings()
         now = now or self._now()
+        if self.careful_guard(now):
+            return 0, "careful"
         sy = self.syncer
         if sy is not None and (sy.writing is not None or sy.lock.locked()):
             return 0, "brief"
@@ -1478,16 +1596,22 @@ class Sorter:
         return d
 
     def _perf(self):
+        """The last 50 batches' seconds per card (0.9.0: per card, as day and night batches differ in size)."""
         p = self.store._get_meta("sorting_perf", {}) or {}  # noqa: SLF001
-        return [float(x) for x in p.get("batch_s") or [] if isinstance(x, (int, float))][-50:]
+        return [float(x) for x in p.get("card_s") or [] if isinstance(x, (int, float)) and x > 0][-50:]
 
-    def _add_perf(self, secs):
-        xs = self._perf() + [round(secs, 2)]
-        self.store._set_meta("sorting_perf", {"batch_s": xs[-50:]})  # noqa: SLF001
+    def _add_perf(self, secs, cards):
+        xs = self._perf() + [round(secs / max(1, cards), 3)]
+        self.store._set_meta("sorting_perf", {"card_s": xs[-50:]})  # noqa: SLF001
 
-    def _est(self):
+    def _est(self, n=BATCH):
+        """A batch of n cards' planning time: the measured median per card, else EST_CARD_S."""
         xs = self._perf()
-        return statistics.median(xs) if xs else EST_BATCH_S
+        return (statistics.median(xs) if xs else EST_CARD_S) * n
+
+    def batch_size(self, s, now=None):
+        """0.9.0: `night_batch` (12) inside a night window, else `batch` (6; Chat never waits long)."""
+        return int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
 
     # collecting ----------------------------------------------------------------------------------------------------------
     def _remember(self, key, meta, area):
@@ -1707,13 +1831,17 @@ class Sorter:
         n = batches = fb = 0
         tot = {"in": 0, "out": 0, "prompt_ms": 0, "predicted_ms": 0}
         reason = "done"
+        size = self.batch_size(s)
         while self.pending:
-            est = self._est()
+            est = self._est(size)
             if self.monotonic() - t0 + est > room:
                 reason = "budget"
                 break
             if self._caps(s, d):
                 reason = "cap"
+                break
+            if batches and self.careful_guard():
+                reason = "careful"
                 break
             if self.syncer is not None and (self.syncer.writing is not None or self.syncer.lock.locked()):
                 reason = "brief"
@@ -1722,7 +1850,7 @@ class Sorter:
                 reason = "yield"
                 break
             with self.plock:
-                take = self._take(max(1, min(int(s["batch"]), d_left(s, d))))   # newest first
+                take = self._take(max(1, min(size, d_left(s, d))))   # newest first
             if not take:
                 reason = "waiting"   # what's left waits for its text (the next sync reads it again)
                 break
@@ -1745,7 +1873,7 @@ class Sorter:
                 tot[k] += u[k] if isinstance(u[k], (int, float)) else 0
             d["cards"] += c
             d["gpu_s"] = round(d["gpu_s"] + secs, 1)
-            self._add_perf(secs)
+            self._add_perf(secs, c)
         d["runs"] += 1
         d["fallback"] += fb
         self.store._set_meta("sorting_day", d)  # noqa: SLF001
@@ -1763,17 +1891,12 @@ class Sorter:
         return b if isinstance(b, dict) else {}
 
     def night_of(self, now, s):
-        """The night (the window's start date) when now is inside the backfill window, else None."""
-        b = s["backfill"]
-        st, en = dt.time.fromisoformat(b["start"]), dt.time.fromisoformat(b["end"])
+        """The night when now is inside one of the night windows, else None. A night runs noon to noon, so
+        22:00-01:00 and the 04:00-06:00 after it are the same night (the evening's date)."""
         t = now.time()
-        if st < en:
-            return now.date() if st <= t < en else None
-        if t >= st:
-            return now.date()
-        if t < en:
-            return now.date() - dt.timedelta(days=1)
-        return None
+        if not any(in_window(t, st, en) for st, en in s["backfill"]["windows"]):
+            return None
+        return (now - dt.timedelta(hours=12)).date()
 
     def backfill_step(self):
         """One batch of the night job when inside the window; resumable (the cursor is stored after every batch).
@@ -1820,7 +1943,7 @@ class Sorter:
             if nk not in nights:
                 nights.append(nk)
                 st["nights"] = nights
-            rows = self.index.triage_rows(min_ts=st["since"], before=st.get("cursor"), limit=int(s["batch"]))
+            rows = self.index.triage_rows(min_ts=st["since"], before=st.get("cursor"), limit=int(s["night_batch"]))
             if not rows:
                 st["state"] = "done"
                 self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
@@ -1834,7 +1957,7 @@ class Sorter:
             st["done_n"] = int(st.get("done_n") or 0) + len(rows)
             st["paused"] = None
             if todo:
-                med = self._est()
+                med = self._est(1)
                 try:
                     _, secs, _, _ = self._batch(todo, ctx, s, room)
                 except Busy:
@@ -1853,7 +1976,7 @@ class Sorter:
                     st["paused"] = "server"
                     self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
                     return "server"
-                recent = (list(st.get("recent") or []) + [round(secs, 2)])[-5:]
+                recent = (list(st.get("recent") or []) + [round(secs / len(todo), 3)])[-5:]   # per card
                 st["recent"] = recent
                 if len(recent) >= 3 and statistics.median(recent) > SLOW_FACTOR * med:
                     st["yield_night"], st["paused"] = nk, "slow"
@@ -1874,7 +1997,8 @@ class Sorter:
             t0, ran = self.monotonic(), False
             r = self.backfill_step()
             # 0.9.0: batches back to back for up to NIGHT_RUN_S (not one per 30 s tick), at the model's own pace
-            while r == "ran" and self.monotonic() - t0 + self._est() <= NIGHT_RUN_S and not self._stop.is_set():
+            while r == "ran" and self.monotonic() - t0 + self._est(int(s["night_batch"])) <= NIGHT_RUN_S and \
+                    not self._stop.is_set():
                 ran = True
                 r = self.backfill_step()
             if r in ("ran", "loading", "slow"):
@@ -2056,7 +2180,10 @@ class Sorter:
     def view(self):
         s = self.settings()
         items, done = self.check_items()
-        return {"settings": {k: s[k] for k in ("mode", "model", "batch", "day_cards", "day_gpu_min", "backfill")},
+        bf = dict(s["backfill"], start=s["backfill"]["windows"][0][0], end=s["backfill"]["windows"][0][1])
+        # (start, end: the first night window, for the page's two time fields; `windows` has them all)
+        return {"settings": dict({k: s[k] for k in ("mode", "model", "batch", "night_batch", "day_cards",
+                                                    "day_gpu_min")}, backfill=bf),
                 "shadow_day": self.shadow_day(s), "shadow_days": SHADOW_DAYS, "status": self.status(),
                 "check": {"items": items, "done": done, "per_day": CHECK_PER_DAY,
                           "names": KIND_NAMES}, "counts": self.counts(), "fixes": list(FIXES),
