@@ -30,6 +30,7 @@ import time
 
 import google
 import ha
+import people as people_mod
 import rules
 import slack
 import writer  # states_decision only: a pure text check, no model
@@ -274,7 +275,9 @@ def vip_slack_users(users, vips):
     for uid, u in (users or {}).items():
         if not isinstance(u, dict):
             continue
-        if u.get("email"):
+        if str(uid).lower() in getattr(vips, "slack", ()):  # 0.8.2: a VIP person's Slack user
+            out.append(uid)
+        elif u.get("email"):
             if u["email"].lower() in vips:
                 out.append(uid)
         elif any(n and n.strip().lower() in names for n in (u.get("name"), u.get("real_name"))):
@@ -423,7 +426,7 @@ class Notifier:
         deadline = now + CHECK_DEADLINE_S
         seen = list(st.get("seen") or [])
         known = set(seen)
-        vips = {v["email"].lower(): v["name"] for v in self.store.vips()}
+        vips = people_mod.vip_map(self.store, getattr(self, "people", None))  # 0.8.2: every handle of a VIP person
         areas = {a["id"]: a for a in self.store.areas()}
         items, n_mail, n_slack, problems = [], 0, 0, 0
         new_ids = []

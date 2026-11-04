@@ -24,6 +24,7 @@ import facts
 import gather
 import google
 import memory
+import people as people_mod
 import presets
 import rules
 import slack
@@ -253,6 +254,7 @@ class Syncer:
         self.writing = None    # 0.6.1: {written_at, preset, kind, since} while the writer runs for the cached brief
         self.last_model = None  # 0.6.1: the model of Callsheet's last brief request (None: not known)
         self.monotonic = time.monotonic  # 0.6.1: request and swap timing (tests replace it)
+        self.people = None  # 0.8.2: people.People (set by api.App); VIPs and notes then cover every handle of a person
 
     def run_now(self, wait=70, kind=None, background=False):
         """Runs a sync and returns last_sync. If one is already running, waits for it and returns its result;
@@ -333,7 +335,7 @@ class Syncer:
         day = now.date()
         day_start, day_end = rules.day_bounds(day, tz)
         areas = {a["id"]: a for a in self.store.areas()}
-        vips = {v["email"].lower(): v["name"] for v in self.store.vips()}
+        vips = people_mod.vip_map(self.store, self.people)  # 0.8.2: a VIP is a person (all their handles)
         client = self.store.google_client()
 
         # 0.5.0: the calendars are read ahead in the same request, for the possible events' already-on-calendar
@@ -861,14 +863,20 @@ class Syncer:
         if not entries:
             return []
         m_rows = []
+        d = self.people.directory() if self.people is not None else None
         for r in rows:
             ref = refs.get(r["id"]) or {}
             mail = ref.get("source") == "mail"
-            m_rows.append({"id": r["id"], "who": r.get("who"), "email": ref.get("sender") if mail else "",
-                           "domain": ref.get("domain") if mail else "", "area": name.get(r.get("area"), ""),
-                           "subject": r.get("text") or ""})
+            row = {"id": r["id"], "who": r.get("who"), "email": ref.get("sender") if mail else "",
+                   "domain": ref.get("domain") if mail else "", "area": name.get(r.get("area"), ""),
+                   "subject": r.get("text") or ""}
+            kind = {"mail": "email", "slack": "slack", "signal": "signal"}.get(ref.get("source"))
+            p = d.person_of(kind, ref.get("sender")) if d is not None and kind and ref.get("sender") else None
+            if p is not None and p["state"] != "me":
+                row["person"] = p["id"]  # 0.8.2: notes about this person match every one of their handles
+            m_rows.append(row)
         m_events = [{"id": e["id"], "title": e.get("title") or "", "area": name.get(e.get("area"), "")} for e in sched]
-        return memory.relevant(entries, m_rows, m_events)
+        return memory.relevant(entries, m_rows, m_events, people=d)
 
     def _local_preset(self, wcfg, preset, data, ids, ask, kind):
         """One local writer request with a preset's options; logs the preset, whether the model changed since

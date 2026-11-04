@@ -494,6 +494,9 @@ class Projects:
 
     def _owner(self):
         emails = [a["email"] for a in self.store.accounts()]
+        ppl = getattr(self, "people", None)
+        if ppl is not None:  # 0.8.2: also the owner's Gmail send-as addresses (from the accounts, never from content)
+            emails += [v for k, v in ppl.me_keys() if k == "email"]
         names = []
         for w in self.store.slack_workspaces():
             known = (self.index.meta("slack_users:" + w["id"]) or {}) if self.index else {}
@@ -707,7 +710,7 @@ class Projects:
                p["status"], "status_name": "Suggested" if sug else STATUS_NAMES.get(p["status"], ""),
                "set_status": p["status"], "next_step": p["next_step"], "next_due": p["next_due"],
                "next_label": ("Was due " if late else "") + (_day_label(nd) if nd else ""), "late": late,
-               "quiet": quiet, "short": short, "milestones": ms, "people": json.loads(p["people"] or "[]"),
+               "quiet": quiet, "short": short, "milestones": ms, "people": self._people_names(p["people"]),
                "sources": len(d.get("sources") or []), "why": d.get("why") or [] if sug else d.get("why") or [],
                "notes": p["notes"], "updated": p["updated"]}
         if last:
@@ -725,6 +728,24 @@ class Projects:
             out["chips"] = self._chips(d.get("sources") or [])
             out["last_week"] = self._last_week(d.get("sources") or [])
         return out
+
+    def _people_names(self, raw):
+        """0.8.2: a project's people under the person's name (a merged person once, by any name or address)."""
+        names = json.loads(raw or "[]")
+        ppl = getattr(self, "people", None)
+        if ppl is None or not names:
+            return names
+        try:
+            d = ppl.directory()
+        except Exception:  # noqa: BLE001
+            return names
+        out = []
+        for n in names:
+            p = d.person_of("email", n) if "@" in str(n) else None
+            ids = {p["id"]} if p else d.note_people((), [n])
+            pp = d.persons.get(next(iter(ids))) if len(ids) == 1 else None
+            out.append(pp["name"] if pp and pp["state"] == "confirmed" else n)
+        return list(dict.fromkeys(out))
 
     def _task_view(self, t, today):
         td = _iso(t["due"])

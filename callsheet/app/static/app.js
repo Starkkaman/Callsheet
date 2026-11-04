@@ -1371,6 +1371,7 @@
     r.claim === true ? h('p', { class: 'pflag claim' }, CLAIM_NOTE) : null,
     r.uses_name ? h('p', { class: 'pflag' }, 'Uses ' + r.uses_name + '’s name, but not the address you saved for that VIP. It isn’t treated as a VIP.') : null,  /* 0.8.0 */
     r.sender_fail === true ? h('p', { class: 'pflag' }, 'Sender not verified: Gmail couldn’t confirm this sender.') : null,
+    r.uses_your_name === true ? h('p', { class: 'pflag' }, 'Uses your name; not from your accounts.') : null,  /* 0.8.2 */
     h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r)),
     ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
       return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);
@@ -1382,7 +1383,17 @@
     h('div', { class: 'pacts' }, [
       link ? h('a', { class: 'act', href: link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in ' + srcName(r)) : null,
       h('button', { type: 'button', class: 'act ghost', 'data-markdone': r.id }, 'Mark done'),
-      npBtn('reply', r.id, 'pa-' + r.id, true)])];
+      npBtn('reply', r.id, 'pa-' + r.id, true)]),
+    panelSame(r)];
+  }
+  /* 0.8.2: a likely match for this sender: the Same person? card in the panel; the answer shows in its place */
+  function panelSame(r) {
+    if (r.same_said) return h('p', { class: 'ppsaid', role: 'status' }, r.same_said);
+    if (!r.same || !r.same.id || !r.same.a || !r.same.b) return null;
+    return sameCard(r.same, { compact: true, done: function (a, x) {
+      r.same = null; r.same_said = ppAnswered(a, x) + (a === 'same' ? ' Refresh to see it on every row.' : '');
+      renderBrief(); var f = main.querySelector('.bv .panel .ppsaid'); if (f) { f.setAttribute('tabindex', '-1'); f.focus(); }
+    } });
   }
   function panelEvent(e) {
     var fl = e.flag && e.flag.text ? e.flag.text : null;
@@ -1517,7 +1528,9 @@
     return h('div', { class: 'pop', role: 'group', 'aria-label': 'Note for Callsheet', 'data-pop': '1' }, h('div', { class: 'nt' }, [
       h('label', { class: 'label', for: 'bv-note' }, 'Note for Callsheet'), ta,
       P.err ? h('p', { class: 'err', role: 'alert' }, P.err) : null,
+      P.warn ? h('p', { class: 'pwarn', role: 'alert' }, P.warn) : null,  /* 0.8.2: looks pasted from a message */
       h('div', { class: 'btns' }, [h('button', { type: 'button', class: 'act', 'data-nsave': '1', disabled: !!P.busy }, 'Save'),
+        P.warn ? h('button', { type: 'button', class: 'tbtn', 'data-nsaveany': '1', disabled: !!P.busy }, 'Save anyway') : null,
         h('button', { type: 'button', class: 'tbtn', 'data-ncancel': '1' }, 'Cancel'),
         nt ? h('button', { type: 'button', class: 'tbtn', 'data-ndel': '1', disabled: !!P.busy }, 'Delete note') : null]),
       h('div', { class: 'hint' }, 'Callsheet reads it before each brief when it fits the day. All notes are in Setup → Delivery → Memory.')]));
@@ -1525,7 +1538,8 @@
   function focusLayer(sel) { var f = layer.querySelector(sel); if (f) f.focus(); }
   function noteAction(d, P) {
     if (d.pnote) { P.mode = 'note'; P.text = null; P.err = null; renderLayer(); focusLayer('[data-ntext]'); return; }
-    if (d.ncancel) { P.mode = null; P.err = null; renderLayer(); focusLayer('[data-pnote]'); return; }
+    if (d.ncancel) { P.mode = null; P.err = null; P.warn = null; renderLayer(); focusLayer('[data-pnote]'); return; }
+    if (d.nsaveany) d = { nsave: '1', confirm: true };  /* 0.8.2: the owner saves past the paste warning */
     var nt = noteOf(P.kind, P.id), ref = noteRef(P.kind, P.id), anc = P.anc, req;
     if (!ref || P.busy) return;
     if (d.nsave) {
@@ -1533,12 +1547,17 @@
       if (!txt) { P.err = 'Write the note first.'; renderLayer(); focusLayer('[data-ntext]'); return; }
       var body = { kind: P.kind, id: P.id, ref: ref, text: txt };
       if (P.kind === 'heads') body.item = headsText(P.id);
-      req = nt ? function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(nt.id), { text: txt }); }
+      if (d.confirm) body.confirm = true;
+      req = nt ? function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(nt.id), d.confirm ? { text: txt, confirm: true } : { text: txt }); }
         : function () { return api('POST', 'api/memory/notes', body); };
     } else if (nt) req = function () { return api('DELETE', 'api/memory/notes/' + encodeURIComponent(nt.id)); };
     else return;
-    P.busy = true; P.err = null; renderLayer();
+    P.busy = true; P.err = null; P.warn = null; renderLayer();
     mutate(req).then(function (res) {
+      if (res && res.saved === false && res.warning) {  /* 0.8.2: a warning, not a refusal */
+        if (U.pop !== P) return;
+        P.busy = false; P.warn = String(res.warning); renderLayer(); focusLayer('[data-nsaveany]'); return;
+      }
       B.notes = B.notes && typeof B.notes === 'object' ? B.notes : {};
       if (d.nsave) B.notes[ref] = { id: res && res.id, text: res && typeof res.text === 'string' ? res.text : '' };
       else delete B.notes[ref];
@@ -1822,7 +1841,7 @@
     }
     else if (d.pnnr && P) { P.sub = !P.sub; renderLayer(); var nb = layer.querySelector(P.sub ? '[data-sup]' : '[data-pnnr]'); if (nb) nb.focus(); }
     else if (d.sup && P) suppress(P.id, d.sup);
-    else if ((d.pnote || d.ncancel || d.nsave || d.ndel) && P) noteAction(d, P);
+    else if ((d.pnote || d.ncancel || d.nsave || d.nsaveany || d.ndel) && P) noteAction(d, P);
     else if (d.dismiss && P) dismiss(P);
     else if (d.undo) {
       var u = U.toast && U.toast.undo;
@@ -1985,7 +2004,7 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
+    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : location.hash === '#people' ? 'people' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
     var changed = v !== ui.view;
     ui.view = v;
     setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
@@ -2007,6 +2026,7 @@
     else if (v === 'eval') showEval();
     else if (v === 'knowme') showKnow('#kn-title');  /* 0.6.0 index */
     else if (v === 'profile' || v === 'profileq') showProfile(v);  /* 0.6.0 profile */
+    else if (v === 'people') { PP.said = ''; showPeople('#pp-title'); }  /* 0.8.2 people */
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -2512,6 +2532,7 @@
     function fact(kids) { return h('li', null, [h('span', { class: 'cb sel', 'aria-hidden': 'true' }), h('span', null, kids)]); }
     return [
       h('p', { class: 'intro' }, 'People whose mail always counts as needing a reply.'),
+      h('p', { class: 'vipppl' }, [h('span', null, 'A VIP is a person: every address, Slack and Signal of theirs counts.'), peopleEntry('People')]),  /* 0.8.2 */
       h('div', { class: 'cols' }, [
         h('div', null, [
           vips.length ? h('table', { class: 'vip' }, [
@@ -3107,6 +3128,10 @@
           h('ul', { class: 'ln' }, lines[i].split(' · ').map(function (s) { return h('li', null, s); })),
           btn('btn sm', 'Edit', { 'aria-label': 'Edit ' + name, 'data-fk': 'home:' + (i + 1) }, function () { go(i + 1); })]);
       })),
+      h('section', { class: 'scard ppcard', 'aria-labelledby': 'sh-pp' }, [  /* 0.8.2 people */
+        h('h2', { class: 'h3', id: 'sh-pp' }, 'People'),
+        h('ul', { class: 'ln' }, [h('li', null, S.people && S.people.open ? plural(S.people.open, 'Same person? suggestion', 'Same person? suggestions') : 'One person across mail, Slack and Signal')]),
+        btn('btn sm', 'Open', { 'aria-label': 'Open People', 'data-fk': 'home:people' }, function () { location.hash = 'people'; })]),
       h('div', { class: 'go' }, [first ? btn('btn primary', 'Start: About you', null, function () { go(1); }) : null, refresh]),
       err,
       ls.at && ls.ok === false ? h('p', { class: 'syncst bad' }, 'Last refresh had problems:') : null,
@@ -3479,13 +3504,17 @@
     ta.value = cur;
     var cnt = h('span', { class: 'cnt' + (cur.length >= max ? ' full' : ''), id: 'mem-cnt' }, fmtNum(cur.length) + ' / ' + fmtNum(max) + ' characters');
     var undoB = btn('tbtn', 'Undo changes', { 'data-fk': 'mem-undo', disabled: cur === saved }, function () { MEM.draft = null; renderSetup('[data-fk="mem-text"]'); });
-    var saveB = btn('act', 'Save', { 'data-fk': 'mem-save', disabled: cur === saved }, function () {
+    var warnB = h('div', { class: 'pwbox' });
+    function saveMem(confirm) {
       var text = ta.value;
-      run([saveB, undoB], err, function () { return api('PATCH', 'api/memory', { text: text }); }, function (r) {
+      warnB.textContent = '';
+      run([saveB, undoB], err, function () { return api('PATCH', 'api/memory', confirm ? { text: text, confirm: true } : { text: text }); }, function (r) {
+        if (r && r.saved === false && r.warning) { pasteWarn(warnB, r.warning, 'mem-any', function () { saveMem(true); }); return; }
         MEM.data = r; MEM.draft = null; renderSetup('[data-fk="mem-text"]');
         var sd = main.querySelector('[data-said="mem"]'); if (sd) sd.textContent = 'Saved';
       });
-    });
+    }
+    var saveB = btn('act', 'Save', { 'data-fk': 'mem-save', disabled: cur === saved }, function () { saveMem(false); });
     on(ta, 'input', function () {
       MEM.draft = ta.value === saved ? null : ta.value; said.textContent = '';
       cnt.textContent = fmtNum(ta.value.length) + ' / ' + fmtNum(max) + ' characters';
@@ -3505,7 +3534,7 @@
       h('p', { class: 'help', id: 'mem-help' }, 'Each note starts with “### ” and a title, then “- key: value” lines (people, emails, domains, topics, area), a blank line and the note. ' +
         'A note without people, emails, domains or topics applies to its whole area. Profile and Answers hold what you saved in Get to know me.'),
       ta,
-      h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, undoB, saveB])]), err,
+      h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, undoB, saveB])]), err, warnB,
       h('div', { class: 'memfoot' }, [h('span', { class: 'muted' }, m.error ? 'Notes aren’t read right now.' : plural(n, 'note', 'notes') + ' in the memory.'), clear]),
       h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'mem-lock' }, [
         h('div', { class: 'lh', id: 'mem-lock' }, [ico('lock'), 'Sent with your notes (can’t be changed)']),
@@ -3525,13 +3554,17 @@
         if (MEM.editing === n.id) {
           var err = errBox(), ta = h('textarea', { class: 'inp', id: 'mem-e-' + n.id, rows: '3', maxlength: String(m.note_max || 500), 'data-fk': 'mem-e:' + n.id });
           ta.value = n.text;
-          var sv = btn('act', 'Save', { 'data-fk': 'mem-es:' + n.id }, function () {
-            run([sv, cn], err, function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(n.id), { text: ta.value }); }, function () {
+          var wb = h('div', { class: 'pwbox' });
+          var saveN = function (confirm) {
+            wb.textContent = '';
+            run([sv, cn], err, function () { return api('PATCH', 'api/memory/notes/' + encodeURIComponent(n.id), confirm ? { text: ta.value, confirm: true } : { text: ta.value }); }, function (r) {
+              if (r && r.saved === false && r.warning) { pasteWarn(wb, r.warning, 'mem-eany:' + n.id, function () { saveN(true); }); return; }
               MEM.editing = null; loadMemory();
             });
-          });
+          };
+          var sv = btn('act', 'Save', { 'data-fk': 'mem-es:' + n.id }, function () { saveN(false); });
           var cn = btn('tbtn', 'Cancel', null, function () { MEM.editing = null; renderSetup('[data-fk="' + cssq('mem-ed:' + n.id) + '"]'); });
-          return h('li', null, [h('label', { class: 'sr', for: 'mem-e-' + n.id }, 'Edit the note'), ta, h('div', { class: 'btns' }, [sv, cn]), err]);
+          return h('li', null, [h('label', { class: 'sr', for: 'mem-e-' + n.id }, 'Edit the note'), ta, wb, h('div', { class: 'btns' }, [sv, cn]), err]);
         }
         return h('li', null, [h('p', { class: 'mt' }, n.text), meta || n.created ? h('p', { class: 'muted' }, (meta ? meta + ' · ' : '') + 'from chat' + (n.created ? ' · ' + n.created : '')) : null,
           ui.confirm === key ? confirmRow('Remove this note from memory?', 'Remove', function (y, c, e) {
@@ -4176,6 +4209,159 @@
     if (f) f.focus({ preventScroll: !!keep });
   }
 
+  /* ---------- 0.8.2 People (#people): Same person? cards, You, Everyone, History ----------
+     GET api/people; answers POST api/people/proposals/<id> {answer: same|different|later}; Split POST
+     api/people/merges/<id>/split; VIP PATCH api/people/<id>; names people use for you PATCH api/people/me.
+     Only the owner merges; nothing ever merges with "You". Data is text (h()). */
+  var PP = { v: null, seq: 0, q: '', said: '', err: null, timer: null };
+  var PP_ICO = { email: 'mail', slack: 'slack', signal: 'signal' };
+  function ppCard(p) {
+    return h('div', { class: 'ppc' }, [h('h4', null, p.name), p.sub ? h('div', { class: 'ppsub' }, p.sub) : null,
+      h('ul', { class: 'pph' }, (p.handles || []).map(function (x) {
+        return h('li', null, [ico(PP_ICO[x.kind] || 'mail'), h('span', { class: 'v' }, x.label), x.count ? h('span', { class: 'c' }, x.count) : null]);
+      })),
+      p.more ? h('p', { class: 'ppsub' }, '+ ' + p.more + ' more') : null]);
+  }
+  /* one "Same person?" card: both people, why, and the owner's three answers. o.compact: the reply panel's version */
+  function sameCard(c, o) {
+    var err = errBox(), yes, no, later;
+    function answer(a) {
+      run([yes, no, later], err, function () { return api('POST', 'api/people/proposals/' + encodeURIComponent(c.id), { answer: a }); },
+        function (r) { if (o.done) o.done(a, r); });
+    }
+    yes = btn(o.compact ? 'act' : 'btn primary', 'Same person', { 'data-fk': 'same:' + c.id }, function () { answer('same'); });
+    no = btn(o.compact ? 'act ghost' : 'btn', 'Different people', { 'data-fk': 'diff:' + c.id }, function () { answer('different'); });
+    later = btn('tbtn', 'Later', { 'data-fk': 'later:' + c.id }, function () { answer('later'); });
+    return h('div', { class: 'same' + (o.compact ? ' compact' : ''), role: 'group', 'aria-label': 'Same person? ' + c.a.name + ' and ' + c.b.name }, [
+      o.compact ? h('h3', { class: 'plab' }, 'Same person?') : null,
+      h('div', { class: 'pair' }, [ppCard(c.a), h('span', { class: 'or' }, 'and'), ppCard(c.b)]),
+      h('div', { class: 'swhy' }, [h('h4', { class: 'label' }, 'Why Callsheet thinks so'),
+        h('ul', { class: 'sigs' }, (c.signals || []).map(function (s) { return h('li', null, [h('b', null, s.strength), h('span', null, s.why)]); }))]),
+      h('div', { class: 'btns' }, [yes, no, later]), err]);
+  }
+  function ppAnswered(a, r) {
+    return a === 'same' ? ((r.person && r.person.name) || 'They') + ' is one person now.' : a === 'different' ? 'Kept apart. Callsheet won’t ask about these two again.' : 'Callsheet will ask again next week.';
+  }
+  function showPeople(focusSel) {
+    var seq = ++PP.seq;
+    return api('GET', 'api/people' + (PP.q ? '?q=' + encodeURIComponent(PP.q) : '')).then(function (r) {
+      if (seq !== PP.seq || ui.view !== 'people') return;
+      PP.v = r; PP.err = null; renderPeople(focusSel);
+    }, function (e) { if (seq !== PP.seq || ui.view !== 'people') return; PP.err = e.message; renderPeople(focusSel); });
+  }
+  function ppSame(v) {
+    var ps = v.proposals || [], c = ps[0];
+    return h('div', { class: 'ppsec', role: 'region', 'aria-labelledby': 'pp-same' }, [
+      h('h2', { class: 'h3', id: 'pp-same', tabindex: '-1', 'data-fk': 'pp-same' }, ['Same person?', ps.length ? h('span', { class: 'n' }, '1 of ' + ps.length) : null]),
+      PP.said ? h('p', { class: 'ppsaid', role: 'status' }, PP.said) : null,
+      c ? [h('p', { class: 'note' }, 'If they are one person, Callsheet treats them as one everywhere: replies, VIPs, notes and Chat.'),
+        sameCard(c, { done: function (a, r) { PP.said = ppAnswered(a, r); showPeople('[data-fk="pp-same"]'); } })]
+        : h('p', { class: 'muted' }, 'No suggestions right now.'),
+      h('p', { class: 'muted ppnever' }, 'Never suggested: shared addresses like info@ or team@, first names on their own, or you.')]);
+  }
+  function ppYou(v) {
+    var me = v.me || {}, err = errBox(), names = me.names || [];
+    var inp = h('input', { class: 'inp', type: 'text', id: 'pp-name', maxlength: '40', autocomplete: 'off', 'data-fk': 'pp-name' });
+    function saveNames(list, fk) {
+      run([], err, function () { return api('PATCH', 'api/people/me', { names: list }); }, function (r) { PP.v = r; renderPeople('[data-fk="' + fk + '"]'); });
+    }
+    var addB = h('button', { type: 'submit', class: 'btn' }, 'Add');
+    var form = on(h('form', { class: 'ppadd', novalidate: '', 'aria-label': 'Add a name people use for you' }, [
+      h('label', { class: 'label', for: 'pp-name' }, 'Names people use for you'), h('div', { class: 'row' }, [inp, addB])]), 'submit', function (e) {
+      e.preventDefault();
+      var n = inp.value.trim();
+      if (!n) { err.textContent = 'Type a name first.'; return; }
+      saveNames(names.concat([n]), 'pp-name');
+    });
+    var sa = btn('btn', me.send_as_read ? 'Read “send as” again' : 'Read my Gmail “send as” addresses', { 'data-fk': 'pp-sendas' }, function () {
+      run([sa], err, function () { return api('POST', 'api/people/me/send-as', {}); }, function (r) {
+        PP.v = r; PP.said = (r.errors && r.errors.length) ? 'Some accounts couldn’t be read: ' + r.errors.join(' ') : 'Your addresses are up to date.';
+        renderPeople('[data-fk="pp-sendas"]');
+      });
+    });
+    return h('div', { class: 'ppsec', role: 'region', 'aria-labelledby': 'pp-you' }, [
+      h('h2', { class: 'h3', id: 'pp-you' }, ['You', h('span', { class: 'n' }, 'from your accounts only')]),
+      h('div', { class: 'ppc you' }, [
+        (me.handles || []).length ? h('ul', { class: 'pph' }, me.handles.map(function (x) {
+          return h('li', null, [ico(PP_ICO[x.kind] || 'mail'), h('span', { class: 'v' }, x.label), x.count ? h('span', { class: 'c' }, x.count) : null]);
+        })) : h('p', { class: 'muted' }, 'No accounts connected yet.'),
+        names.length ? h('ul', { class: 'ppchips', 'aria-label': 'Names people use for you' }, names.map(function (n, i) {
+          return h('li', { class: 'pchip' }, [n, btn('cx', '×', { 'aria-label': 'Remove ' + n, 'data-fk': 'pp-n' + i }, function () {
+            saveNames(names.filter(function (x) { return x !== n; }), 'pp-name');
+          })]);
+        })) : null,
+        form,
+        h('div', { class: 'btns' }, [sa]),
+        h('p', { class: 'note' }, 'Only your connected accounts add to this. A message that says “I’m your other email” never changes it.'), err])]);
+  }
+  function ppRow(p) {
+    var err = errBox(), vipB = sw(p.vip, 'VIP: ' + p.name, function () {
+      run([vipB], err, function () { return api('PATCH', 'api/people/' + encodeURIComponent(p.id), { vip: !p.vip }); }, function () { showPeople('[data-fk="' + cssq('pp-vip:' + p.id) + '"]'); });
+    });
+    vipB.setAttribute('data-fk', 'pp-vip:' + p.id);
+    var hs = (p.handles || []).slice(0, 3).map(function (x) { return x.label; }).join(' · ') + (p.more || (p.handles || []).length > 3 ? ' · …' : '');
+    return h('li', { class: 'pprow' }, [
+      h('div', { class: 'nm' }, [h('b', null, p.name), p.sub ? h('span', { class: 'ppsub' }, p.sub) : null, h('span', { class: 'hs' }, hs)]),
+      h('div', { class: 'acts' }, [h('span', { class: 'label vl', 'aria-hidden': 'true' }, 'VIP'), vipB].concat((p.merges || []).map(function (m) {
+        return btn('tbtn', 'Split', { 'aria-label': 'Split: ' + m.names, 'data-fk': 'pp-split:' + m.id }, function () { ppSplit(m.id, [], err); });
+      }))), err]);
+  }
+  function ppSplit(id, btns, err) {
+    run(btns, err, function () { return api('POST', 'api/people/merges/' + encodeURIComponent(id) + '/split', {}); }, function () {
+      PP.said = 'Split. They are two people again, and Callsheet won’t suggest them again.'; showPeople('[data-fk="pp-same"]');
+    });
+  }
+  function ppEveryone(v) {
+    var q = h('input', { class: 'inp', type: 'search', id: 'pp-q', autocomplete: 'off', spellcheck: 'false', value: PP.q, 'data-fk': 'pp-q', placeholder: 'Name or address' });
+    on(q, 'input', function () {
+      clearTimeout(PP.timer);
+      PP.timer = setTimeout(function () { PP.q = q.value.trim(); showPeople('[data-fk="pp-q"]'); }, 300);
+    });
+    var list = v.people || [];
+    return h('div', { class: 'ppsec', role: 'region', 'aria-labelledby': 'pp-all' }, [
+      h('h2', { class: 'h3', id: 'pp-all' }, ['Everyone', h('span', { class: 'n' }, fmtNum(v.total || 0))]),
+      h('div', { class: 'ppsearch' }, [h('label', { class: 'label', for: 'pp-q' }, 'Search people'), q]),
+      list.length ? h('ul', { class: 'pplist' }, list.map(ppRow)) : h('p', { class: 'muted' }, PP.q ? 'No one matches.' : 'No people yet. They come from your VIPs, Get to know me and your mail.'),
+      v.shown < (PP.q ? v.shown : v.total) ? h('p', { class: 'muted' }, 'Showing ' + fmtNum(v.shown) + '. Search to find the others.') : null]);
+  }
+  function ppHistory(v) {
+    var a = v.audit || [];
+    if (!a.length) return null;
+    return h('div', { class: 'ppsec', role: 'region', 'aria-labelledby': 'pp-hist' }, [
+      h('h2', { class: 'h3', id: 'pp-hist' }, 'History'),
+      h('ul', { class: 'pphist' }, a.map(function (e) {
+        var err = errBox(), b = e.can_split ? btn('tbtn', 'Split', { 'aria-label': 'Split: ' + e.text, 'data-fk': 'pp-hsplit:' + e.id }, function () { ppSplit(e.id, [b], err); }) : null;
+        return h('li', null, [h('span', null, e.text), h('span', { class: 'muted' }, fmtWhen(new Date(e.at * 1000).toISOString(), true)), b, err]);
+      }))]);
+  }
+  function renderPeople(focusSel) {
+    var v = PP.v, body;
+    if (!v) body = [PP.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load people (' + PP.err + ').') : h('p', { class: 'muted' }, 'Loading…')];
+    else body = [ppSame(v), ppYou(v), ppEveryone(v), ppHistory(v)];
+    var sheet = h('div', { class: 'sheet wiz pp' }, [
+      h('div', { class: 'mast two' }, [
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'pp-title', tabindex: '-1' }, 'People')]),
+        h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Suggestions'), h('div', { class: 'disp' }, v ? String((v.proposals || []).length) : '–')])]),
+      h('section', { class: 'step', 'aria-labelledby': 'pp-title' }, body),
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Setup', null, function () { ui.step = 0; location.hash = 'setup'; })])]);
+    var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
+    main.textContent = '';
+    add(main, sheet);
+    pressLook();
+    syncBg();
+    var f = focusSel ? main.querySelector(focusSel) : keep ? main.querySelector('[data-fk="' + cssq(keep) + '"]') : null;
+    if (f) f.focus({ preventScroll: focusSel === '#pp-title' });
+    if (f && f.id === 'pp-q') { var n = f.value.length; f.setSelectionRange(n, n); }
+  }
+  /* 0.8.2: a hand-written note that reads like an instruction or a claim pasted from a message: a warning, not a refusal */
+  function pasteWarn(box, text, fk, again) {
+    box.textContent = '';
+    var b = btn('tbtn', 'Save anyway', { 'data-fk': fk }, function () { box.textContent = ''; again(); });
+    add(box, [h('p', { class: 'pwarn', role: 'alert' }, text), h('div', { class: 'btns' }, [b])]);
+    b.focus();
+  }
+  function peopleEntry(label) { return btn('btn', label || 'People', { 'data-fk': 'pp-open' }, function () { location.hash = 'people'; }); }
+
   /* ---------- 0.6.0 profile: Get to know me → Check (#profile), Questions (#profile-questions), Done ----------
      knowme-v2 frames 3–5. The draft, the AI's suggestions and the questions come from api/profile (index.db); only
      the owner's Save, Accept and answers write memory.md (server side, docs/know-me-profile.md). Data is text (h()). */
@@ -4239,7 +4425,7 @@
       h('p', { class: 'help pfintro' }, 'A first draft from ' + (days >= 12 ? 'the last year' : days + ' months') + ' of mail, Slack, Signal, calendars and notes. Select any row to change it. Nothing is kept until you save or accept it; the questions come next.'),
       v.memory_error ? h('p', { class: 'err', role: 'alert' }, v.memory_error) : null,
       pfAi(),
-      pfPeople(), pfProjects(), pfItems('Recurring', 'pf-rec', v.recurring, function (r) { return [h('b', null, r.title), h('span', { class: 'sub' }, r.when)]; },
+      pfSame(), pfPeople(), pfProjects(), pfItems('Recurring', 'pf-rec', v.recurring, function (r) { return [h('b', null, r.title), h('span', { class: 'sub' }, r.when)]; },
         function (r) { return r.title + ', ' + r.when; }),
       pfItems('Reply habits', 'pf-hab', v.habits, function (r) { return [h('b', null, r.text), h('span', { class: 'sub' }, r.sub)]; },
         function (r) { return r.text; }),
@@ -4247,6 +4433,14 @@
         btn('act', 'Continue to questions' + (v.interview.questions.length ? ' (' + v.interview.questions.length + ')' : ''), { 'data-fk': 'pf-next' }, function () { PF.done = false; PF.enough = false; location.hash = 'profile-questions'; }),
         btn('act ghost', 'Save and finish later', { 'data-fk': 'pf-later' }, function () { location.hash = 'knowme'; }),
         h('span', { class: 'hint' }, 'What you saved is kept. Come back any time from Setup, Memory.')]), err];
+  }
+  function pfSame() {  /* 0.8.2: the first Same person? card; the rest in Setup, People */
+    var v = PF.v, c = (v.same || [])[0];
+    if (PF.same_said) return h('p', { class: 'ppsaid', role: 'status' }, [PF.same_said, ' ', peopleEntry('People')]);
+    if (!c) return null;
+    return pfCard('Same person?', v.same_open > 1 ? '1 of ' + v.same_open : '', [sameCard(c, { done: function (a, r) {
+      PF.same_said = ppAnswered(a, r); showProfile(ui.view, '.ppsaid');
+    } }), v.same_open > 1 ? h('div', { class: 'go' }, [peopleEntry('See all in People')]) : null]);
   }
   function pfAi() {
     var v = PF.v, err = errBox(), j = v.job && v.job.kind === 'suggest' ? v.job : null;

@@ -31,6 +31,8 @@ from index import Index, IndexError_  # 0.6.0 index
 import know_profile                  # 0.6.0 profile
 import projects as projects_mod     # 0.7.0 projects
 import chat                          # 0.6.0 chat
+import inject
+import people as people_mod          # 0.8.2 people
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -61,6 +63,28 @@ def load_sample():
     return json.loads(SAMPLE.read_text(encoding="utf-8"))
 
 
+PASTE_WARN = {"instruction": "This looks like an instruction copied from a message.",
+              "claim": "This looks like a claim copied from a message.",
+              "both": "This looks like an instruction and a claim copied from a message."}
+
+
+def paste_warning(texts):
+    """0.8.2: the 0.8.1 chat checks on notes the owner types or edits by hand, as a warning only (the owner may save
+    anyway with confirm: true): {"saved": False, "warning", "kinds"} or None."""
+    kinds = []
+    for t in texts or ():
+        if not isinstance(t, str) or not t.strip():
+            continue
+        if "instruction" not in kinds and inject.instructions(t):
+            kinds.append("instruction")
+        if "claim" not in kinds and writer.states_decision(t):
+            kinds.append("claim")
+    if not kinds:
+        return None
+    key = "both" if len(kinds) == 2 else kinds[0]
+    return {"saved": False, "warning": PASTE_WARN[key] + " Save anyway?", "kinds": kinds}
+
+
 def _obj(body):
     if not isinstance(body, dict):
         raise InputError("Send a JSON object.")
@@ -89,6 +113,9 @@ class App:
                                               sync_busy=self.syncer.lock.locked, clock=clock)
         self.scheduler.projects = self.projects
         self.chat.projects = self.projects  # 0.7.1: the project summary for a project chat's first lookup
+        # 0.8.2 people: one person across email, Slack, Signal and Drive (people.py, docs/people.md)
+        self.people = people_mod.People(self.store, self.index, clock=clock)
+        self.syncer.people = self.notifier.people = self.chat.people = self.projects.people = self.people
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -139,6 +166,7 @@ class App:
         self.routes += self._chat_routes()  # 0.6.0 chat
         self.routes += projects_mod.ProjectsApi(self.projects).routes()  # 0.7.0 projects
         self.routes += [("POST", r"horizon", self.horizon_mark)]  # 0.8.0 Coming up
+        self.routes += self._people_routes()  # 0.8.2 people
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -195,6 +223,7 @@ class App:
         self._brief_050(brief, cache, s)
         self._brief_080(brief, cache, s, now)
         self._brief_writing(brief, cache, s, now)
+        self._brief_people(brief)
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
                 brief["projects"] = self.projects.brief_line()
@@ -214,6 +243,98 @@ class App:
         except (KeyError, TypeError, ValueError):
             since = None
         brief["writing"] = {"text": presets.WRITING, "since": since, "preset": w.get("preset"), "poll_s": 10}
+
+    # --- 0.8.2: people (people.py, docs/people.md) ---------------------------------------------------------------
+    def _people_routes(self):
+        return [("GET", r"people", self.get_people),
+                ("POST", r"people/refresh", self.people_refresh),
+                ("PATCH", r"people/me", self.people_me),
+                ("POST", r"people/me/send-as", self.people_send_as),
+                ("POST", r"people/proposals/(mp[0-9a-f]{10})", self.people_decide),
+                ("POST", r"people/merges/(\d{1,9})/split", self.people_split),
+                ("PATCH", r"people/(p[0-9a-f]{11})", self.people_patch)]
+
+    def _ppl(self, fn, *args):
+        try:
+            return fn(*args)
+        except people_mod.PeopleError as e:
+            raise InputError(str(e)) from None
+        except people_mod.Gone as e:
+            raise NotFound(str(e)) from None
+
+    def get_people(self, body=None):
+        q = (body or {}).get("q") if isinstance(body, dict) else ""
+        return self._ppl(self.people.view, q if isinstance(q, str) else "")
+
+    def people_refresh(self, _body):
+        out = self._ppl(self.people.seed)
+        return dict(self.people.view(), refreshed=out)
+
+    def people_me(self, body):
+        self._ppl(self.people.my_names, _obj(body).get("names"))
+        return self.people.view()
+
+    def people_send_as(self, _body):
+        """The owner's button: each connected mail account's Gmail send-as addresses (GET users/me/settings/sendAs,
+        read-only, gmail.readonly); only the account's own primary address and accepted aliases count."""
+        client = self.store.google_client()
+        found, errors = {}, []
+        for a in self.store.accounts():
+            if not a["services"].get("mail"):
+                continue
+            acc = self.store.account_secret(a["id"])
+            try:
+                res = google.send_as(self.syncer._token(acc, client)) or {}
+            except google.GoogleError as e:
+                errors.append(f"{a['email']}: {e}")
+                continue
+            found[a["email"]] = [x.get("sendAsEmail") for x in res.get("sendAs") or [] if isinstance(x, dict) and
+                                 (x.get("isPrimary") or x.get("verificationStatus") == "accepted")]
+        self.people.set_send_as(found)
+        return dict(self.people.view(), errors=errors)
+
+    def people_decide(self, body, prop_id):
+        out = self._ppl(self.people.decide, prop_id, _obj(body).get("answer"))
+        return dict(out, open=len(self.people.proposals()))
+
+    def people_split(self, _body, audit_id):
+        return self._ppl(self.people.split, audit_id)
+
+    def people_patch(self, body, pid):
+        return self._ppl(self.people.patch, pid, _obj(body))
+
+    def _brief_people(self, brief):
+        """0.8.2: reply rows show the person's name when the owner confirmed the person (by the sender's address, Slack
+        user or Signal id, never a display name); a row whose sender is in an open "Same person?" pair carries the
+        card; mail whose From name is one of the owner's names, from an address that isn't the owner's, is marked."""
+        if brief.get("sample") or not brief.get("replies"):
+            return
+        try:
+            d = self.people.directory()
+            refs = self.store.brief_refs()
+            mine = self.people.me_keys()
+            own = self.people.owner_names()
+            cards = 0
+            for r in brief["replies"]:
+                ref = refs.get(r.get("id")) or {}
+                kind = {"mail": "email", "slack": "slack", "signal": "signal"}.get(ref.get("source"))
+                sender = str(ref.get("sender") or "").lower()
+                if not kind or not sender:
+                    continue
+                if kind == "email" and (kind, sender) not in mine and people_mod.norm_name(r.get("who")) in own:
+                    r["uses_your_name"] = True
+                p = d.person_of(kind, sender)
+                if p is None or p["state"] == people_mod.ME:
+                    continue
+                if p["state"] == "confirmed" and p["name"] and not r.get("sender_fail") and not r.get("uses_name"):
+                    r["who"] = p["name"][:60]
+                if cards < 3:
+                    props = self.people.proposals(person=p["id"], limit=1)
+                    if props:
+                        r["same"] = props[0]
+                        cards += 1
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            sys.stderr.write(f"Callsheet people on the brief failed: {type(e).__name__}\n")
 
     # --- 0.5.0: possible events and notes on the brief, memory (memory.py) -------------------------------------
     def _brief_050(self, brief, cache, settings):
@@ -362,8 +483,18 @@ class App:
 
     def save_memory(self, body):
         b = _obj(body)
-        if set(b) != {"text"}:
+        if "text" not in b or set(b) - {"text", "confirm"}:
             raise InputError("Send the memory as {\"text\": ...}.")
+        if b.get("confirm") is not True and isinstance(b["text"], str):
+            # 0.8.2: notes the owner wrote or changed by hand get the chat checks as a warning (people paste from mail)
+            try:
+                old = {e["text"] for e in self.memory.entries()}
+                new = [e["text"] for e in memory.parse(b["text"])["entries"] if e["text"] not in old]
+            except (memory.MemoryError_, KeyError, TypeError):
+                new = []
+            warn = paste_warning(new)
+            if warn:
+                return dict(self._mem(self.memory.view), rule=writer.NOTES_RULE, cap=memory.NOTES_CAP, **warn)
         return dict(self._mem(self.memory.save, b["text"]), rule=writer.NOTES_RULE, cap=memory.NOTES_CAP)
 
     def reset_memory(self, body):
@@ -422,10 +553,17 @@ class App:
                 raise NotFound("That heads-up isn't in the brief any more. Reload the page.")
             area = None
         title, meta = memory.meta_for(kind, item, ref, now, area_name.get(area, ""), sender, domain)
+        warn = paste_warning([b.get("text")]) if b.get("confirm") is not True else None
+        if warn:
+            return warn
         return self._mem(self.memory.add, title, meta, b.get("text"))
 
     def patch_note(self, body, nid):
-        return self._mem(self.memory.update, nid, _obj(body).get("text"))
+        b = _obj(body)
+        warn = paste_warning([b.get("text")]) if b.get("confirm") is not True else None
+        if warn:
+            return warn
+        return self._mem(self.memory.update, nid, b.get("text"))
 
     def delete_note(self, _body, nid):
         out = self._mem(self.memory.delete, nid)
@@ -447,6 +585,7 @@ class App:
             a["chat_available"] = a["chat_available"] or a["signal"]
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
+                "people": {"open": self.people.open_count()},  # 0.8.2: Setup home's People card
                 "suppress": self.store.suppress_rules(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),
@@ -1021,7 +1160,14 @@ class App:
             raise InputError(str(e)) from None
 
     def get_profile(self, _body=None):
-        return self._pf("view")
+        out = self._pf("view")
+        try:  # 0.8.2: the first "Same person?" card shows in Know me too
+            if isinstance(out, dict):
+                out["same"] = self.people.proposals(limit=1)
+                out["same_open"] = self.people.open_count()
+        except Exception as e:  # noqa: BLE001 (the profile must always load)
+            sys.stderr.write(f"Callsheet people in Know me failed: {type(e).__name__}\n")
+        return out
 
     def profile_build(self, _body=None):
         if self.syncer.lock.locked():

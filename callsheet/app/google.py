@@ -239,6 +239,12 @@ def gmail_profile(token):
     return request("GET", api_base() + "/gmail/v1/users/me/profile", token=token)
 
 
+def send_as(token):
+    """0.8.2 People: the account's Gmail send-as addresses (users.settings.sendAs.list). A GET under the allowed
+    /gmail/v1/users/me/ prefix; gmail.readonly is enough. Read only when the owner presses the button."""
+    return request("GET", api_base() + "/gmail/v1/users/me/settings/sendAs", token=token)
+
+
 def gmail_threads(token, q, max_results=50):
     return request("GET", api_base() + "/gmail/v1/users/me/threads", token=token,
                    params={"q": q, "maxResults": max_results})

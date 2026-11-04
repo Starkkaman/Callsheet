@@ -616,6 +616,8 @@ def slack_rows(data, ws, area, now_ts, vips, tz=None, fmt="24h"):
 
     def is_vip(uid):
         u = users.get(uid) or {}
+        if str(uid).lower() in getattr(vips, "slack", ()):  # 0.8.2: a VIP person's Slack user
+            return True
         if u.get("email"):
             return u["email"].lower() in vips
         return any(n and n.strip().lower() in vip_names for n in (u.get("name"), u.get("real_name")))
@@ -769,7 +771,7 @@ def signal_rows(chats, area, now_ts, vips, tz=None, fmt="24h", ignored=()):
         name = last.get("sender_name") or (title if c.get("kind") == "dm" else "") or "Someone"
         text = " ".join((last.get("text") or "").split())
         age_s = max(0.0, now_ts - last["ts"])
-        vip = name.strip().lower() in vip_names
+        vip = name.strip().lower() in vip_names or str(last.get("sender") or "").lower() in getattr(vips, "signal", ())
         reasons = (["VIP"] if vip else []) + (["Mentioned you"] if mentioned else []) \
             + (["Replied to you"] if quoted else [])
         if "?" in text:

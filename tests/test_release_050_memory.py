@@ -309,7 +309,7 @@ class WriterNotesTest(WriterBase):
         ], events={"me@example.com": [event("Roadmap review", at(11), at(12))]})
         self.ok("PATCH", "/api/memory", {"text": memfile(
             note("Priya", EVIL, emails="priya@acme.example", created="2026-10-30"),
-            note("Nobody", "Never sent.", people="Zed Unknown"))})
+            note("Nobody", "Never sent.", people="Zed Unknown")), "confirm": True})  # 0.8.2: past the paste warning
 
     def test_local_writer_gets_the_relevant_notes_after_the_facts(self):
         self.seed_notes()

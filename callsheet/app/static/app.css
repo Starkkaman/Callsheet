@@ -2116,3 +2116,67 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
 /* 0.8.0: a calendar tick's row is its label (Setup's "Choose calendars" opens this list); 44 px on phones */
 .cals .calrow{display:flex;gap:10px;align-items:center;min-width:0;overflow-wrap:anywhere;cursor:pointer}
 @media (max-width:700px){.cals .calrow{min-height:44px;flex:1}}
+
+/* ================= 0.8.2 People (understanding-v1 frame 4; theme tokens only) =================
+   Setup → People: Same person? cards, You (from accounts only), Everyone, History. The compact card sits in a
+   reply's panel; the first card also on Get to know me. */
+.pp .ppsec{display:grid;gap:12px;margin:0 0 32px;min-width:0}
+.pp .ppsec>h2{display:flex;align-items:baseline;gap:8px;margin:0}
+.pp .ppsec>h2 .n{font-family:var(--font-body);font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
+.ppsaid{margin:0;font-weight:700;font-size:var(--fs-md)}
+.pp .ppnever{font-size:var(--fs-sm);margin:0}
+.same{display:grid;gap:16px;max-width:820px;min-width:0}
+.same .pair{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px;align-items:stretch}
+.same .pair .or{align-self:center;font-weight:700;color:var(--muted);font-size:var(--fs-sm)}
+.ppc{padding:14px;border-radius:var(--radius);background:var(--bg);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);display:grid;gap:6px;align-content:start;min-width:0}
+.ppc h4{margin:0 0 2px;font-family:var(--font-display);font-weight:var(--display-weight);text-transform:var(--display-case);font-size:var(--fs-h3);line-height:1.1;overflow-wrap:anywhere}
+.ppsub{font-size:var(--fs-sm);color:var(--muted)}
+.pph{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.pph li{display:flex;gap:8px;align-items:center;font-size:var(--fs-sm);min-width:0}
+.pph li svg{flex:none;color:var(--muted)}
+.pph .v{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pph .c{margin-left:auto;font-size:var(--fs-xs);color:var(--muted);flex:none;white-space:nowrap}
+.same .swhy{display:grid;gap:8px}
+.same .swhy h4{margin:0;color:var(--muted)}
+.sigs{margin:0;padding:0;list-style:none;display:grid;gap:6px;font-size:var(--fs-sm)}
+.sigs li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;align-items:baseline}
+.sigs li b{font-size:var(--fs-xs);letter-spacing:var(--label-track);text-transform:var(--label-case)}
+.same>.btns{gap:8px 16px}
+.same.compact{gap:12px;margin-top:16px}
+.same.compact .plab{margin:0}
+.same.compact .pair{grid-template-columns:minmax(0,1fr)}
+.same.compact .pair .or{justify-self:start}
+.same.compact .ppc h4{font-size:var(--fs-lg)}
+.bv .panel .ppsaid{margin-top:12px}
+.pp .ppc.you{max-width:620px;gap:12px}
+.ppchips{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px}
+.pp .pchip{display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 10px;border-radius:var(--chip-radius);background:var(--surface-2);font-size:var(--fs-sm);box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.pp .pchip .cx{width:24px;height:24px;display:grid;place-items:center;border-radius:50%;color:var(--text);font-size:var(--fs-md)}
+.ppadd{display:grid;gap:4px}
+.ppadd .row{display:flex;gap:8px;align-items:center;max-width:420px}
+.ppadd .inp{flex:1;min-width:0}
+.pp .note{margin:0;font-size:var(--fs-sm);color:var(--muted)}
+.ppsearch{display:grid;gap:4px;max-width:420px}
+.pplist,.pphist{margin:0;padding:0;list-style:none}
+.pprow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:10px 0;border-top:var(--rule-w) solid var(--rule)}
+.pprow .nm{display:grid;gap:2px;min-width:0;flex:1 1 280px}
+.pprow .nm b{overflow-wrap:anywhere}
+.pprow .hs{font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}
+.pprow .acts{display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap}
+.pprow .vl{color:var(--muted)}
+.pprow>.err{flex-basis:100%;margin:0}
+.pphist li{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;padding:6px 0;font-size:var(--fs-md)}
+.pphist li .muted{font-size:var(--fs-sm)}
+.vipppl{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:0 0 16px;font-size:var(--fs-md)}
+.pwarn{margin:8px 0 0;color:var(--alert);font-weight:700;font-size:var(--fs-md)}
+.pwbox:empty{display:none}
+.pwbox .btns{margin-top:4px}
+@media (max-width:700px){
+  .same .pair{grid-template-columns:minmax(0,1fr)}
+  .same .pair .or{justify-self:center}
+  .same>.btns{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+  .same>.btns>button{width:100%;min-height:44px;text-align:center}
+  .pp .pchip{min-height:44px}
+  .app .pp .pchip .cx{width:44px;height:44px}
+  .pprow .acts .sw{min-height:44px}
+}

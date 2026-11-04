@@ -972,7 +972,13 @@ class Tools:
             raise _ArgError(f"limit must be a whole number from 1 to {SEARCH_MAX}.")
         lim = min(int(lim), SEARCH_MAX)
         lo, hi = self._bounds(since, until)
-        rows = self.index.search(q, source=source, area=area, people=person, since=lo, until=hi, limit=lim,
+        terms = None
+        if person and getattr(self, "people", None) is not None:  # 0.8.2: one person, every name and address
+            try:
+                terms = self.people.directory().search_terms(person) or None
+            except Exception:  # noqa: BLE001 (the plain name filter still works)
+                terms = None
+        rows = self.index.search(q, source=source, area=area, people=terms or person, since=lo, until=hi, limit=lim,
                                  ids=self.scope)
         label = "Searched " + SOURCE_WORDS.get(source, "everything") + (f" for “{_clip(q, 60)}”" if q else "") + \
             (f" with {_clip(person, 40)}" if person else "")

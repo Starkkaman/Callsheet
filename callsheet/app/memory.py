@@ -423,7 +423,7 @@ def _check_text(text):
 
 
 # --- relevance ----------------------------------------------------------------------------------------------
-def relevant(entries, rows, events, cap=NOTES_CAP):
+def relevant(entries, rows, events, cap=NOTES_CAP, people=None):
     """The notes for today's writer input, most relevant first, their texts together at most cap characters.
     rows: [{id, who, email (mail sender, lower case, or ""), domain, area (name), subject}] (the reply rows sent);
     events: [{id, title, area (name)}] (the events sent). An entry applies when one of its specific keys matches:
@@ -432,7 +432,10 @@ def relevant(entries, rows, events, cap=NOTES_CAP):
     a subject or event title), or a topic word (or every word of a topic phrase) is in a subject or event title.
     An entry with none of these keys applies when its area has a row or event today; one with no keys at all
     applies every day. Ranked by how specific the match is (email 8, person 6, domain 4, topic 2 each up to 3,
-    area 1), newest first on ties. Returns [{text, about {people, area, topics}, applies_to [ids], written}]."""
+    area 1), newest first on ties. Returns [{text, about {people, area, topics}, applies_to [ids], written}].
+    people (0.8.2, a people.Directory): a note's people and emails also match every handle of those people (their
+    other addresses, Slack and Signal) through the rows' "person" id, scored like an email."""
+    directory = people  # the name "people" is a note's names below
     rows, events = list(rows or ()), list(events or ())
     areas_today = {_norm_name(x.get("area")) for x in rows + events if x.get("area")}
     items = [(x["id"], set(words(x.get("subject") if "subject" in x else x.get("title"))),
@@ -446,10 +449,13 @@ def relevant(entries, rows, events, cap=NOTES_CAP):
         people = [_norm_name(x) for x in m.get("people") or [] if _norm_name(x)]
         topics = [x for x in m.get("topics") or [] if words(x)]
         area = _norm_name(m.get("area"))
+        pids = directory.note_people(emails, m.get("people") or []) if directory is not None else set()
         score, hits = 0, []
         for rid, ws, low, x in items:
             s = 0
             if emails and x.get("email") and x["email"].lower() in emails:
+                s += 8
+            elif pids and x.get("person") in pids:
                 s += 8
             if people and x.get("who") is not None:
                 who = _norm_name(x.get("who"))

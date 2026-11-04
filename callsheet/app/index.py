@@ -428,8 +428,11 @@ class Index:
             where.append("i.area=?")
             args.append(str(area))
         if people:
-            where.append("i.people LIKE ? ESCAPE '\\'")
-            args.append("%" + re.sub(r"([%_\\])", r"\\\1", str(people)[:100]) + "%")
+            terms = [str(p)[:100] for p in people if str(p).strip()][:12] if isinstance(people, (list, tuple)) \
+                else [str(people)[:100]]
+            if terms:  # 0.8.2: a list (one person's names and addresses) matches any of them
+                where.append("(" + " OR ".join(["i.people LIKE ? ESCAPE '\\'"] * len(terms)) + ")")
+                args += ["%" + re.sub(r"([%_\\])", r"\\\1", t) + "%" for t in terms]
         if since is not None:
             where.append("i.ts>=?")
             args.append(float(since))
@@ -547,6 +550,14 @@ class Index:
             if len(rows) < batch:
                 return
             last_ts, last_id = rows[-1]["ts"], rows[-1]["id"]
+
+    def bodies(self, source, since, limit=2000, chars=6000):
+        """0.8.2 People: recent items' kind, people and the first `chars` characters of the body (for signature
+        lines), newest first. Read-only."""
+        with self.lock:
+            rows = self.db.execute("SELECT kind, people, substr(body, 1, ?) AS body FROM items WHERE source=? AND ts>=? "
+                                   "ORDER BY ts DESC LIMIT ?", (int(chars), str(source), float(since), int(limit))).fetchall()
+        return [{"kind": r["kind"], "people": r["people"], "body": r["body"]} for r in rows]
 
     def count(self, source=None, account=None):
         where, args = self._filters(source, account, None, None, None, None)
