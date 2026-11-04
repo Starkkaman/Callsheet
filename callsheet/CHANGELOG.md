@@ -41,6 +41,20 @@ safety rules work as before.
   Your day with the look, and an optional short sound when you reach All clear.
 - **Chat on this device**: AI → Chat can hide the Chat tab on this device.
 - The message's **Close** button is now a full 44 px target and no longer sits under **Undo**.
+- **Sorting model and prompt**: Gemma (`gemma-4-26b-a4b-it-qat-q4_0`) with prompt `t083.2`, byte-identical to the
+  one the screen measured. Each card now carries addressing cues worked out from the headers and text, never by the
+  model: you copied, a greeting to you or to others, an @-mention, a "Name," address, your name in the text. Index
+  mail (whose To and Cc are guesses) never counts as copied. Shadow week is still the default (the brief is
+  unchanged until you turn sorting on).
+- **Copied, not addressed (rule `t083.3`)**: after the model, mail where you're only on Cc or Bcc, with no greeting,
+  "Name,", @-mention or group question to you and your name nowhere in it, is "not for you" (**Why is this here?**
+  says "You're only copied and nothing in it is addressed to you."). VIPs, security alerts, invites and your name
+  in To are never touched.
+- **Dates only from the AI** (0.9.x): the dates and deadlines the model points at (by sentence, checked against the
+  text's own dates) are the only facts used. Decisions and commitments are kept as labels but hidden.
+- **Throughput set to the measured 21-36 cards a minute**: 60 model minutes a day (room for 1,200 cards at the slow
+  end); the night reading runs batches back to back (about 3,800-6,500 cards a night) and picks up where it stopped,
+  for up to 7 nights.
 ## 0.8.5 ("Learning")
 
 - **AI sorting learns from you**: your fixes (**Needs a reply**, **Not for me**, **This is a promo**), your

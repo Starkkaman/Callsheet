@@ -1,7 +1,8 @@
-# AI sorting (0.8.4)
+# AI sorting (0.8.4, 0.9.0)
 
 `callsheet/app/triage.py`. Design: `~/project/daily-brief/understanding/design.md` (sections 3, 6, 7, 9). The card,
-schema, prompt `t083.1` and merge rules are the ones the 0.8.3 screen measured (`triage083.py`), unchanged.
+schema, prompt and merge rules are the ones the 0.8.3 screen measured (`triage083.py`). 0.9.0: prompt `t083.2` with
+its addressing cues, the `t083.3` to_owner rule and the dates-only fact policy (below).
 
 ## What happens
 
@@ -45,8 +46,10 @@ schema, prompt `t083.1` and merge rules are the ones the 0.8.3 screen measured (
 | After a call time | no start until `AFTER_CALL_S` = 10 min after (the brief writer goes first) |
 | Sync or brief writer | never while `syncer.lock` is held or `syncer.writing` is set (Swift's brief) |
 | Chat | requests never wait for `writer.LOCAL_LOCK`: when it's taken the sorter yields (`Busy`) |
-| Daily cap | `day_cards` 1,200 cards and `day_gpu_min` 25 model minutes; then "N items waiting" |
-| Night backfill | window 01:30-04:30 (configurable, may cross midnight), 30 days back, 2 nights at most; resumable; pauses when the server is busy, yields the rest of the night after "Loading" twice or when its batches take 3x the measured median |
+| Measured pace | Gemma, 12-card batches: 21-36 cards a minute (`MEASURED_CPM`); a batch is planned at `EST_BATCH_S` = 30 s until measured |
+| Daily cap | `day_cards` 1,200 cards and `day_gpu_min` 60 model minutes (1,200 / 21 = 57); then "N items waiting" |
+| Night backfill | window 01:30-04:30 (configurable, may cross midnight), 30 days back, 7 nights at most; each night tick runs batches back to back for up to `NIGHT_RUN_S` (= `RUN_S`), so a 3-hour window reads about 3,800-6,500 cards; pauses when the server is busy, yields the rest of the night after "Loading" twice or when its batches take 3x the measured median |
+| Resuming | the `(ts, id)` cursor and the nights used are stored in meta after every batch: a night that ends (window over, restart, unhealthy server) goes on from the cursor the next night, until the 30 days are read or the nights run out |
 
 Log lines are counts only (cards, batches, rules-only, tokens, ms, cards/min, waiting).
 
@@ -109,6 +112,33 @@ settings. `POST api/sorting/check {key, right, label}` adds one to the counts an
 - When sorting is on, One at a time walks the sections in order (Needs you, For your info, Sorted for you;
   `srSplit`), Start your day counts Needs you, and the One at a time card shows the row's sorting mark.
 
+## Prompt t083.2 and its cues (0.9.0)
+
+- `SYSTEM_T` is the screen's `t083.2` text; `system_text(owner, first, aliases)` is byte-identical to the harness
+  (`screen_hash` = `ecfcfcc5b3abafa4`, pinned in `tests/test_sorting_090.py`; `prompt_hash` = the template plus
+  `PROMPT_VERSION`). Gemma (`GEMMA`) is the default model; Shadow week the default mode.
+- `addressing_cues` (deterministic, from headers and text, never the model) adds to each card: `you_copied` (live
+  mail with the owner only in Cc/Bcc; index mail has `rcpt_known` false, so never), `greeting_to` (owner, others,
+  none), `mentions` (who is @-mentioned), `vocative_to` ("Isaac," / "Zac:" at a sentence start) and `owner_named`
+  (the owner's first or last name anywhere in the text). Same values as the screen's cards on all 171 hard items.
+
+## to_owner rule t083.3 (`copied_only`, after the model, before `place`)
+
+When the owner is only on Cc/Bcc (`you_copied`) AND no greeting, vocative, @-mention or group question addresses
+the owner AND `owner_named` is false, the model's label becomes `to_owner: no`; `needs_reply` and `fyi` become
+`for_someone_else` (promo, automated_update and meeting_or_date keep their kind). Never when an override holds (VIP,
+security, invite, owner named in To, flagged text) or the sender is a VIP. The row's why is `rules:copied_only`.
+Offline on the screen's hard set (171 items x 3 Gemma answers, `tests/fixtures/sorting_hard083.json`): to_owner
+0.807 (414/513) before and after; the rule applies to 7 items (Bcc, two others in To), where Gemma already said no.
+The misses left are mostly promos written in a personal tone, reply-all noise and group chatter.
+
+## Facts: dates only (0.9.x)
+
+Only the model's `date` and `deadline` facts are used (`FACT_USED`): each points at a sentence id and is checked
+against the dates `dates.find` reads in that sentence (`verified`); only verified ones can become a heads-up
+(`used_dates` lists the usable ones). Decisions and commitments are stored as labels with status
+`held`: never shown, never in a heads-up (a commitment from someone else stays `sender_says`).
+
 ## Also in 0.8.4
 
 - `rules.SECURITY`: declined cards ("card ending 2290 was declined"), declined or failed transactions, payments that
@@ -120,5 +150,6 @@ settings. `POST api/sorting/check {key, right, label}` adds one to the counts an
 
 ## Tests
 
-`tests/test_sorting_084.py`, `tests/test_sorting_084_queue.py` (the queue, live Slack/Signal, sections; fakes only:
-no model is ever called).
+`tests/test_sorting_084.py`, `tests/test_sorting_084_queue.py` (the queue, live Slack/Signal, sections),
+`tests/test_sorting_090.py` (prompt t083.2 pin, cues, t083.3 on the hard set offline, dates only, throughput, night
+resume; `tests/fixtures/sorting_hard083.json`). Fakes and recorded answers only: no model is ever called.

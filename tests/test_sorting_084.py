@@ -115,12 +115,14 @@ def card_of(s, c=None):
 class PromptAndSchema(unittest.TestCase):
     def test_template_pinned_and_equal_to_the_screened_prompt(self):
         # the template's hash: changing the fixed text needs a new PROMPT_VERSION (and a new screen)
-        self.assertEqual(triage.prompt_hash(), "0f733943bedd23a1")
-        self.assertEqual(triage.PROMPT_VERSION, "t083.1")
-        # with the screen's owner the text is byte-for-byte the 0.8.3 screen's t083.1 prompt
+        # (0.9.0: t083.2, the version bound into the hash; test_sorting_090 pins the screen's hash too)
+        self.assertEqual(triage.prompt_hash(), "1fa0ae0e24e5d714")
+        self.assertEqual(triage.PROMPT_VERSION, "t083.2")
+        # with the screen's owner the text is byte-for-byte the 0.8.3 screen's t083.2 prompt
         sys_text = triage.system_text("Isaac Hammond", "Isaac", ["Zac"])
-        h = hashlib.sha256((sys_text + "\x00" + triage.USER_HEAD + "\x00" + triage.USER_TAIL).encode()).hexdigest()
-        self.assertEqual(h[:16], "61b6e05a41a1c0ea")
+        h = hashlib.sha256((sys_text + "\x00" + triage.USER_HEAD + "\x00" + triage.USER_TAIL + "\x00t083.2")
+                           .encode()).hexdigest()
+        self.assertEqual(h[:16], "ecfcfcc5b3abafa4")
         self.assertEqual(ctx().system(), sys_text)
         # no name: "the owner"; names from Setup can't inject quotes, brackets or new lines
         self.assertIn("for the owner, the owner", triage.system_text())
@@ -279,7 +281,8 @@ class FromOwner(unittest.TestCase):
         s = src("2", f"Isaac <{OWNER}>", "Re", "I'll send the contract on Friday 6 Nov.", labels=("SENT",))
         _, meta = card_of(s)
         f = triage.finalize_facts(meta, ai, TUE.date(), {"isaac"})[0]
-        self.assertEqual((f["status"], f["verified"], f["headsup"]), ("ok", True, True))
+        # 0.9.x extraction policy: even the owner's own commitment is held (dates only are used)
+        self.assertEqual((f["status"], f["verified"], f["headsup"]), ("held", True, False))
 
 
 class Base(unittest.TestCase):

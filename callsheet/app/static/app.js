@@ -4573,7 +4573,8 @@
   var SR_WHY = { rules_only: 'The rules placed it (no AI answer).', 'override:security': 'Security alerts always show.',
     'override:invite': 'Invites always show.', 'override:flagged': 'Its text tries to steer the sorting, so the AI’s label isn’t used.',
     'rules:strong_reply': 'The rules are sure it needs a reply.', 'rules:weak_reply': 'The rules think it needs a reply.',
-    'ai:found': 'The AI found a request for you.', 'ai:demoted_weak': 'The AI thinks it’s for someone else.', 'ai:security': 'The AI read it as a security alert.' };
+    'ai:found': 'The AI found a request for you.', 'ai:demoted_weak': 'The AI thinks it’s for someone else.', 'ai:security': 'The AI read it as a security alert.',
+    'rules:copied_only': 'You’re only copied and nothing in it is addressed to you.' };
   var SR_FIX = [['needs_reply', 'Needs a reply'], ['not_for_me', 'Not for me'], ['promo', 'This is a promo']];
   function srWhyText(why) {
     if (SR_WHY[why]) return SR_WHY[why];
