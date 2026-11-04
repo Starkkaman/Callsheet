@@ -2029,7 +2029,7 @@
     else if (v === 'knowme') showKnow('#kn-title');  /* 0.6.0 index */
     else if (v === 'profile' || v === 'profileq') showProfile(v);  /* 0.6.0 profile */
     else if (v === 'people') { PP.said = ''; showPeople('#pp-title'); }  /* 0.8.2 people */
-    else if (v === 'sorting') { SR.said = ''; SR.wrong = null; showSorting('#sr-title'); }  /* 0.8.4 AI sorting */
+    else if (v === 'sorting') { SR.said = ''; SR.hsaid = ''; SR.wrong = null; showSorting('#sr-title'); }  /* 0.8.4 AI sorting */
     else showBrief();
   }
   window.addEventListener('hashchange', route);
@@ -4218,7 +4218,7 @@
      {key, right, label}; GET api/sorting/numbers (counts only); PATCH api/sorting/settings; POST api/sorting/fix
      {key, action}; DELETE api/sorting/fix/<id>. Shadow mode (the default for the first week): labels show only on this
      page and the brief doesn't change. Data is text (h()). ---------- */
-  var SR = { v: null, seq: 0, err: null, wrong: null, said: '', adv: false };
+  var SR = { v: null, seq: 0, err: null, wrong: null, said: '', hsaid: '', adv: false };
   var SR_MODES = [['off', 'Off'], ['shadow', 'Shadow week'], ['on', 'On']];
   var SR_MODE_NOTE = { off: 'Nothing is sorted.', shadow: 'Callsheet sorts quietly and shows its labels only here. Your brief doesn’t change.',
     on: 'The brief shows why each item is there, with one-click fixes. Nothing is ever hidden.' };
@@ -4355,7 +4355,7 @@
   function renderSorting(focusSel) {
     var v = SR.v, body;
     if (!v) body = [SR.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the sorting (' + SR.err + ').') : h('p', { class: 'muted' }, 'Loading…')];
-    else body = [v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v),
+    else body = [lmHealth(v) /* 0.8.5 server faults */, v.settings.mode === 'off' ? null : srCheck(v), v.settings.mode === 'off' ? null : srCounts(v), sortSettings(v),
       v.settings.mode === 'off' ? null : srLearned(v)];  /* 0.8.5 What it learned */
     var mode = v ? v.settings.mode : null;
     var sheet = h('div', { class: 'sheet wiz aisort' }, [
@@ -4470,6 +4470,26 @@
     }).catch(function () { });
   }
   /* ---------- end 0.8.4 AI sorting ---------- */
+
+  /* ---------- 0.8.5 server faults: "Local model unhealthy since HH:MM" and Check again (self-contained block for
+     Setup -> AI sorting; it can move to another Setup page as is). Data: GET api/sorting -> v.local_health {healthy,
+     since_text}; POST api/sorting/model-check runs the health probe now and returns the sorting view. ---------- */
+  function lmHealth(v) {
+    var hv = v && v.local_health;
+    if (!hv || hv.healthy) return SR.hsaid ? h('p', { class: 'srsaid', role: 'status', tabindex: '-1', 'data-fk': 'lm-said' }, SR.hsaid) : null;
+    var err = errBox();
+    var again = btn('btn sm', 'Check again', { 'data-fk': 'lm-check' }, function () {
+      run([again], err, function () { return api('POST', 'api/sorting/model-check'); }, function (r) {
+        var ok = r && r.local_health && r.local_health.healthy;
+        SR.hsaid = ok ? 'The local model is working again.' : 'Still not working.';
+        srAfter(r, ok ? '[data-fk="lm-said"]' : '[data-fk="lm-check"]', SR.said);
+      });
+    });
+    return h('div', { class: 'lmhealth' }, [
+      h('p', { class: 'lmline' }, 'Local model unhealthy since ' + (hv.since_text || '')),
+      h('div', { class: 'btns' }, [again, SR.hsaid ? h('span', { class: 'hint', role: 'status' }, SR.hsaid) : null]), err]);
+  }
+  /* ---------- end 0.8.5 server faults ---------- */
 
   /* ---------- 0.8.5 Learning: "What it learned" (self-contained block for Setup -> AI sorting; it can move to another
      Setup page as is) and the Why panel's "You taught it" line. Data: GET api/sorting -> v.learned {items: [{id, kind:

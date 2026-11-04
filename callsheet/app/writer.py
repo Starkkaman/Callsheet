@@ -19,8 +19,10 @@ import html
 import json
 import os
 import re
+import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1012,12 +1014,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _loading_body(e):
-    """True when an HTTP error body says the server is loading the model (the body is never logged)."""
+def _error_body(e):
+    """The start of an HTTP error body, lower case ("" when unreadable). Only matched, never logged or shown."""
     try:
-        text = e.read(4000).decode("utf-8", "replace").lower()
+        return e.read(4000).decode("utf-8", "replace").lower()
     except Exception:  # noqa: BLE001
-        return False
+        return ""
+
+
+def _loading_body(e, text=None):
+    """True when an HTTP error body says the server is loading the model (the body is never logged)."""
+    text = _error_body(e) if text is None else text
     return "loading" in text or "model limit" in text
 
 
@@ -1050,7 +1057,10 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
             raise WriterError("The local model server doesn't know that address or model.") from None
         if 300 <= e.code < 400:
             raise WriterError("The local model server sent a redirect. Check the server address.") from None
-        if e.code in (500, 503) and _loading_body(e):
+        text = _error_body(e) if e.code >= 500 else ""
+        if e.code >= 500 and _GRAMMAR.search(text):  # 0.8.5: a llama.cpp internal error is a server fault
+            raise ServerFault("grammar") from None
+        if e.code in (500, 503) and _loading_body(e, text):
             raise _Loading("The local model server was still loading the model.") from None
         raise WriterError(f"The local model server said no (HTTP {e.code}).") from None
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:  # RemoteDisconnected is a reset
@@ -1121,6 +1131,263 @@ def _log_answer(log, res, wall):
     log("Callsheet writer: local answer: " + ", ".join(parts) + f", {wall:.1f}s")
 
 
+# --- 0.8.5 server faults ---------------------------------------------------------------------------------------
+# Garbage from the local server (Gemma's <unusedNN> tokens, <|...|> special tokens, runs of control characters, one
+# token over and over, an answer cut at the length limit with only junk in it) and llama.cpp's internal errors
+# ("Unexpected empty grammar stack after accepting piece") are a fault of the server, not a model mistake. They are
+# never retried (the "Loading model" retry stays): the server and model are marked unhealthy with the time, nothing
+# goes to them for FAULT_BACKOFF_S, then a real health probe (a short generation that must come back as normal words
+# with finish "stop"; a one-token canary isn't enough) runs before the next request. Log lines name the rule only.
+FAULT_TEXT = "The local model isn't healthy right now."
+FAULT_BACKOFF_S = 15 * 60
+FAULT_REPEAT = 25          # one token this many times in a row
+FAULT_CONTROL_RUN = 8      # control or non-printable characters in a row
+FAULT_SPECIAL = 3          # <unusedNN> or <|...|> tokens (one is enough when the text holds nothing else)
+FAULT_SCAN = 100_000       # characters checked per text
+PROBE_TIMEOUT = 60
+PROBE_MAX_TOKENS = 160
+PROBE_PROMPT = "Reply with this sentence and nothing else: The quick brown fox jumps over the lazy dog."
+PROBE_WORDS = frozenset(("quick", "brown", "fox", "jumps", "lazy", "dog"))
+PROBE_MIN_WORDS = 4
+
+_UNUSED = re.compile(r"<unused\d{1,6}>")
+_SPECIAL = re.compile(r"<\|[^<>|\s]{0,40}\|>")
+_GRAMMAR = re.compile(r"empty grammar stack|grammar stack after accepting|ggml_assert")
+_UNIT_REPEAT = re.compile(r"((?=\w)\S{2,12}?)\1{%d,}" % (FAULT_REPEAT - 1))
+_WORDY = re.compile(r"\w")
+
+
+class ServerFault(WriterError):
+    """0.8.5: the local server sent garbage or an internal error (.rule names which), or it is still marked unhealthy
+    ("backoff", "probe"). Never retried."""
+
+    def __init__(self, rule="backoff"):
+        super().__init__(FAULT_TEXT)
+        self.rule = rule
+
+
+def _junk_char(c):
+    if c in "\t\n\r":
+        return False
+    return c == "\ufffd" or unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Cn")
+
+
+def _strip_junk(text):
+    text = _SPECIAL.sub("", _UNUSED.sub("", text))
+    return "".join(c for c in text if not _junk_char(c))
+
+
+def _has_junk(text):
+    return bool(_UNUSED.search(text) or _SPECIAL.search(text) or any(_junk_char(c) for c in text))
+
+
+def junk_rule(text):
+    """The garbage rule a model text trips ("unused", "special", "control", "repeat"), else None."""
+    if not isinstance(text, str) or not text:
+        return None
+    t = text[:FAULT_SCAN]
+    only = not _strip_junk(t).strip()
+    n = len(_UNUSED.findall(t))
+    if n >= FAULT_SPECIAL or (n and only):
+        return "unused"
+    n = len(_SPECIAL.findall(t))
+    if n >= FAULT_SPECIAL or (n and only):
+        return "special"
+    run = 0
+    for c in t:
+        run = run + 1 if _junk_char(c) else 0
+        if run >= FAULT_CONTROL_RUN:
+            return "control"
+    run, prev = 0, None
+    for tok in t.split():
+        run = run + 1 if tok == prev else 1
+        prev = tok
+        if run >= FAULT_REPEAT and _WORDY.search(tok):
+            return "repeat"
+    if _UNIT_REPEAT.search(t):
+        return "repeat"
+    return None
+
+
+def fault_of(res):
+    """The fault rule a server answer (HTTP 200) trips, else None: junk in the answer, the thinking channel or tool
+    call arguments, or "empty_length" (cut at the length limit with nothing but junk in it)."""
+    if not isinstance(res, dict) or not isinstance(res.get("choices"), list) or not res["choices"]:
+        return None
+    choice = res["choices"][0]
+    if not isinstance(choice, dict):
+        return None
+    msg = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    texts = [msg.get(k) for k in ("content", "reasoning_content", "reasoning")]
+    for call in msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else ():
+        fn = call.get("function") if isinstance(call, dict) else None
+        texts.append(fn.get("arguments") if isinstance(fn, dict) else None)
+    texts = [t for t in texts if isinstance(t, str)]
+    for t in texts:
+        rule = junk_rule(t)
+        if rule:
+            return rule
+    if choice.get("finish_reason") == "length" and any(_has_junk(t[:FAULT_SCAN]) for t in texts) \
+            and not any(_strip_junk(t[:FAULT_SCAN]).strip() for t in texts):
+        return "empty_length"
+    return None
+
+
+_HEALTH = {}                    # (server, model) -> {since, checked, rule, key, slot, faults, probes}; memory only
+_HEALTH_LOCK = threading.Lock()
+_wall = time.time               # tests replace this
+
+
+def _log_line(log, line):
+    (log or (lambda x: sys.stderr.write(x + "\n")))(line)
+
+
+def _hkey(base, model):
+    return (str(base or "").rstrip("/"), str(model or ""))
+
+
+def _health_of(base, model):
+    with _HEALTH_LOCK:
+        rec = _HEALTH.get(_hkey(base, model))
+        return dict(rec) if rec else None
+
+
+def _in_backoff(base, model):
+    rec = _health_of(base, model)
+    return rec is not None and _wall() - rec["checked"] < FAULT_BACKOFF_S
+
+
+def in_backoff(base, model):
+    """0.8.5: True while this server and model are unhealthy and their next health check isn't due yet."""
+    return _in_backoff(base, model)
+
+
+def _mark_unhealthy(base, key, model, rule, slot, log):
+    now = _wall()
+    with _HEALTH_LOCK:
+        k = _hkey(base, model)
+        rec = _HEALTH.get(k) or {"since": now, "faults": 0, "probes": 0}
+        rec.update(checked=now, rule=rule, key=key, slot=slot, faults=rec["faults"] + 1)
+        _HEALTH[k] = rec
+        n = rec["faults"]
+    _log_line(log, f"Callsheet writer: local server fault ({rule}), not retried; the local model is marked unhealthy "
+                   f"({n} fault{'s' if n != 1 else ''}), next check in {FAULT_BACKOFF_S // 60} min")
+
+
+def probe_body(model, slot=None):
+    """0.8.5: the health probe: a short real generation (not a one-token canary), thinking off."""
+    body = {"model": model, "stream": False, "max_tokens": PROBE_MAX_TOKENS, "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": PROBE_PROMPT}]}
+    if "gpt-oss" in str(model).lower():
+        body["reasoning_effort"] = "low"
+    if isinstance(slot, int) and not isinstance(slot, bool):
+        body["id_slot"] = slot
+    return body
+
+
+def probe_result(res):
+    """None when a probe answer is healthy: no junk, finish "stop", and normal words (most of the sentence asked for,
+    mostly letters); else a rule code."""
+    rule = fault_of(res)
+    if rule:
+        return rule
+    try:
+        choice = res["choices"][0]
+        content = choice["message"].get("content")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return "probe_shape"
+    if choice.get("finish_reason") != "stop":
+        return "probe_finish"
+    if not isinstance(content, str) or not content.strip():
+        return "probe_empty"
+    text = content.strip()[:2000]
+    letters = sum(c.isalpha() or c.isspace() for c in text)
+    if len(PROBE_WORDS & set(re.findall(r"[a-z]+", text.lower()))) < PROBE_MIN_WORDS or letters < 0.7 * len(text):
+        return "probe_words"
+    return None
+
+
+def _probe(base, key, model, slot, timeout):
+    """One probe request (with the one "Loading model" retry). Returns None when healthy, else a rule code."""
+    body = probe_body(model, slot)
+    try:
+        try:
+            res = _local("POST", base, "/chat/completions", key, body, timeout=timeout)
+        except _Loading:
+            _sleep(LOAD_WAIT)
+            res = _local("POST", base, "/chat/completions", key, body, timeout=timeout)
+    except ServerFault as e:
+        return e.rule
+    except WriterError as e:
+        return "probe_" + type(e).__name__.strip("_").lower()
+    return probe_result(res)
+
+
+def _run_probe(base, key, model, timeout, log):
+    """Probe one unhealthy server and model (the caller holds LOCAL_LOCK). True when it passed (the mark is
+    cleared), False when it failed (the backoff starts again)."""
+    rec = _health_of(base, model)
+    if rec is None:
+        return True
+    t0 = time.monotonic()
+    rule = _probe(base, key if key is not None else rec.get("key"), model, rec.get("slot"), timeout)
+    with _HEALTH_LOCK:
+        cur = _HEALTH.get(_hkey(base, model))
+        if rule is None:
+            _HEALTH.pop(_hkey(base, model), None)
+        elif cur is not None:
+            cur.update(checked=_wall(), probes=cur["probes"] + 1, rule=rule)
+    if rule is None:
+        _log_line(log, f"Callsheet writer: the local model passed its health check ({time.monotonic() - t0:.1f}s); "
+                       "using it again")
+        return True
+    _log_line(log, f"Callsheet writer: the local model failed its health check ({rule}, "
+                   f"{time.monotonic() - t0:.1f}s); next check in {FAULT_BACKOFF_S // 60} min")
+    return False
+
+
+def _probe_gate(base, key, model, opts, log):
+    """Inside _post (LOCAL_LOCK held), when the backoff is over: the probe must pass before the real request."""
+    timeout = max(5, min(PROBE_TIMEOUT, int((opts or {}).get("timeout") or PROBE_TIMEOUT)))
+    if not _run_probe(base, key, model, timeout, log):
+        raise ServerFault("probe")
+
+
+def health_view():
+    """{healthy, since, next_check, rule, models}: the earliest unhealthy mark (wall-clock seconds), no keys."""
+    with _HEALTH_LOCK:
+        recs = list(_HEALTH.values())
+    if not recs:
+        return {"healthy": True}
+    first = min(recs, key=lambda r: r["since"])
+    return {"healthy": False, "since": first["since"], "rule": first["rule"], "models": len(recs),
+            "next_check": min(r["checked"] for r in recs) + FAULT_BACKOFF_S}
+
+
+def check_local(log=None, wait=30.0):
+    """0.8.5 Setup "Check again": probe every unhealthy server and model now (no backoff). Returns health_view().
+    Raises WriterError when Callsheet's own requests keep the server busy longer than `wait` seconds."""
+    with _HEALTH_LOCK:
+        todo = list(_HEALTH.keys())
+    if not todo:
+        return health_view()
+    if not LOCAL_LOCK.acquire(timeout=wait):
+        raise WriterError("The model server is busy with Callsheet's own requests. Try again in a moment.")
+    try:
+        for base, model in todo:
+            _run_probe(base, None, model, PROBE_TIMEOUT, log)
+    finally:
+        LOCAL_LOCK.release()
+    return health_view()
+
+
+def reset_health():
+    """Forget every unhealthy mark (tests)."""
+    with _HEALTH_LOCK:
+        _HEALTH.clear()
+
+
 # 0.6.0 chat: one request at a time to the local model server. Every local POST (brief writer, evaluation, chat)
 # goes through _post, so the brief and a chat question never hit the server at the same moment.
 LOCAL_LOCK = threading.Lock()
@@ -1132,7 +1399,13 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
     again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
     and "loading" when the server said it is loading the model (before the retry). `timing` (a dict, optional) gets
     lock_s (waiting for LOCAL_LOCK, not part of the request's timeout), first_byte_s and read_s (see _local).
-    Without notify the lock is taken as before (the brief writer and the evaluation)."""
+    Without notify the lock is taken as before (the brief writer and the evaluation).
+    0.8.5: an answer with garbage or a llama.cpp internal error raises ServerFault (never retried) and marks the
+    server and model unhealthy; while marked, ServerFault comes at once; after FAULT_BACKOFF_S a health probe goes
+    first."""
+    model = body.get("model") if isinstance(body, dict) else None
+    if _in_backoff(base, model):  # 0.8.5: an unhealthy server gets nothing until its next health check is due
+        raise ServerFault("backoff")
     w0 = clock()
     if notify is None:
         LOCAL_LOCK.acquire()
@@ -1146,6 +1419,10 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
             timing["lock_s"] = round(clock() - w0, 1)
         t0 = clock()
         try:
+            if _health_of(base, model) is not None:  # 0.8.5 (checked again under the lock)
+                if _in_backoff(base, model):
+                    raise ServerFault("backoff")
+                _probe_gate(base, key, model, opts, log)  # the backoff is over: a real health probe first
             if notify:
                 notify("sent")
             try:
@@ -1157,6 +1434,14 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
                     notify("loading")
                 _sleep(LOAD_WAIT)
                 res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
+            rule = fault_of(res)
+            if rule:  # 0.8.5: garbage is a server fault, never retried
+                raise ServerFault(rule)
+        except ServerFault as e:
+            if e.rule not in ("backoff", "probe"):
+                _mark_unhealthy(base, key, model, e.rule, body.get("id_slot") if isinstance(body, dict) else None,
+                                log)
+            raise
         except WriterError:
             if log:
                 log(f"Callsheet writer: local request failed, {clock() - t0:.1f}s")

@@ -50,6 +50,11 @@ schema, prompt `t083.1` and merge rules are the ones the 0.8.3 screen measured (
 
 Log lines are counts only (cards, batches, rules-only, tokens, ms, cards/min, waiting).
 
+Server faults (0.8.5, `docs/server-faults.md`): garbage or a llama.cpp internal error from the server stops the run
+(reason `unhealthy`, the batch stays queued with its rules labels); while the server is in its 15-minute backoff
+`run_pass` and the night step return `unhealthy` without sending. Setup -> AI sorting shows "Local model unhealthy
+since ..." with **Check again** (`POST api/sorting/model-check`).
+
 ## Modes (settings in meta `sorting`)
 
 - `shadow` (default; `shadow_since` is the first day): labels are computed and stored and shown only on

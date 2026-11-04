@@ -262,7 +262,9 @@ class App:
                 ("DELETE", r"sorting/fix/(\d{1,12})", self.sorting_unfix),
                 # 0.8.5 learning (learn.py, docs/learning.md): What it learned and Forget
                 ("GET", r"sorting/learned", self.sorting_learned),
-                ("POST", r"sorting/forget", self.sorting_forget)]
+                ("POST", r"sorting/forget", self.sorting_forget),
+                # 0.8.5 server faults: "Check again" runs the local model's health probe now
+                ("POST", r"sorting/model-check", self.sorting_model_check)]
 
     @staticmethod
     def _srt(fn, *args):
@@ -298,6 +300,12 @@ class App:
 
     def sorting_forget(self, body):
         return self._srt(self.sorter.forget, body)
+
+    def sorting_model_check(self, _body=None):
+        try:
+            return self.sorter.check_model()
+        except writer.WriterError as e:  # the server is busy with Callsheet's own requests
+            raise Conflict(str(e)) from None
 
     def _sorting_summary(self):
         try:

@@ -72,6 +72,9 @@ suggestion filled in and the error, so the owner edits the id.
    model: the careful one didn't answer in time." (timeout) or "…didn't work." (other failures). Never to Claude,
    even with "If the local model fails, use Claude instead" on (that setting still applies to Fast's own runs).
    If Fast fails too, Heads up says the writer didn't run and why.
+5a. 0.8.5: a server fault (garbage or a llama.cpp internal error, `docs/server-faults.md`) is never retried and never
+   falls back to Fast or Claude: the rules brief with Heads up "The local model isn't healthy right now, so this
+   brief was made by the rules.", and no Fast reload afterwards.
 6. After a successful run with another preset, when `reload_fast` is on and the models differ: one tiny request
    (max_tokens 8, thinking off, Fast's slot) loads Fast again. Not sent after a fallback (Fast is loaded already).
 

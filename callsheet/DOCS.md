@@ -493,6 +493,9 @@ Pick a look under **Look** in the header or in Setup > About you.
   **Thinking** on). Turn Thinking off, or raise **Max tokens** under Advanced.
 - "The local model server was still loading the model": it was still loading after the retry. Refresh
   again in a minute.
+- "The local model isn't healthy right now, so this brief was made by the rules": the model server sent garbage
+  or an internal error. Callsheet leaves it alone for 15 minutes, then checks it with a short answer. Restart the
+  model server if it keeps happening; **Check again** on Setup -> AI sorting checks it at once.
 - "Couldn't reach the local model": check the Server URL and that the server is running; **Test
   connection** should list your model.
 - "The Anthropic API key was refused": create a new key and save it again.

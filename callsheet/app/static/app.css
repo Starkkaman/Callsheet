@@ -2255,3 +2255,10 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
   .lnrow>.btn,.srlearn .btns button{min-height:44px;min-width:44px}
 }
 /* ================= end 0.8.5 Learning ================= */
+/* ================= 0.8.5 server faults (the local model's health line on #sorting). Tokens only. ================= */
+.lmhealth{display:grid;gap:8px;margin:0 0 32px;min-width:0}
+.lmline{margin:0;font-weight:700;color:var(--alert);overflow-wrap:anywhere}
+@media (max-width:700px){
+  .lmhealth .btns button{min-height:44px;min-width:44px}
+}
+/* ================= end 0.8.5 server faults ================= */

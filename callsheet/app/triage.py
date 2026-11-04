@@ -1551,6 +1551,8 @@ class Sorter:
             return "empty"
         if self._post_fn is None and not self._server()[0]:
             return "no_server"
+        if self._post_fn is None and writer.in_backoff(self._server()[0], s["model"]):
+            return "unhealthy"   # 0.8.5: the local model isn't healthy: the rules' labels stay, nothing is sent
         room, why = self.call_guard()
         if why:
             return why
@@ -1594,6 +1596,11 @@ class Sorter:
             except writer.WriterError as e:   # they stay in the queue
                 if isinstance(e, Busy):
                     reason = "yield"
+                    break
+                if isinstance(e, writer.ServerFault):   # 0.8.5: no more batches this run; the rules' labels stay
+                    self.log(f"Callsheet sorting: the local model isn't healthy ({e.rule}); rules-only labels this "
+                             f"run, {n} cards sorted, {len(self.pending)} waiting")
+                    reason = "unhealthy"
                     break
                 self.log(f"Callsheet sorting: the model server didn't answer ({type(e).__name__})")
                 reason = "server"
@@ -1660,6 +1667,8 @@ class Sorter:
             return "yielded"
         if self._post_fn is None and not self._server()[0]:
             return "no_server"
+        if self._post_fn is None and writer.in_backoff(self._server()[0], s["model"]):
+            return "unhealthy"   # 0.8.5
         room, why = self.call_guard(now)
         if why:
             return why
@@ -1909,7 +1918,26 @@ class Sorter:
                 "shadow_day": self.shadow_day(s), "shadow_days": SHADOW_DAYS, "status": self.status(),
                 "check": {"items": items, "done": done, "per_day": CHECK_PER_DAY,
                           "names": KIND_NAMES}, "counts": self.counts(), "fixes": list(FIXES),
-                "learned": self.learned_view()}
+                "learned": self.learned_view(), "local_health": self.local_health()}
+
+    def local_health(self):
+        """0.8.5: the local model's health for Setup: {healthy} or {healthy: false, since (seconds), since_text (the
+        owner's time format, with the day when it isn't today), next_check}."""
+        v = writer.health_view()
+        if v.get("healthy"):
+            return {"healthy": True}
+        settings = self.store.settings()
+        tz, fmt = rules.tzinfo(settings), rules.time_format(settings)
+        d = dt.datetime.fromtimestamp(v["since"], tz)
+        text = rules.clock(d, fmt)
+        if d.date() != self._today():
+            text = f"{d:%b} {d.day}, {text}"
+        return {"healthy": False, "since": int(v["since"]), "since_text": text, "next_check": int(v["next_check"])}
+
+    def check_model(self):
+        """0.8.5 Setup "Check again": a real health probe now. Returns view()."""
+        writer.check_local(self.log)
+        return self.view()
 
     # the brief (only when sorting is on) -------------------------------------------------------------------------------
     def for_brief(self, brief):

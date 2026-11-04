@@ -192,6 +192,12 @@ showed its spinner. Since 0.6.2:
   (a refused key, a bad address) have no retry. The page stops polling as soon as nothing is pending (an answer or
   an error), and after 5 failed polls.
 
+## A broken model server (0.8.5)
+Garbage or a llama.cpp internal error from the local server is a server fault (`docs/server-faults.md`): no retry, no
+switch to the JSON protocol, the answer is "The local model isn't working right now. Try again in a few minutes."
+(with Try again) and nothing of the garbage is stored. For the next 15 minutes questions get that answer without a
+request; then a health probe goes before the first one.
+
 ## Settings (`meta` key `chat`, Setup → Delivery → Chat)
 `provider` local or claude. Local: `base_url` (empty = the writer's server, model and key), `model` (picked
 from `/v1/models`), `api_key`, `thinking`, `max_tokens` 256..16384 (2048), `timeout` 30..600 s (300 since 0.6.2; a
