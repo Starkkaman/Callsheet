@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS cursors (
 """
 # 0.6.0 chat: planted-instruction flags (inject.py), added in place to existing databases (schema version stays 1):
 # instr = JSON list of short hashes of the flagged sentences ("" = none), instr_v = the inject.VERSION that checked it
-_INSTR_COLUMNS = (("instr", "TEXT NOT NULL DEFAULT ''"), ("instr_v", "INTEGER NOT NULL DEFAULT 0"))
+_INSTR_COLUMNS = (("instr", "TEXT NOT NULL DEFAULT ''"), ("instr_v", "INTEGER NOT NULL DEFAULT 0"),
+                  ("hidden", "INTEGER NOT NULL DEFAULT 0"))   # 0.8.4: the HTML part had hidden text
 _AU_TRIGGER = """CREATE TRIGGER items_au AFTER UPDATE OF title, people, body ON items BEGIN
   INSERT INTO items_fts (items_fts, rowid, title, people, body) VALUES ('delete', old.id, old.title, old.people, old.body);
   INSERT INTO items_fts (rowid, title, people, body) VALUES (new.id, new.title, new.people, new.body);
@@ -294,15 +295,16 @@ class Index:
                                   (row["source"], row["account"], row["source_id"])).fetchone()
             if old is None or old["hash"] != h or old["instr_v"] != inject.VERSION:
                 instr = _instr(row["title"], row["body"], row["source"])
+            hidden = 1 if isinstance(it, dict) and it.get("hidden_text") is True else 0   # 0.8.4
             if old is None:
-                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v) VALUES "
-                                f"({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?)",
-                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION])
+                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v, hidden) "
+                                f"VALUES ({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?, ?)",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden])
                 n["added"] += 1
             elif old["hash"] != h:
                 self.db.execute(f"UPDATE items SET {', '.join(f + '=?' for f in _FIELDS)}, hash=?, indexed_at=?, "
-                                "instr=?, instr_v=? WHERE id=?",
-                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, old["id"]])
+                                "instr=?, instr_v=?, hidden=? WHERE id=?",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden, old["id"]])
                 n["updated"] += 1
             else:
                 if old["instr_v"] != inject.VERSION:   # checked by older rules: refresh the flag only
@@ -447,6 +449,8 @@ class Index:
                "thread": r["thread"], "title": r["title"], "people": r["people"], "area": r["area"], "ts": r["ts"],
                "date": dt.datetime.fromtimestamp(r["ts"], dt.timezone.utc).isoformat(timespec="seconds"),
                "url": r["url"], "instructions": _flagged(r)}
+        if "hidden" in r.keys() and r["hidden"]:   # 0.8.4: an inject-style mark, "Had hidden text"
+            out["hidden_text"] = True
         if with_body:
             out["snippet"] = r["snippet"]
             out["body"] = r["body"]
@@ -499,6 +503,38 @@ class Index:
                 row["relaxed"] = True
             out.append(row)
         return out
+
+    # --- 0.8.4 AI sorting: the items the sorter reads (newest first, resumable by (ts, id)) ----------------------
+    TRIAGE_SOURCES = ("gmail", "slack", "signal", "drive")
+
+    def triage_rows(self, min_ts=0.0, indexed_after=None, before=None, limit=12):
+        """Full rows (with body and indexed_at) for the sorter: mail, Slack, Signal and Drive items newer than
+        min_ts; indexed_after: only items (re)indexed since then (the incremental pass); before: a (ts, id) cursor,
+        rows strictly older (the night backfill). Newest first."""
+        where = [f"source IN ({', '.join('?' * len(self.TRIAGE_SOURCES))})", "ts>=?"]
+        args = list(self.TRIAGE_SOURCES) + [float(min_ts or 0)]
+        if indexed_after is not None:
+            where.append("indexed_at>?")
+            args.append(float(indexed_after))
+        if before:
+            where.append("(ts<? OR (ts=? AND id<?))")
+            args += [float(before[0]), float(before[0]), int(before[1])]
+        sql = f"SELECT * FROM items WHERE {' AND '.join(where)} ORDER BY ts DESC, id DESC LIMIT ?"
+        with self.lock:
+            rows = self.db.execute(sql, args + [max(1, min(int(limit), 500))]).fetchall()
+        out = []
+        for r in rows:
+            row = self._row(r, with_body=True)
+            row["indexed_at"] = r["indexed_at"]
+            row["hash"] = r["hash"]
+            out.append(row)
+        return out
+
+    def triage_count(self, min_ts=0.0):
+        with self.lock:
+            return self.db.execute(f"SELECT COUNT(*) FROM items WHERE source IN "
+                                   f"({', '.join('?' * len(self.TRIAGE_SOURCES))}) AND ts>=?",
+                                   list(self.TRIAGE_SOURCES) + [float(min_ts or 0)]).fetchone()[0]
 
     def get(self, item_id):
         """One full item (with body and source_id), or None."""

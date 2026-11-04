@@ -255,6 +255,7 @@ class Syncer:
         self.last_model = None  # 0.6.1: the model of Callsheet's last brief request (None: not known)
         self.monotonic = time.monotonic  # 0.6.1: request and swap timing (tests replace it)
         self.people = None  # 0.8.2: people.People (set by api.App); VIPs and notes then cover every handle of a person
+        self.sorter = None  # 0.8.4: triage.Sorter (set by api.App); collects new items after each sync
 
     def run_now(self, wait=70, kind=None, background=False):
         """Runs a sync and returns last_sync. If one is already running, waits for it and returns its result;
@@ -490,7 +491,9 @@ class Syncer:
             "sources_tail": tail, "hidden": hidden, "done": [], "possible": possible, **seen}
         self._apply_done(brief, refs, tz, live)
         return {"t0": t0, "brief": brief, "refs": refs, "events": events, "areas": areas, "settings": settings,
-                "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule}
+                "tz": tz, "day": day, "client": client, "errors": errors, "n": n, "schedule": schedule,
+                # 0.8.4 AI sorting: every thread read (also the ones the rules drop) and the messages with invites
+                "threads": threads, "invite_msgs": {f.get("msg_id") for f in see["found"] if f.get("msg_id")}}
 
     def _possible(self, replies, refs, inbound, cal_events, areas, tz, day):
         """The brief's possible events (dates.possible_events) from each reply row's latest incoming message
@@ -759,6 +762,11 @@ class Syncer:
                 self._write(wcfg, brief, r["refs"], r["events"], r["areas"], r["settings"], r["tz"], r["day"],
                             r["client"], kind)
         self.store.set_cached_brief(brief)  # the rules brief first: the page shows it while the writer runs
+        if self.sorter is not None and kind != "sample":   # 0.8.4: rules labels now, the AI pass later (no model here)
+            try:
+                self.sorter.collect_sync(r.get("threads"), r.get("invite_msgs"))
+            except Exception as e:  # noqa: BLE001 (sorting never breaks a sync)
+                self.log(f"Callsheet sorting: not collected ({type(e).__name__})")
         last = {"at": written, "ok": not errors, "errors": errors}
         self.store.set_last_sync(last)
         self.log(f"Callsheet sync: {n['accounts']} accounts ({n['ok']} ok, {n['failed']} failed), "

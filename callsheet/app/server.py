@@ -281,6 +281,7 @@ def main(argv=None):
         httpd.app.scheduler.start()
         if httpd.app.scanner:  # 0.6.0 index: the Know me scan (resumes a scan that was running)
             httpd.app.scanner.start_thread()
+        httpd.app.sorter.start_thread()  # 0.8.4 AI sorting: rules labels per sync, the AI pass inside its budget
     httpd.app.signal.service.start()  # Signal (0.5.1): signal-cli runs only once Signal is linked
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)
     try:

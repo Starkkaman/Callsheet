@@ -4877,7 +4877,9 @@
     return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : '') + (instr ? ' instr' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
       'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') + (instr ? ', contains instructions' : '') }, [
       ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : '')),
-      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null]);
+      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null,
+      /* 0.8.4: the mail's HTML had text a reader wouldn't see (dropped before indexing) */
+      s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
   }
   function chatAnswer(m, i) {
     var kids = [h('span', { class: 'label' }, ['Callsheet', m.by ? h('span', { class: 'by' }, ' · ' + m.by) : null])];

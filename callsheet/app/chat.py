@@ -822,6 +822,8 @@ class Tools:
                 "url": url[:1000] if url else None}
         if r.get("instructions"):   # 0.6.0: the page marks the chip "contains instructions"
             chip["instructions"] = True
+        if r.get("hidden_text") is True:   # 0.8.4: the mail's HTML had text a reader wouldn't see (dropped)
+            chip["hidden_text"] = True
         return chip
 
     def _row(self, r, snippet=True):

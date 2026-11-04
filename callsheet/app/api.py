@@ -33,6 +33,7 @@ import projects as projects_mod     # 0.7.0 projects
 import chat                          # 0.6.0 chat
 import inject
 import people as people_mod          # 0.8.2 people
+import triage                        # 0.8.4 AI sorting
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -41,7 +42,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.8.4"
 
 
 class MethodNotAllowed(Exception):
@@ -116,6 +117,10 @@ class App:
         # 0.8.2 people: one person across email, Slack, Signal and Drive (people.py, docs/people.md)
         self.people = people_mod.People(self.store, self.index, clock=clock)
         self.syncer.people = self.notifier.people = self.chat.people = self.projects.people = self.people
+        # 0.8.4 AI sorting (triage.py, docs/sorting.md): shadow mode by default; nothing calls a model here
+        self.sorter = triage.Sorter(self.store, self.syncer, self.index, self.people, clock=clock,
+                                    scanner=self.scanner)
+        self.syncer.sorter = self.sorter
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -167,6 +172,7 @@ class App:
         self.routes += projects_mod.ProjectsApi(self.projects).routes()  # 0.7.0 projects
         self.routes += [("POST", r"horizon", self.horizon_mark)]  # 0.8.0 Coming up
         self.routes += self._people_routes()  # 0.8.2 people
+        self.routes += self._sorting_routes()  # 0.8.4 AI sorting
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -185,6 +191,7 @@ class App:
 
     def close(self):
         self.scheduler.stop()
+        self.sorter.stop()  # 0.8.4 AI sorting
         self.signal.service.close()  # Signal (0.5.1): stops signal-cli cleanly
         self.chat.close()  # 0.6.0 chat
         if self.scanner:  # 0.6.0 index
@@ -224,6 +231,7 @@ class App:
         self._brief_080(brief, cache, s, now)
         self._brief_writing(brief, cache, s, now)
         self._brief_people(brief)
+        self._brief_sorting(brief)  # 0.8.4: only when sorting is on (shadow mode leaves the brief as it was)
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
                 brief["projects"] = self.projects.brief_line()
@@ -243,6 +251,58 @@ class App:
         except (KeyError, TypeError, ValueError):
             since = None
         brief["writing"] = {"text": presets.WRITING, "since": since, "preset": w.get("preset"), "poll_s": 10}
+
+    # --- 0.8.4: AI sorting (triage.py, docs/sorting.md) -----------------------------------------------------------
+    def _sorting_routes(self):
+        return [("GET", r"sorting", self.sorting_view),
+                ("PATCH", r"sorting/settings", self.sorting_settings),
+                ("POST", r"sorting/check", self.sorting_check),
+                ("GET", r"sorting/numbers", self.sorting_numbers),
+                ("POST", r"sorting/fix", self.sorting_fix),
+                ("DELETE", r"sorting/fix/(\d{1,12})", self.sorting_unfix)]
+
+    @staticmethod
+    def _srt(fn, *args):
+        try:
+            return fn(*args)
+        except triage.InputError as e:
+            raise InputError(str(e)) from None
+
+    def sorting_view(self, _body=None):
+        return self._srt(self.sorter.view)
+
+    def sorting_settings(self, body):
+        return self._srt(self.sorter.update_settings, body)
+
+    def sorting_check(self, body):
+        body = body if isinstance(body, dict) else {}
+        return self._srt(self.sorter.answer_check, body.get("key"), body.get("right"), body.get("label"))
+
+    def sorting_numbers(self, _body=None):
+        return self.sorter.numbers()
+
+    def sorting_fix(self, body):
+        body = body if isinstance(body, dict) else {}
+        if self.sorter.settings()["mode"] != "on":
+            raise Conflict("Turn sorting on first.")
+        return self._srt(self.sorter.fix, body.get("key"), body.get("action"))
+
+    def sorting_unfix(self, _body, cid):
+        return self._srt(self.sorter.unfix, cid)
+
+    def _sorting_summary(self):
+        try:
+            return self.sorter.summary()
+        except Exception as e:  # noqa: BLE001 (Setup must always load)
+            sys.stderr.write(f"Callsheet sorting summary failed: {type(e).__name__}\n")
+            return None
+
+    def _brief_sorting(self, brief):
+        try:
+            self.sorter.for_brief(brief)
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            brief.pop("sorting", None)
+            sys.stderr.write(f"Callsheet sorting line failed: {type(e).__name__}\n")
 
     # --- 0.8.2: people (people.py, docs/people.md) ---------------------------------------------------------------
     def _people_routes(self):
@@ -595,6 +655,7 @@ class App:
             areas.append(a)
         return {"google_client": client, "areas": areas, "vips": self.store.vips(),
                 "people": {"open": self.people.open_count()},  # 0.8.2: Setup home's People card
+                "sorting": self._sorting_summary(),  # 0.8.4: Setup home's AI sorting card
                 "suppress": self.store.suppress_rules(),
                 "settings": self.store.settings(), "last_sync": self.store.last_sync(),
                 "writer": self.store.writer_public(), "last_writer": self.store.last_writer(),

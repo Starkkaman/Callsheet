@@ -58,6 +58,18 @@ _NOUNS = {"meeting": "Meeting", "meet": "Meeting", "meetup": "Meetup", "call": "
 _PAST = re.compile(r"\b(?:yesterday|ago|last\s+(?:week|month|time|night|mon|tue|wed|thu|fri|sat|sun)\w*|earlier\s+"
                    r"today|discussed|talked|spoke|attended|went|happened|missed|had\s+(?:a|the|our)|thanks?\s+(?:you\s+)?"
                    r"for\s+(?:the|joining|coming|meeting))\b", re.I)
+# 0.8.4: a commitment or deadline sentence confirms a date without an event word ("I'll send the contract on Friday
+# 6 Nov", "we agreed to deliver it 12 Nov", "the deadline is 14 Nov"), kind "deadline", cue ""
+_COMMIT = re.compile(
+    r"\b(?:(?:i|we|they|he|she)(?:'ll|\s+will|\s+shall|'m\s+going\s+to|\s+am\s+going\s+to|'re\s+going\s+to|"
+    r"\s+are\s+going\s+to|\s+promised?\s+to|\s+agreed\s+to|\s+committed\s+to|\s+plan\s+to)|will|promised?\s+to|"
+    r"agreed\s+to|committed\s+to|happy\s+to)\s+(?:\w+\s+){0,2}?(?:send|deliver|finish|submit|pay|return|share|"
+    r"get|have|bring|confirm|sign|ship|complete|transfer|file|provide|hand\s+(?:in|over)|wrap\s+up|book|order)\b|"
+    r"\b(?:deadline|due\s+date|cut-?off|last\s+day|expires?|expiry|closes|must\s+be\s+(?:in|done|received|"
+    r"submitted|paid))\b", re.I)
+# ... but never in quoted history, header lines or a signature: those lines and everything after them
+_QUOTED = re.compile(r"^\s*(?:>|on\s.{4,80}\bwrote:?\s*$|.{0,80}\bwrote:\s*$|-{2,}\s*(?:original|forwarded)|"
+                     r"(?:from|sent|date|to|cc|subject)\s*:|--\s*$|sent\s+from\s+my\b)", re.I)
 # a question asking the owner for a time ("What time works on Thursday?"): not a proposal unless it names a time
 _ASK = re.compile(r"^\W*(?:what|when|which)\b|\bwhat\s+time\b|\bwhen\s+(?:are|is|would|could|can|will|do)\b", re.I)
 _SHORT_WD = {"sat", "sun", "wed", "mon", "tue", "thu", "fri", "tues", "thur", "thurs"}
@@ -158,10 +170,13 @@ def find(text, sent):
     questions asking the owner for a time ("What time works on Thursday?") don't count."""
     text = _AMPM.sub(lambda m: m.group(1) + m.group(2) + "m", str(text or ""))
     out = []
+    quoted = False   # 0.8.4: past quoted history or a signature, commitments don't count
     for sentence in _SENTENCE.split(text):
         sentence = sentence.strip()
         if not sentence or len(out) >= MAX_PER_ROW:
             continue
+        if _QUOTED.match(sentence):
+            quoted = True
         due = facts.due(sentence, sent)
         if due and due.get("date"):
             d = dt.date.fromisoformat(due["date"])
@@ -176,6 +191,10 @@ def find(text, sent):
                         "phrase": _clip(due["phrase"], MAX_PHRASE), "cue": ""})
             continue
         cue = _CUE.search(sentence)
+        if not cue and not quoted and _COMMIT.search(sentence) and not _PAST.search(sentence) \
+                and not _ASK.search(sentence) and "?" not in sentence:
+            out.extend(_commitment(sentence, sent)[:MAX_PER_ROW - len(out)])
+            continue
         if not cue or _PAST.search(sentence):
             continue
         asks = bool(_ASK.search(sentence))
@@ -206,6 +225,31 @@ def find(text, sent):
             if len(out) >= MAX_PER_ROW:
                 break
     return out[:MAX_PER_ROW]
+
+
+def _commitment(sentence, sent):
+    """0.8.4: the dates of one commitment or deadline sentence (no event word): kind "deadline", the time when it
+    gives one (the end of a DEADLINE_MIN slot), else all day."""
+    out = []
+    for g in _groups(sentence, _tokens(sentence)):
+        ds = sorted((t[3] for t in g if t[2] == "date"), key=facts._rank)
+        if not ds:
+            continue
+        rel = ds[0].group("rel") if "rel" in ds[0].re.groupindex else None
+        if rel and rel.lower() == "tonight":
+            continue
+        d = facts._date_of(ds[0], sent)
+        if d is None:
+            continue
+        tm = next((t[3] for t in g if t[2] == "time"), None)
+        start = end = None
+        if tm and tm != "00:00":
+            t = dt.datetime.combine(d, dt.time.fromisoformat(tm))
+            st = max(t - dt.timedelta(minutes=DEADLINE_MIN), dt.datetime.combine(d, dt.time(0, 0)))
+            start, end = f"{st:%H:%M}", tm
+        out.append({"kind": "deadline", "date": d, "start": start, "end": end,
+                    "phrase": _clip(sentence[g[0][0]:g[-1][1]], MAX_PHRASE), "cue": ""})
+    return out[:1]
 
 
 # --- the calendar the owner already has -------------------------------------------------------------------------

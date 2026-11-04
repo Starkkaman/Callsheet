@@ -292,6 +292,12 @@ SECURITY = re.compile(
     r"suspicious\s+(?:activity|sign[-\s]?in|login|transaction)|password\s+(?:reset|change[ds]?|was\s+changed)|"
     r"reset\s+your\s+password|security\s+alert|critical\s+security|account\s+(?:locked|suspended|disabled|"
     r"compromised|on\s+hold)|payment\s+(?:failed|declined|was\s+declined|unsuccessful)|card\s+(?:was\s+)?declined|"
+    # 0.8.4 (the 0.8.3 screen's bank miss): "card ending 2290 was declined", "transaction declined", "payment
+    # method has been declined", "your payment didn't go through", "we couldn't process your payment"
+    r"(?:card|payment|transaction|purchase|charge)(?:\s+method)?\s+(?:(?:ending|that\s+ends)\s+(?:in\s+|with\s+)?"
+    r"[x*\u2022.\d\s-]{2,14}?\s+)?(?:was\s+|has\s+been\s+|got\s+|is\s+)?(?:declined|failed|refused)|"
+    r"(?:payment|transaction|charge)\s+(?:didn'?t|did\s+not|couldn'?t|could\s+not)\s+go\s+through|"
+    r"(?:couldn'?t|could\s+not|were\s+unable\s+to|unable\s+to)\s+process\s+your\s+(?:payment|card)|"
     r"\bfraud|overdra(?:wn|ft)|insufficient\s+funds|confirm\s+it'?s\s+you|is\s+your\s+(?:verification\s+)?code)",
     re.I)
 # Senders whose security mail is genuine when the address is theirs (or a subdomain) and Gmail checked it.
