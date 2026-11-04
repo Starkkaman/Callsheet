@@ -16,7 +16,6 @@ CALLSHEET_ANTHROPIC_BASE_URL (tests only) points the SDK at a fake server.
 """
 import base64
 import html
-import html.parser
 import json
 import os
 import re
@@ -25,6 +24,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+import htmltext
 
 MODELS = {
     # id: (label, USD per million input tokens, USD per million output tokens)
@@ -343,39 +344,14 @@ def label(model):
 
 
 # --- input ------------------------------------------------------------------
-class _Text(html.parser.HTMLParser):
-    SKIP = ("script", "style", "head", "title")
-    BREAK = ("br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "blockquote")
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.out, self.skip = [], 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self.SKIP:
-            self.skip += 1
-        elif tag in self.BREAK:
-            self.out.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self.SKIP and self.skip:
-            self.skip -= 1
-        elif tag in self.BREAK:
-            self.out.append("\n")
-
-    def handle_data(self, data):
-        if not self.skip:
-            self.out.append(data)
-
-
 def html_to_text(src):
-    p = _Text()
-    try:
-        p.feed(src)
-        p.close()
-    except Exception:  # malformed HTML: fall back to dropping tags
-        return html.unescape(re.sub(r"<[^>]*>", " ", src))
-    return "".join(p.out)
+    """The text a mail client would show (0.8.2: hidden text is dropped, see htmltext.py)."""
+    return htmltext.html_to_text(src)
+
+
+def html_text(src):
+    """(visible text, hidden_text) for an HTML body (htmltext.html_text)."""
+    return htmltext.html_text(src)
 
 
 def _decode(data):

@@ -30,6 +30,11 @@
 - **Memory paste warning**: when you write or edit a note by hand (Setup → Memory, or a note on a brief item) and it
   reads like an instruction or a claim copied from a message ("the invoice has been paid"), Callsheet asks "This looks
   like an instruction / a claim copied from a message. Save anyway?" before saving. It's a warning, not a refusal.
+- **Security: hidden text in HTML mail is dropped.** Text a mail client wouldn't show (display:none, visibility:hidden,
+  zero or tiny font size, opacity 0, white-on-white or colour like its background, the hidden attribute, collapsed
+  or off-screen boxes, mso-hide:all, <template>, <noscript>, comments) is removed from HTML mail and calendar
+  descriptions before anything reads them, so instructions hidden from you can't reach the AI. Items with dropped
+  hidden text are marked for a later check. Visible text is unchanged.
 
 ## 0.8.1 ("Remember")
 

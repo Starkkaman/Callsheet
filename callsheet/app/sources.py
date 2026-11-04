@@ -223,6 +223,12 @@ def people_of(*fields):
 def mail_text(msg):
     """The text of a messages.get(format=full) message: text/plain, else the HTML as text, else the snippet;
     quoted history and signatures removed (writer.strip_quoted). Attachments are never read."""
+    return mail_text_info(msg)[0]
+
+
+def mail_text_info(msg):
+    """(mail_text, hidden_text): hidden_text is True when the HTML part had text a reader wouldn't see (dropped)."""
+    hidden = False
     payload = msg.get("payload") or {}
     found = {"text/plain": None, "text/html": None}
     for p in writer._parts(payload):
@@ -232,10 +238,10 @@ def mail_text(msg):
             found[mime] = writer._decode(data)
     text = found["text/plain"]
     if text is None and found["text/html"] is not None:
-        text = writer.html_to_text(found["text/html"])
+        text, hidden = writer.html_text(found["text/html"])
     if text is None:
         text = html.unescape(msg.get("snippet") or "")
-    return writer.strip_quoted(text.replace("\r\n", "\n"), _headers(payload).get("subject")) or ""
+    return writer.strip_quoted(text.replace("\r\n", "\n"), _headers(payload).get("subject")) or "", hidden
 
 
 def mail_item(msg, acc, area):
@@ -246,11 +252,13 @@ def mail_item(msg, acc, area):
     except (TypeError, ValueError):
         ts = 0.0
     labels = msg.get("labelIds") or []
+    body, hidden = mail_text_info(msg)
     return {"source": "gmail", "account": acc["id"], "source_id": str(msg.get("id")),
             "kind": "email" if "SENT" not in labels else "sent", "thread": str(msg.get("threadId") or ""),
             "title": hd.get("subject") or "(no subject)", "people": people_of(hd.get("from"), hd.get("to"), hd.get("cc")),
             "area": area, "ts": ts, "url": rules.gmail_link(acc["email"], msg.get("threadId") or "", msg.get("id") or ""),
-            "snippet": html.unescape(msg.get("snippet") or ""), "body": ix.cap_body(mail_text(msg))}
+            "snippet": html.unescape(msg.get("snippet") or ""), "body": ix.cap_body(body),
+            "hidden_text": hidden}
 
 
 class GmailSource(Source):
@@ -329,13 +337,14 @@ def event_item(ev, acc, cal_id, area, tz):
         if p.get("email") or p.get("displayName"):
             people.append(f"{p.get('displayName')} <{p.get('email')}>" if p.get("displayName") and p.get("email")
                           else p.get("email") or p.get("displayName"))
-    desc = str(ev.get("description") or "")
+    desc, hidden = str(ev.get("description") or ""), False
     if "<" in desc and ">" in desc:
-        desc = writer.html_to_text(desc)
+        desc, hidden = writer.html_text(desc)
     body = "\n".join(x for x in (("Where: " + ev["location"]) if ev.get("location") else "", desc) if x)
     return {"source": "calendar", "account": acc["id"], "source_id": f"{cal_id}:{ev.get('id')}", "kind": "event",
             "thread": str(ev.get("recurringEventId") or ""), "title": ev.get("summary") or "(no title)",
-            "people": people, "area": area, "ts": _event_ts(ev, tz), "url": ev.get("htmlLink") or "", "body": body}
+            "people": people, "area": area, "ts": _event_ts(ev, tz), "url": ev.get("htmlLink") or "", "body": body,
+            "hidden_text": hidden}
 
 
 class CalendarSource(Source):
