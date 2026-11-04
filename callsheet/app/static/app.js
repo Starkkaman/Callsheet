@@ -31,7 +31,7 @@
     newwave: ['bricolage-grotesque-latin.woff2', 'silkscreen-400.woff2'], pulsar: ['archivo-wdth-wght.woff2', 'ibm-plex-mono-400.woff2'] };
   /* per-device prefs, JamDash's shape {look, mode, autoSource} under Callsheet's own key (0.7.1 kept two keys) */
   var KEY_PREFS = 'callsheet.prefs', KEY_LOOK = 'callsheet.look', KEY_MODE = 'callsheet.mode', KEY_SUN = 'callsheet.sunplace';
-  var STEPS = ['About you', 'Areas', 'VIPs', 'Call times', 'Delivery', 'Review'];
+  var PLACES = [['connections', 'Connections'], ['day', 'Your day'], ['ai', 'AI'], ['advanced', 'Advanced']];  /* 0.9.0: Setup in four places */
   var DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   var DAYNAME = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
 
@@ -276,7 +276,7 @@
   var setupBtn = document.getElementById('setup-btn'), backBtn = document.getElementById('back-btn');
   var fresh = document.getElementById('fresh'), freshT = document.getElementById('fresh-t'), hdrDate = document.getElementById('hdr-date');
   var refreshBtn = document.getElementById('refresh-btn'), refreshErr = document.getElementById('refresh-err');
-  setupBtn.addEventListener('click', function () { ui.step = 0; location.hash = 'setup'; });  /* 0.7.1: Setup opens on its home page */
+  setupBtn.addEventListener('click', function () { ui.wiz = null; openSetup('home'); });  /* 0.7.1: Setup opens on its home page */
   backBtn.addEventListener('click', function () { location.hash = 'brief'; });
   refreshBtn.addEventListener('click', function () {
     run([refreshBtn], refreshErr, function () { return api('POST', 'api/sync', {}); }, function (ls) {
@@ -1630,7 +1630,7 @@
 
     var banner = S && !S.setup_done && noAccounts() ? h('div', { class: 'banner', role: 'region', 'aria-label': 'Setup' }, [
       h('p', null, 'This is sample data. Set up Callsheet to see your own day.'),
-      btn('btn primary', 'Start setup', null, function () { ui.step = 1; location.hash = 'setup'; })]) : null;
+      btn('btn primary', 'Start setup', null, function () { wizGo(0); })]) : null;
     var nOpen = openReplies().length;
     var tabs = h('nav', { class: 'tabbar', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(function (t) {
       var on = U.tab === t[0], later = t[0] === 'tasks';
@@ -1829,7 +1829,7 @@
     else if (d.more) { U.more = !U.more; renderBrief('[data-more]'); }
     else if (d.goarea) { U.area = d.goarea; setTab('replies'); var ah = main.querySelector('.tabbar [data-tab="replies"]'); if (ah) ah.focus({ preventScroll: true }); }
     else if (d.afil) { U.area = d.afil === 'all' ? null : d.afil; renderBrief('[data-afil="' + cssq(d.afil) + '"]'); }  /* 0.6.0 chat */
-    else if (d.manage) { ui.step = 3; ui.focusNext = '#nnr-h'; location.hash = 'setup'; }
+    else if (d.manage) openSetup('day', '#nnr-h');
     else if (d.copy) copyDraft(t);
     else if (d.np) {
       var k = d.np.indexOf(':');
@@ -1861,9 +1861,8 @@
     else if (d.invgo) goInvite(d.invgo);
     else if (d.gapgo) {
       var ga = acctByEmail(d.gapgo);
-      ui.step = 2; ui.focusNext = ga ? '[data-fk="' + cssq('calgap:' + ga.id) + '"]' : null;
-      if (ga) ui.openCals[ga.id] = true;
-      location.hash = 'setup';
+      if (ga) { ui.openCals[ga.id] = true; ui.acctOpen[ga.id] = true; ui.areaSel = areaWithAcct(ga.id); ui.newAreaOpen = false; }
+      openSetup('connections', ga ? '[data-fk="' + cssq('calgap:' + ga.id) + '"]' : null);
     }
   });
   document.addEventListener('input', function (e) {
@@ -1941,7 +1940,10 @@
 
   /* ---------- state ---------- */
   var ui = {
-    view: null, step: 1,
+    view: null, place: 'home', wiz: null,  /* 0.9.0: the Setup place; the first-run step (0..2) or null */
+    adv: {},             /* Advanced section id -> open (all closed by default) */
+    acctOpen: {},        /* account id -> its switches shown (one line otherwise) */
+    areaSel: null, newAreaOpen: false, tzOpen: false,
     openCals: {},        /* account id -> calendars disclosure open */
     connect: {},         /* area id -> {flow_id, auth_url} while a sign-in runs */
     confirm: null,       /* 'key' | 'acct:<id>' | 'area:<id>' */
@@ -2004,7 +2006,8 @@
       function (e) { if (ui.view === 'setup') status('Could not load the setup (' + e.message + ')'); });
   }
   function route() {
-    var v = location.hash === '#setup' ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : location.hash === '#people' ? 'people' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
+    var sp = placeFromHash(location.hash);  /* 0.9.0: #setup, #setup/<place>, old #setup/<step> links */
+    var v = sp ? 'setup' : location.hash === '#eval' ? 'eval' : location.hash === '#knowme' ? 'knowme' : location.hash === '#profile' ? 'profile' : location.hash === '#profile-questions' ? 'profileq' : location.hash === '#people' ? 'people' : 'brief';  /* 0.6.0 index: #knowme; 0.6.0 profile: #profile, #profile-questions */
     var changed = v !== ui.view;
     ui.view = v;
     setupBtn.hidden = v !== 'brief'; backBtn.hidden = v === 'brief'; fresh.hidden = v !== 'brief'; refreshBtn.hidden = v !== 'brief';
@@ -2017,6 +2020,8 @@
     refreshErr.textContent = '';
     var ht = v === 'brief' ? tabFromHash(location.hash) : null;  /* 0.6.0 chat: #replies, #chat, … (and #areas) */
     if (ht && ht !== U.tab) { U.tab = ht; save(KEY_TAB, ht); if (ht !== 'replies') U.area = null; }
+    if (v === 'setup') ui.place = sp;
+    if (v === 'setup' && !changed && S && main.querySelector('.sheet')) { var fs0 = ui.focusNext; ui.focusNext = null; ui.confirm = null; renderSetup(fs0 || '#wiz-title'); if (!fs0) window.scrollTo(0, 0); return; }
     if (!changed && main.querySelector('.sheet, .bv')) { if (ht && B) renderBrief(); return; }
     window.scrollTo(0, 0);
     if (v === 'setup') {
@@ -2032,43 +2037,46 @@
   window.addEventListener('hashchange', route);
 
   /* ---------- render: setup ---------- */
-  function go(n) { ui.step = Math.max(0, Math.min(6, n)); ui.confirm = null; renderSetup('#wiz-title'); window.scrollTo(0, 0); }  /* 0 = Setup home (0.7.1) */
+  function go(p) { ui.confirm = null; if (p === 'home') ui.wiz = null; openSetup(p); window.scrollTo(0, 0); }
   function reload(focusKey) {
     return loadState().then(function () { renderSetup(focusKey ? '[data-fk="' + cssq(focusKey) + '"]' : null); },
       function (e) { var w = document.getElementById('wiz-err'); if (w) w.textContent = 'Could not reload (' + e.message + ')'; });
   }
+  /* 0.9.0: the rail is Home plus the four places (a row that scrolls sideways on phones); the first run shows its
+     three steps instead, with Back and Next */
   function renderSetup(focusSel) {
-    var n = ui.step || 0, home = n === 0;
-    /* 0.7.1: the rail starts with Home and shows on phones too (a row that scrolls sideways) */
-    var rail = h('nav', { class: 'rail', 'aria-label': 'Setup steps' }, [btn('home' + (home ? ' on' : ''), 'Home', { 'aria-current': home ? 'page' : null }, function () { go(0); })]
-      .concat(STEPS.map(function (name, i) {
-        var k = i + 1;
-        return btn(!home && k < n ? 'done' : k === n ? 'on' : '', [h('span', { class: 'n' }, String(k)), name],
-          { 'aria-current': k === n ? 'step' : null }, function () { go(k); });
+    var p = PLACE_FN[ui.place] ? ui.place : 'home', home = p === 'home', wz = ui.wiz;
+    if (wz != null && !(wz >= 0 && wz <= 2)) wz = ui.wiz = null;
+    var rail = wz != null ? h('nav', { class: 'rail', 'aria-label': 'First-run steps' }, WIZ.map(function (x, i) {
+      return btn(i < wz ? 'done' : i === wz ? 'on' : '', [h('span', { class: 'n' }, String(i + 1)), x[1]], { 'aria-current': i === wz ? 'step' : null }, function () { wizGo(i); });
+    })) : h('nav', { class: 'rail', 'aria-label': 'Setup' }, [btn('home' + (home ? ' on' : ''), 'Home', { 'aria-current': home ? 'page' : null }, function () { go('home'); })]
+      .concat(PLACES.map(function (x) {
+        return btn(p === x[0] ? 'on' : '', x[1], { 'aria-current': p === x[0] ? 'page' : null, 'data-place': x[0] }, function () { go(x[0]); });
       })));
-    var body = home ? stepHome() : [stepAbout, stepAreas, stepVips, stepTimes, stepDelivery, stepReview][n - 1]();
-    var wnav = home ? null : h('div', { class: 'wnav' }, [
-      btn('btn', 'Back: ' + (n > 1 ? STEPS[n - 2] : 'Home'), null, function () { go(n - 1); }),
-      n < 6 ? btn('btn primary', 'Next: ' + STEPS[n], null, function () { go(n + 1); }) : null]);
+    var body = wz === 2 ? wizKnow() : home ? setupHome() : PLACE_FN[p]();
+    var title = wz != null ? WIZ[wz][1] : home ? 'Your setup' : placeName(p);
+    var wnav = wz == null ? null : h('div', { class: 'wnav' }, [
+      btn('btn', wz ? 'Back: ' + WIZ[wz - 1][1] : 'Back: Setup', null, function () { if (wz) wizGo(wz - 1); else go('home'); }),
+      wz < 2 ? btn('btn primary', 'Next: ' + WIZ[wz + 1][1], { 'data-fk': 'wiz-next' }, function () { wizGo(wz + 1); }) : null]);
     var ls = S.last_sync || {};
     var sheet = h('div', { class: 'sheet wiz' }, [
       h('div', { class: 'mast two' }, [
-        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'wiz-title', tabindex: '-1' }, home ? 'Your setup' : STEPS[n - 1])]),
-        home ? h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Last refreshed'), h('div', { class: 'disp when' }, ls.at ? fmtWhen(ls.at, true) : 'Not yet')])
-          : h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Step'), h('div', { class: 'disp' }, n + ' / 6')])]),
+        h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'wiz-title', tabindex: '-1' }, title)]),
+        wz != null ? h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Step'), h('div', { class: 'disp' }, (wz + 1) + ' / 3')])
+          : h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Last refreshed'), h('div', { class: 'disp when' }, ls.at ? fmtWhen(ls.at, true) : 'Not yet')])]),
       rail,
-      h('section', { class: 'step', 'aria-labelledby': 'wiz-title' }, [h('p', { class: 'err', id: 'wiz-err', role: 'alert' }), body]),
+      h('section', { class: 'step place-' + (wz === 2 ? 'knowme' : p), 'aria-labelledby': 'wiz-title' }, [h('p', { class: 'err', id: 'wiz-err', role: 'alert' }), body]),
       wnav,
       h('p', { class: 'ver' }, 'Callsheet ' + (S.version || PAGE_VERSION))]);
     main.textContent = '';
     add(main, sheet);
-    foldHelp(sheet.querySelector('.step'), n);  /* 0.7.1: long help behind "?" */
+    foldHelp(sheet.querySelector('.step'), wz === 2 ? 'knowme' : p);  /* 0.7.1: long help behind "?" */
     var cur = rail.querySelector('[aria-current]');
     if (cur && rail.scrollWidth > rail.clientWidth) rail.scrollLeft = Math.max(0, cur.offsetLeft - 16);
     pressLook();
     syncBg();
     main.querySelectorAll('.wi textarea').forEach(fitTa);
-    if (focusSel) { var f = main.querySelector(focusSel); if (f) f.focus({ preventScroll: focusSel === '#wiz-title' }); }
+    if (focusSel) { var f = main.querySelector(focusSel); if (f) { f.focus({ preventScroll: focusSel === '#wiz-title' }); if (focusSel !== '#wiz-title' && f.scrollIntoView) f.scrollIntoView({ block: 'center' }); } }
   }
   /* obj may be a function: the body is then built when the request's turn comes (after earlier saves landed) */
   function patchSettings(obj, err, btns, ok) {
@@ -2111,61 +2119,54 @@
         h('span', { class: 'm-row' }, [h('span', { class: 'm-time' }, miniTime()), h('span', null, 'Daily stand-up'), h('span', { class: 'm-tag a2' }, 'CO. A')]),
         h('span', { class: 'm-name' }, LOOKNAME[look]), h('span', { class: 'm-desc' }, desc)]));
   }
-  function stepAbout() {
-    var st = S.settings, nameErr = errBox(), tzErr = errBox(), dayErr = errBox();
+  /* 0.9.0 Your day › You: name, time zone (one line with Change), time format. Working days moved into the brief
+     times (the urgent checks' own days); the Look chooser is the header's Look panel (a row here opens it). */
+  function dayAbout() {
+    var st = S.settings, nameErr = errBox(), tzErr = errBox();
     var name = on(h('input', { class: 'inp', type: 'text', id: 'f-name', autocomplete: 'name', value: st.name || '' }), 'change', function () {
       patchSettings({ name: name.value.trim() }, nameErr);
     });
     var cur = st.timezone || (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-    var tz = on(h('select', { class: 'inp', id: 'f-tz' }, tzList(cur).map(function (z) {
-      return h('option', { value: z, selected: z === cur }, z.replace(/_/g, ' '));
-    })), 'change', function () { patchSettings({ timezone: tz.value }, tzErr); });
-    var days = h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'lbl-days' }, DAYS.map(function (d) {
-      var b = btn('chip', DAYNAME[d], { 'aria-pressed': String((st.workdays || []).indexOf(d) >= 0) }, function () {
-        patchSettings(function () {
-          var now = st.workdays || [], want = now.indexOf(d) >= 0 ? now.filter(function (x) { return x !== d; }) : now.concat([d]);
-          return { workdays: DAYS.filter(function (x) { return want.indexOf(x) >= 0; }) };
-        }, dayErr, [b], function (sent) { b.setAttribute('aria-pressed', String(sent.workdays.indexOf(d) >= 0)); });
-      });
-      return b;
-    }));
+    var tzEl;
+    if (ui.tzOpen) {
+      var tz = on(h('select', { class: 'inp', id: 'f-tz', 'data-fk': 'tz-sel' }, tzList(cur).map(function (z) {
+        return h('option', { value: z, selected: z === cur }, z.replace(/_/g, ' '));
+      })), 'change', function () { patchSettings({ timezone: tz.value }, tzErr, [tz], function () { ui.tzOpen = false; renderSetup('[data-fk="tz"]'); }); });
+      tzEl = h('span', { class: 'selw' }, tz);
+    } else {
+      tzEl = h('div', { class: 'lrow' }, [h('span', { id: 'f-tzv' }, cur.replace(/_/g, ' ')),
+        btn('btn sm', 'Change', { 'data-fk': 'tz', 'aria-describedby': 'f-tzv', 'aria-label': 'Change time zone' }, function () { ui.tzOpen = true; renderSetup('#f-tz'); })]);
+    }
     /* 12-hour or 24-hour times: the server writes the brief's display strings in this format */
     var tfErr = errBox(), tfCur = st.time_format === '24h' ? '24h' : '12h';
     var tf = h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'lbl-tf' }, [['12h', '12-hour (2:30 pm)'], ['24h', '24-hour (14:30)']].map(function (x) {
       var b = btn('chip', x[1], { 'aria-pressed': String(tfCur === x[0]), 'data-tf': x[0], 'data-fk': 'tf:' + x[0] }, function () {
         if ((S.settings.time_format === '24h' ? '24h' : '12h') === x[0]) return;
         patchSettings({ time_format: x[0] }, tfErr, [].slice.call(tf.querySelectorAll('button')), function () {
-          tf.querySelectorAll('button').forEach(function (y) {
-            var on = y.getAttribute('data-tf') === x[0];
-            y.setAttribute('aria-pressed', String(on));
-          });
-          document.querySelectorAll('.m-time').forEach(function (m) { m.textContent = miniTime(); });
+          tf.querySelectorAll('button').forEach(function (y) { y.setAttribute('aria-pressed', String(y.getAttribute('data-tf') === x[0])); });
         });
       });
       return b;
     }));
-    return [
+    return h('section', { class: 'where you', 'aria-labelledby': 'you-h' }, [h('h2', { class: 'h3', id: 'you-h' }, 'You'),
       h('div', { class: 'cols' }, [
-        h('div', null, [
-          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-name' }, 'Your name'), name, nameErr]),
-          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-tz' }, 'Time zone'), h('span', { class: 'selw' }, tz), tzErr]),
-          h('div', { class: 'field' }, [h('span', { class: 'label', id: 'lbl-tf' }, 'Time format'), tf, tfErr])]),
-        h('div', null, [
-          h('div', { class: 'field' }, [h('span', { class: 'label', id: 'lbl-days' }, 'Working days'), days, dayErr]),
-          h('p', { class: 'note' }, 'Days off still get a morning brief; check-ins can skip them (step 4).')])]),
-      h('div', { class: 'lookpick' }, [
-        h('div', { class: 'field', role: 'group', 'aria-labelledby': 'lbl-looks', 'data-errhost': '' }, [
-          h('span', { class: 'label', id: 'lbl-looks' }, 'Look'),
-          h('h3', { class: 'lookgrp' }, 'Callsheet'), h('div', { class: 'looks' }, OWN_LOOKS.map(miniCard)),
-          h('h3', { class: 'lookgrp' }, 'Jam looks'), h('div', { class: 'looks' }, JAM_LOOKS.map(miniCard)), errBox()]),
-        h('div', { class: 'field', role: 'group', 'aria-labelledby': 'lbl-modes', 'data-errhost': '' }, [
-          h('span', { class: 'label', id: 'lbl-modes' }, 'Mode'),
-          h('div', { class: 'chips' }, MODES.map(function (m) {
-            return h('button', { type: 'button', class: 'chip', 'data-set-mode': m, 'aria-pressed': String(PREFS.mode === m),
-              disabled: m === 'light' && DARK_ONLY.indexOf(PREFS.look) >= 0 }, MODENAME[m]);
-          })), errBox(),
-          h('p', { class: 'note darknote', hidden: DARK_ONLY.indexOf(PREFS.look) < 0 }, 'NERV and LCARS are always dark.'),
-          h('p', { class: 'note' }, 'Auto follows your device (Depth can follow sunset: Look, at the top). The look is kept for you and on this device.')])])];
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'f-name' }, 'Your name'), name, nameErr]),
+        h('div', { class: 'field' }, [ui.tzOpen ? h('label', { class: 'label', for: 'f-tz' }, 'Time zone') : h('span', { class: 'label' }, 'Time zone'), tzEl, tzErr]),
+        h('div', { class: 'field' }, [h('span', { class: 'label', id: 'lbl-tf' }, 'Time format'), tf, tfErr])])]);
+  }
+  /* Your day › Look and sound: the look opens the header's Look panel; density and the All clear tick are kept on
+     this device */
+  function dayLook() {
+    var snd = sw(load(KEY_SOUND) === '1', 'A soft tick at All clear', function () {
+      var now = load(KEY_SOUND) !== '1'; save(KEY_SOUND, now ? '1' : ''); snd.setAttribute('aria-pressed', String(now)); if (now) tick(true);
+    });
+    snd.setAttribute('data-fk', 'snd');
+    return h('section', { class: 'where looks2', 'aria-labelledby': 'look-h' }, [h('h2', { class: 'h3', id: 'look-h' }, 'Look and sound'),
+      h('div', { class: 'lrow' }, [h('span', null, LOOKNAME[PREFS.look] + ', ' + MODENAME[PREFS.mode]),
+        btn('btn sm', 'Change', { 'data-fk': 'look-open', 'aria-controls': 'look-panel', 'aria-label': 'Change the look' }, function () { openPanel(true); window.scrollTo(0, 0); lookBtn.focus(); })]),
+      h('div', { class: 'field' }, [h('span', { class: 'label', id: 'dens-l' }, 'Replies list'), densSeg('dens-l')]),
+      h('div', { class: 'swrow' }, [snd, h('span', { 'aria-hidden': 'true' }, 'A soft tick at All clear')]),
+      h('p', { class: 'note' }, 'Kept on this device. Sound stays off unless you turn it on.')]);
   }
 
   /* step 2: areas */
@@ -2246,13 +2247,19 @@
       /* 0.8.0: the box sits inside its label, so the whole row is the tap target ("Choose calendars" leads here) */
       return h('li', null, h('label', { for: id, class: 'calrow' }, [box, h('span', null, [c.summary || c.id, c.primary ? h('span', { class: 'muted' }, ' · main') : null])]));
     }));
-    var key = 'acct:' + acc.id;
+    var key = 'acct:' + acc.id, shown = !!ui.acctOpen[acc.id] || ui.confirm === key;
+    /* 0.9.0: one line per account (what it reads) with Change; the switches, calendars and Disconnect behind it */
+    var reads = [svc.mail ? 'mail' : null, svc.calendar ? 'calendar' : null].filter(Boolean);
+    var chg = btn('btn sm', shown ? 'Close' : 'Change', { 'aria-expanded': String(shown), 'aria-controls': 'acb-' + acc.id, 'data-fk': 'acc:' + acc.id, 'aria-label': (shown ? 'Close ' : 'Change ') + acc.email }, function () {
+      ui.acctOpen[acc.id] = !shown; renderSetup('[data-fk="' + cssq('acc:' + acc.id) + '"]');
+    });
     return h('div', { class: 'acct' }, [
-      h('div', { class: 'acct-h' }, [h('span', { class: 'em' }, acc.email), statusTag(acc)]),
+      h('div', { class: 'acct-h' }, [h('span', { class: 'em' }, acc.email), statusTag(acc), h('span', { class: 'rd muted' }, reads.length ? 'Reads ' + reads.join(' and ') : 'Reads nothing'), chg]),
       acc.status !== 'connected' && acc.error ? h('p', { class: 'acct-err' }, acc.error) : null,
       acc.status === 'needs_reconnect' ? h('p', { class: 'note' }, 'Use "Connect Google account" below and sign in as this account again.') : null,
-      h('div', { class: 'svcs' }, [svcToggle('calendar', 'Calendar'), svcToggle('mail', 'Mail')]),
       acc.status === 'connected' ? gapCard(a, acc, err) : null,  /* 0.8.0: "calendar isn't read" */
+      h('div', { id: 'acb-' + acc.id, class: 'acb', hidden: !shown }, [
+      h('div', { class: 'svcs' }, [svcToggle('calendar', 'Calendar'), svcToggle('mail', 'Mail')]),
       err,
       h('div', { class: 'acct-f' }, [disc, ui.confirm === key ? null : askBtn(key, 'Disconnect')]),
       list, calErr,
@@ -2260,7 +2267,7 @@
         run([y, c], e, function () { return api('DELETE', 'api/accounts/' + encodeURIComponent(acc.id)); }, function () {
           ui.confirm = null; delete ui.openCals[acc.id]; return reload('connect:' + a.id);
         });
-      }) : null]);
+      }) : null])]);
   }
   function connectBlock(a) {
     var err = errBox(), flow = ui.connect[a.id];
@@ -2325,7 +2332,7 @@
     return api('GET', 'api/slack/' + encodeURIComponent(ws.id) + '/channels').then(function (r) {
       ui.slackCh[ws.id] = { channels: (r && r.channels) || [], stale: !!(r && r.stale) };
     }, function (e) { ui.slackCh[ws.id] = { error: e.message }; }).then(function () {
-      if (ui.view === 'setup' && ui.step === 2) renderSetup('[data-fk="' + cssq('ign:' + ws.id) + '"]');
+      if (inPlace('connections')) renderSetup('[data-fk="' + cssq('ign:' + ws.id) + '"]');
     });
   }
   function slackWs(a, ws) {
@@ -2393,7 +2400,7 @@
         ui.slackOpen[a.id] = !open;
         if (!open && (!ui.slackMan || ui.slackMan.error)) {
           api('GET', 'api/slack/manifest').then(function (m) { ui.slackMan = m || {}; }, function (e) { ui.slackMan = { error: e.message }; })
-            .then(function () { if (ui.view === 'setup' && ui.step === 2) renderSetup('[data-fk="' + cssq('slack:' + a.id) + '"]'); });
+            .then(function () { if (inPlace('connections')) renderSetup('[data-fk="' + cssq('slack:' + a.id) + '"]'); });
         }
         renderSetup('[data-fk="' + cssq('slack:' + a.id) + '"]');
       });
@@ -2460,7 +2467,7 @@
       h('div', { class: 'reads' }, [h('div', { class: 'q', id: 'q-' + a.id }, 'What may the brief read?'),
         h('div', { class: 'chips', role: 'group', 'aria-labelledby': 'q-' + a.id }, [readChip('calendar', 'Calendar'), readChip('mail', 'Mail'),
           a.chat_available ? readChip('chat', 'Chat') : later('Chat', 'connect Slack or link Signal first'), readChip('writer', 'AI writer')]),  /* 0.7.1: the disabled Tasks chip is gone (Projects replaced Tasks) */
-        err, h('p', { class: 'note' }, a.chat_available ? 'Chat is ' + chatNames(a) + '. Check your employer\u2019s policy first.' : 'Check your employer\u2019s policy first.')]),
+        err, a.chat_available ? h('p', { class: 'note' }, 'Chat is ' + chatNames(a) + '.') : null]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
       }) : h('div', { class: 'acct-f' }, askBtn(key, 'Delete area'))]);
@@ -2585,8 +2592,11 @@
 
   /* step 4: call times */
   var CT_DEFAULT = { morning: 'Morning brief', midday: 'Midday check-in', afternoon: 'Afternoon check-in' };
-  function stepTimes() {
-    var st = S.settings, cts = (st.call_times || []).slice(), skipErr = errBox();
+  /* 0.9.0 Your day › Brief times: one row per time with its days; the urgent checks are one more row with their
+     own days (the old working days and "No urgent checks on days off", merged: see urgentDays) */
+  function urgentDays(st) { return st.skip_checkins_days_off ? DAYS.filter(function (d) { return (st.workdays || []).indexOf(d) >= 0; }) : DAYS.slice(); }
+  function dayBriefs() {
+    var st = S.settings, cts = (st.call_times || []).slice(), uErr = errBox();
     function save(ct, patch, err, btns, ok) {
       patchSettings(function () {
         var p = typeof patch === 'function' ? patch() : patch;
@@ -2624,30 +2634,23 @@
         h('div', { class: 'row' }, [h('label', { class: 'sr', for: id }, label + ' time'), inp, t]), days, err]);
       return box;
     });
-    var skip = sw(st.skip_checkins_days_off, 'No urgent checks on days off', function () {
-      patchSettings(function () { return { skip_checkins_days_off: !st.skip_checkins_days_off }; }, skipErr, [skip], function (sent) {
-        skip.setAttribute('aria-pressed', String(sent.skip_checkins_days_off));
+    var ug = urgentDays(st), pushOnNow = !!(S.push && S.push.urgent);
+    var ugDays = h('div', { class: 'chips ctdays', role: 'group', 'aria-label': 'Urgent checks days' }, DAYS.map(function (d) {
+      var b = btn('chip', DAYNAME[d], { 'aria-pressed': String(ug.indexOf(d) >= 0), 'data-ugday': d, 'data-fk': 'ugday:' + d }, function () {
+        var cur = urgentDays(S.settings), want = cur.indexOf(d) >= 0 ? cur.filter(function (x) { return x !== d; }) : cur.concat([d]);
+        if (!want.length) { uErr.textContent = 'Pick at least one day. To stop them, turn urgent alerts off under Phone.'; return; }
+        patchSettings({ workdays: DAYS.filter(function (x) { return want.indexOf(x) >= 0; }), skip_checkins_days_off: true }, uErr, [b], function (sent) {
+          ugDays.querySelectorAll('button').forEach(function (y) { y.setAttribute('aria-pressed', String(sent.workdays.indexOf(y.getAttribute('data-ugday')) >= 0)); });
+        });
       });
-    });
-    return [
+      return b;
+    }));
+    blocks.push(h('div', { class: 'tb ug' + (pushOnNow ? '' : ' off') }, [h('div', { class: 'label' }, 'Urgent checks'),
+      h('div', { class: 'disp sm' }, 'Between briefs'), h('p', { class: 'muted ugst' }, pushOnNow ? 'Every 10 minutes, on these days' : 'Off: turn on urgent alerts under Phone'), ugDays, uErr]));
+    return h('section', { class: 'where briefs', 'aria-labelledby': 'bt-h' }, [h('h2', { class: 'h3', id: 'bt-h' }, 'Brief times'),
       h('p', { class: 'intro' }, 'Times are ' + (st.timezone || 'your time zone').replace(/_/g, ' ') + '.'),
       h('div', { class: 'times' }, blocks),
-      h('div', { class: 'swrow' }, [skip, h('span', { 'aria-hidden': 'true' }, 'No urgent checks on days off')]), skipErr,
-      h('p', { class: 'note' }, 'Callsheet refreshes at these times, on the days picked under each. Days off are the ones not in your working days. Refresh always works.')];
-  }
-
-  /* step 5: delivery (fixed facts in this version) */
-  function stepDelivery() {
-    function row(sel, t, s, state) {
-      return h('div', { class: 'opt fixed' + (sel ? ' sel' : '') }, [h('span', { class: 'cb' + (sel ? ' sel' : ''), 'aria-hidden': 'true' }),
-        h('span', null, [h('span', { class: 't' }, t), h('span', { class: 's' }, s)]), h('span', { class: 'state' }, state)]);
-    }
-    return [
-      h('p', { class: 'intro' }, 'Where the brief shows up.'),
-      h('div', { class: 'opts' }, [
-        row(true, 'Sidebar page in Home Assistant', 'Opens anywhere your Home Assistant does', 'On'),
-        row(pushOn(), 'Phone notifications', 'via the Home Assistant app · set up below', pushOn() ? 'On' : 'Off')]),
-      pushBlock(), writerBlock(), chatBlock(), writingBlock(), memoryBlock()];  /* 0.6.0 chat: chatBlock */
+      h('p', { class: 'note' }, 'Callsheet refreshes at these times, on the days picked under each. Refresh always works.')]);
   }
 
   /* step 5: writing instructions. Profiles (Default is built in and read-only); five texts per profile, each saved
@@ -2816,7 +2819,7 @@
       fmtNum(lw.input_tokens) + ' in / ' + fmtNum(lw.output_tokens) + ' out tokens';
     return 'Last run ' + fmtWhen(lw.at, true) + ' didn\u2019t work: ' + (lw.error || 'unknown problem.');
   }
-  function writerBlock() {
+  function writerBlock(part) {  /* 0.9.0: 'ai' (who writes, Careful or Fast) or 'adv' (model server, Claude key) */
     var w = writerOf(), err = errBox();
     function patchWriter(body, e, btns, ok, focusKey) {
       return run(btns || [], e || err, function () { return api('PATCH', 'api/writer', typeof body === 'function' ? body() : body); }, function (r) {
@@ -2835,9 +2838,9 @@
       });
     }
     var opts = h('div', { class: 'opts', role: 'radiogroup', 'aria-label': 'Who writes the brief' }, [
-      choice('off', 'Off', 'The brief from the rules only, as before'),
-      choice('claude', 'Claude (cloud)', 'Anthropic API key · only the brief\u2019s inputs are sent'),
-      choice('local', 'Local model', 'Any OpenAI-compatible server on your network: llama.cpp, Ollama, LM Studio')]);
+      choice('off', 'Off', 'The brief from the rules only'),
+      choice('local', 'On this box', 'A model server on your network'),
+      choice('claude', 'Claude', 'Anthropic’s cloud · only the brief\u2019s inputs are sent')]);
 
     /* Claude: key + model */
     var cErr = errBox(), cKeyHint = w.claude.key_hint;
@@ -2934,8 +2937,7 @@
       h('div', { class: 'swrow' }, [th, h('span', { 'aria-hidden': 'true' }, 'Thinking')]), thErr,
       h('p', { class: 'note' }, 'Slower. Off is recommended for this model.'),
       adv, advP, advErr,
-      h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.'),
-      presetsBlock(w)]);  /* 0.6.1 */
+      h('p', { class: 'note' }, 'A first run can take a minute while the server loads the model.')]);  /* 0.9.0: presets are their own Advanced section */
 
     var fbErr = errBox(), sgErr = errBox();
     var fb = sw(w.fallback_to_claude, 'If the local model fails, use Claude instead', function () {
@@ -2944,7 +2946,25 @@
     var sg = sw(w.suggest_replies !== false, 'Suggest replies', function () {
       patchWriter(function () { return { suggest_replies: writerOf().suggest_replies === false }; }, sgErr, [sg], function (r) { sg.setAttribute('aria-pressed', String(r.suggest_replies !== false)); });
     });
+    fb.setAttribute('data-fk', 'w-fb'); sg.setAttribute('data-fk', 'w-sug');
     var lw = S.last_writer || {};
+    if (part === 'adv') {
+      return h('div', { class: 'where writer' }, [claude, local,
+        h('div', { class: 'swrow' }, [fb, h('span', { 'aria-hidden': 'true' }, 'If the local model fails, use Claude instead')]), fbErr,
+        h('p', { class: 'note' }, 'Off keeps your data on your network.')]);
+    }
+    if (part === 'ai') {
+      return h('section', { class: 'where writer', 'aria-labelledby': 'w-who' }, [
+        h('h2', { class: 'h3', id: 'w-who' }, 'Who writes'),
+        h('p', { class: 'note' }, 'The rules decide what is in the brief. The writer adds a short summary and drafts you copy. Nothing is ever sent.'),
+        opts, err,
+        w.provider === 'claude' ? claude : null,
+        w.provider === 'local' ? localLine(w) : null,
+        w.provider === 'local' ? presetPlain(w) : null,
+        h('div', { class: 'swrow' }, [sg, h('span', { 'aria-hidden': 'true' }, 'Suggest replies')]), sgErr,
+        h('p', { class: 'note' }, 'Reads the last few messages of up to 8 threads that need a reply. An area can opt out in Connections.'),
+        h('p', { class: 'syncst' + (lw.at && !lw.ok ? ' bad' : ''), role: 'status' }, lastWriterLine())]);
+    }
     return h('div', { class: 'where writer' }, [
       h('h2', { class: 'h3' }, 'Writer'),
       h('p', { class: 'note' }, 'The rules decide what is in the brief. The writer adds a short summary and suggested replies you can copy. Nothing is ever sent.'),
@@ -3111,31 +3131,325 @@
     var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
     return p && p.id !== 'default' ? ' · Writing profile: ' + p.name : '';
   }
-  /* 0.7.1: Setup home: each step's summary (the Review lines) with Edit; Refresh now is its one filled button
-     (Start: About you on the first run) */
   function syncNow(btns, err, fk) {
     return run(btns, err, function () { return api('POST', 'api/sync', {}); }, function (r) { S.last_sync = r || {}; renderSetup('[data-fk="' + fk + '"]'); });
   }
-  function stepHome() {
-    var lines = reviewLines(), ls = S.last_sync || {}, err = errBox(), first = !S.setup_done;
+
+  /* ---------- 0.9.0: Setup in four places ----------
+     Connections, Your day, AI and Advanced (closed sections). The same settings and the same API as before; only
+     where they live and their wording changed. Each place is a function made of section functions, so a later
+     release can add its own (AI › Sorting: sortingSlot). The first run keeps three steps: Connect, Your day, Get to
+     know me. Old links (#setup/<step number or name>) open the place the step's settings moved to. */
+  var PLACE_IDS = ['home', 'connections', 'day', 'ai', 'advanced'];
+  var OLD_STEPS = { 1: 'day', 2: 'connections', 3: 'day', 4: 'day', 5: 'ai', 6: 'home', about: 'day', 'about-you': 'day',
+    areas: 'connections', vips: 'day', 'call-times': 'day', times: 'day', delivery: 'ai', review: 'home' };
+  var WIZ = [['connections', 'Connect'], ['day', 'Your day'], ['knowme', 'Get to know me']];
+  var PLACE_FN = { connections: placeConnections, day: placeDay, ai: placeAI, advanced: placeAdvanced };
+  function placeFromHash(hash) {
+    var m = /^#setup(?:\/(.*))?$/.exec(hash || '');
+    if (!m) return null;
+    var k = String(m[1] || '').toLowerCase();
+    return PLACE_IDS.indexOf(k) >= 0 ? k : Object.prototype.hasOwnProperty.call(OLD_STEPS, k) ? OLD_STEPS[k] : 'home';
+  }
+  function placeName(p) { var x = PLACES.filter(function (y) { return y[0] === p; })[0]; return x ? x[1] : 'Setup'; }
+  function inPlace(p) { return ui.view === 'setup' && ui.place === p; }
+  /* open Setup at a place; focus: what to focus after the render; adv: an Advanced section to open first */
+  function openSetup(p, focus, adv) {
+    p = PLACE_IDS.indexOf(p) >= 0 ? p : 'home';
+    if (adv) ui.adv[adv] = true;
+    ui.focusNext = focus || null;
+    var hash = 'setup' + (p === 'home' ? '' : '/' + p);
+    if (location.hash === '#' + hash) {
+      ui.place = p; ui.confirm = null;
+      if (ui.view === 'setup' && S && main.querySelector('.sheet')) { ui.focusNext = null; renderSetup(focus || '#wiz-title'); } else route();
+    }
+    else location.hash = hash;
+  }
+  function wizGo(i) {
+    ui.wiz = i; ui.confirm = null;
+    openSetup(i === 2 ? 'home' : WIZ[i][0], '#wiz-title');
+    window.scrollTo(0, 0);
+  }
+  /* first run, step 3: Get to know me is optional; Finish marks the setup done */
+  function wizKnow() {
+    var err = errBox();
+    var fin = btn('btn primary', 'Go to my brief', { 'data-fk': 'wiz-finish' }, function () {
+      run([fin], err, function () { return api('PATCH', 'api/settings', { setup_done: true }); }, function () {
+        S.setup_done = true; ui.wiz = null; location.hash = 'brief';
+      });
+    });
+    return [h('p', { class: 'intro' }, 'Optional. Callsheet reads your past mail and notes on this box to learn who matters.'),
+      h('div', { class: 'go' }, [knowEntry(), fin]), err,
+      h('p', { class: 'note' }, 'You can do this later from AI, Memory.')];
+  }
+  function areaWithAcct(id) {
+    var a = S && S.areas ? S.areas.filter(function (x) { return (x.accounts || []).some(function (y) { return y.id === id; }); })[0] : null;
+    return a ? a.id : null;
+  }
+
+  /* Setup home: a "Find a setting" box, then each place with what it is set to now */
+  function setupHome() {
+    var ls = S.last_sync || {}, err = errBox(), first = !S.setup_done, lines = placeLines();
     var errs = Array.isArray(ls.errors) ? ls.errors : [];
     var refresh = btn(first ? 'btn' : 'btn primary', 'Refresh now', { 'data-fk': 'home-sync' }, function () { syncNow([refresh], err, 'home-sync'); });
     return [
-      h('p', { class: 'intro' }, first ? 'Six short steps. Start with About you, or open any part.' : 'Each part and what it’s set to now.'),
-      h('div', { class: 'shome' }, STEPS.slice(0, 5).map(function (name, i) {
-        return h('section', { class: 'scard', 'aria-labelledby': 'sh-' + (i + 1) }, [
-          h('h2', { class: 'h3', id: 'sh-' + (i + 1) }, [h('span', { class: 'n' }, String(i + 1)), name]),
-          h('ul', { class: 'ln' }, lines[i].split(' · ').map(function (s) { return h('li', null, s); })),
-          btn('btn sm', 'Edit', { 'aria-label': 'Edit ' + name, 'data-fk': 'home:' + (i + 1) }, function () { go(i + 1); })]);
+      setFind(),
+      h('div', { class: 'shome' }, PLACES.map(function (x) {
+        var adv = x[0] === 'advanced';
+        return h('section', { class: 'scard' + (adv ? ' adv' : ''), 'aria-labelledby': 'sh-' + x[0] }, [
+          h('h2', { class: 'h3', id: 'sh-' + x[0] }, x[1]),
+          h('ul', { class: 'ln' }, lines[x[0]].map(function (t) { return h('li', null, t); })),
+          btn('btn sm', adv ? 'Open' : 'Edit', { 'aria-label': (adv ? 'Open ' : 'Edit ') + x[1], 'data-fk': 'home:' + x[0] }, function () { go(x[0]); })]);
       })),
-      h('section', { class: 'scard ppcard', 'aria-labelledby': 'sh-pp' }, [  /* 0.8.2 people */
-        h('h2', { class: 'h3', id: 'sh-pp' }, 'People'),
-        h('ul', { class: 'ln' }, [h('li', null, S.people && S.people.open ? plural(S.people.open, 'Same person? suggestion', 'Same person? suggestions') : 'One person across mail, Slack and Signal')]),
-        btn('btn sm', 'Open', { 'aria-label': 'Open People', 'data-fk': 'home:people' }, function () { location.hash = 'people'; })]),
-      h('div', { class: 'go' }, [first ? btn('btn primary', 'Start: About you', null, function () { go(1); }) : null, refresh]),
+      h('div', { class: 'go' }, [first ? btn('btn primary', 'Start: Connect', { 'data-fk': 'wiz-start' }, function () { wizGo(0); }) : null, refresh]),
       err,
       ls.at && ls.ok === false ? h('p', { class: 'syncst bad' }, 'Last refresh had problems:') : null,
       errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
+  }
+  /* each place's summary lines (Setup home) */
+  function placeLines() {
+    var st = S.settings, nAcc = 0, nSlack = 0, sig = false, w = writerOf();
+    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
+    var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
+    function onDays(c) { var d = DAYS.filter(function (x) { return (c.days || DAYS).indexOf(x) >= 0; }); return d.length === 7 ? '' : ' (' + daysSummary(d) + ')'; }  /* 0.6.2 */
+    var timesSum = cts.length ? 'Briefs at ' + cts.map(function (c) { return c.time + onDays(c); }).join(', ') : 'No brief times on';
+    var pp = S.push || {}, mapM = (w.call_presets || {}).morning || 'fast';
+    return {
+      connections: [S.areas.map(function (a) { return a.name; }).join(', '),
+        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') : 'Google sign-in key not added yet',
+        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean),
+      day: [[st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' ')].filter(Boolean).join(' · '), timesSum,
+        (pp.at_call_times || pp.urgent) ? 'Phone alerts on' : 'Phone alerts off',
+        plural(S.vips.length, 'VIP', 'VIPs') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days')],
+      ai: ['Writer: ' + writerName(w) + (w.provider === 'local' ? ' · Morning ' + (mapM === 'fast' ? 'Fast' : 'Careful') : ''),
+        'Chat ' + (chatOff() ? 'off' : 'on') + ' on this device', 'Memory, Get to know me, People'],
+      advanced: ['Keys, model server, presets, limits, rules, Start over']};
+  }
+
+  /* ----- Your day ----- */
+  function placeDay() { return [dayAbout(), dayBriefs(), pushBlock('day'), dayPeople(), dayLook()]; }
+  function dayPeople() { return h('section', { class: 'where ppl', 'aria-labelledby': 'vip-h' }, [h('h2', { class: 'h3', id: 'vip-h' }, 'VIPs and replies')].concat(stepVips())); }
+
+  /* ----- Connections: one policy line, the areas as chips (one area's accounts at a time), Signal, notes and code ----- */
+  function placeConnections() {
+    var areas = S.areas, sel = areas.some(function (a) { return a.id === ui.areaSel; }) ? ui.areaSel : (areas[0] || {}).id;
+    var chips = h('div', { class: 'chips areachips', role: 'group', 'aria-label': 'Areas' }, areas.map(function (a) {
+      var n = (a.accounts || []).length + (a.slack || []).length + (a.signal ? 1 : 0);
+      return btn('chip', [h('span', { class: 'adot a' + clampColour(a.colour), 'aria-hidden': 'true' }), a.name, h('span', { class: 'cl' }, ' · ' + n)],
+        { 'aria-pressed': String(!ui.newAreaOpen && a.id === sel), 'data-fk': 'achip:' + a.id }, function () {
+          ui.areaSel = a.id; ui.newAreaOpen = false; renderSetup('[data-fk="' + cssq('achip:' + a.id) + '"]');
+        });
+    }).concat([btn('chip', '+ Add area', { 'aria-pressed': String(!!ui.newAreaOpen), 'data-fk': 'achip:new' }, function () {
+      ui.newAreaOpen = !ui.newAreaOpen; renderSetup(ui.newAreaOpen ? '#f-area' : '[data-fk="achip:new"]');
+    })]));
+    var cur = areas.filter(function (a) { return a.id === sel; })[0];
+    return [
+      h('p', { class: 'intro' }, 'What Callsheet may read, by area. Check your employer’s policy before adding work accounts.'),
+      S.google_client.configured ? null : keyPanel(),
+      chips,
+      ui.newAreaOpen ? addAreaCard() : cur ? areaCard(cur) : null,
+      signalCard(),
+      otherSources(),
+      h('div', { class: 'callout' }, [h('div', { class: 'h' }, 'Always'),
+        h('p', null, 'The brief reads and drafts. It never sends, accepts or deletes anything.')])];
+  }
+  function otherSources() {
+    function row(name, line, fk, fn) {
+      return h('div', { class: 'lrow src' }, [h('span', null, [h('b', null, name), h('span', { class: 'muted' }, ' · ' + line)]),
+        btn('btn sm', 'Open', { 'data-fk': fk, 'aria-label': 'Open ' + name }, fn)]);
+    }
+    return h('section', { class: 'where srcs', 'aria-labelledby': 'src-h' }, [h('h2', { class: 'h3', id: 'src-h' }, 'Notes and code'),
+      row('Notes folders', 'Obsidian and Google Drive, read in Get to know me', 'src-notes', function () { location.hash = 'knowme'; }),
+      row('GitHub', 'repos for Projects, read-only', 'src-gh', function () { PJ.view = 'setup'; PJ.open = null; location.hash = 'projects'; })]);
+  }
+
+  /* ----- AI: who writes, Careful or Fast in plain words, chat, memory and people, writing style (and Sorting) ----- */
+  function placeAI() { return [writerBlock('ai'), aiChat(), memoryBlock('ai'), aiStyle(), sortingSlot()]; }
+  /* 0.8.4 merge slot: the Sorting settings (sortingBlock, built on the 0.8.4 branch) show here; nothing until then */
+  function sortingSlot() { return typeof sortingBlock === 'function' ? sortingBlock() : null; }  /* eslint-disable-line no-undef */
+  var KEY_CHATOFF = 'callsheet.chatoff', KEY_SOUND = 'callsheet.sound', KEY_DENSITY = 'callsheet.density';
+  function chatOff() { return load(KEY_CHATOFF) === '1'; }
+  function aiChat() {
+    var s = sw(!chatOff(), 'Chat', function () { save(KEY_CHATOFF, chatOff() ? '' : '1'); renderSetup('[data-fk="ai-chat"]'); });
+    s.setAttribute('data-fk', 'ai-chat');
+    return h('section', { class: 'where', 'aria-labelledby': 'ai-chat-h' }, [h('h2', { class: 'h3', id: 'ai-chat-h' }, 'Chat'),
+      h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, 'Chat tab on this device')]),
+      h('p', { class: 'note' }, 'Ask about your own mail, calendar and notes. It reads only; its engine is in Advanced.')]);
+  }
+  function aiStyle() {
+    var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
+    return h('section', { class: 'where', 'aria-labelledby': 'ai-style-h' }, [h('h2', { class: 'h3', id: 'ai-style-h' }, 'Writing style'),
+      h('div', { class: 'lrow' }, [h('span', null, p && p.id !== 'default' ? 'Your own: ' + p.name : 'Default'),
+        btn('btn sm', 'Change', { 'data-fk': 'ai-style', 'aria-label': 'Change the writing style' }, function () { openSetup('advanced', '[data-fk="adv:writing"]', 'writing'); })])]);
+  }
+  /* Morning and check-ins: Careful or Fast, over the presets (Careful = the owner's first own preset) */
+  function presetPlain(w) {
+    var ps = w.presets || [], map = w.call_presets || {}, err = errBox();
+    var kinds = (w.call_kinds || []).map(function (k) { return k.id; }), checks = kinds.filter(function (k) { return k !== 'morning'; });
+    var careful = ps.filter(function (p) { return !p.builtin && p.id !== 'fast'; })[0] || null;
+    function now(ids) { var v = ids.map(function (k) { return map[k] || 'fast'; }); return v.every(function (x) { return x === v[0]; }) ? v[0] : 'mixed'; }
+    function seg(label, ids, fk) {
+      var cur = now(ids);
+      var g = h('div', { class: 'chips seg', role: 'group', 'aria-labelledby': fk + '-l' }, [['careful', 'Careful'], ['fast', 'Fast']].map(function (o) {
+        var id = o[0] === 'fast' ? 'fast' : careful && careful.id;
+        var b = btn('chip', o[1], { 'aria-pressed': String(!!id && cur === id), 'data-fk': fk + ':' + o[0], disabled: !id }, function () {
+          var body = { call_presets: {} }; ids.forEach(function (k) { body.call_presets[k] = id; });
+          run([b], err, function () { return api('PATCH', 'api/writer', body); }, function (r) { S.writer = r || S.writer; renderSetup('[data-fk="' + fk + ':' + o[0] + '"]'); });
+        });
+        return b;
+      }));
+      return h('div', { class: 'field' }, [h('span', { class: 'label', id: fk + '-l' }, label), g, cur === 'mixed' ? h('p', { class: 'muted' }, 'Mixed: see Presets in Advanced.') : null]);
+    }
+    if (!kinds.length) return null;
+    return h('div', { class: 'plain cols' }, [seg('Morning brief', ['morning'], 'wp-m'), seg('Check-ins and Refresh', checks, 'wp-c'),
+      careful ? null : h('p', { class: 'note' }, ['Careful needs a second preset. ',
+        btn('tbtn', 'Add one', { 'data-fk': 'wp-add' }, function () { openSetup('advanced', '[data-fk="adv:presets"]', 'presets'); })]),
+      err]);
+  }
+  function localLine(w) {
+    var l = w.local || {};
+    return h('div', { class: 'lrow' }, [h('span', null, l.model ? l.model + (l.base_url ? ' · ' + l.base_url : '') : 'No model server yet'),
+      btn('btn sm', 'Model server', { 'data-fk': 'ai-server' }, function () { openSetup('advanced', '#w-lurl', 'server'); })]);
+  }
+
+  /* ----- Advanced: one closed section each (open state kept while the page is open) ----- */
+  var ADV = [['key', 'Google sign-in key', function () { return keyPanel(); }],
+    ['server', 'Model server and Claude', function () { return writerBlock('adv'); }],
+    ['presets', 'Presets', function () { return presetsBlock(writerOf()); }],
+    ['chat', 'Chat engine', function () { return chatBlock('adv'); }],
+    ['alerts', 'Alert limits and privacy', function () { return pushBlock('adv'); }],
+    ['writing', 'Writing instructions and safety rules', function () { return writingBlock(); }],
+    ['memory', 'Memory file', function () { return memoryBlock('adv'); }],
+    ['eval', 'Writer evaluation', advEval],
+    ['signal', 'Signal history import', advSignal],
+    ['startover', 'Start over', advStartOver]];
+  function advName(id) { var x = ADV.filter(function (y) { return y[0] === id; })[0]; return x ? x[1] : ''; }
+  function placeAdvanced() {
+    return [h('p', { class: 'intro' }, 'For people who want the details. Each part opens on its own.'),
+      h('div', { class: 'advs' }, ADV.map(function (x) {
+        var open = !!ui.adv[x[0]], id = 'adv-' + x[0];
+        var b = btn('advh', [h('span', null, x[1]), h('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '−' : '+')],
+          { 'aria-expanded': String(open), 'aria-controls': id, 'data-adv': x[0], 'data-fk': 'adv:' + x[0] }, function () {
+            ui.adv[x[0]] = !ui.adv[x[0]]; renderSetup('[data-fk="adv:' + x[0] + '"]');
+          });
+        return h('section', { class: 'adv' + (open ? ' open' : '') + (x[0] === 'startover' ? ' danger' : '') }, [h('h2', { class: 'advt' }, b),
+          h('div', { class: 'advb', id: id, hidden: !open }, open ? x[2]() : null)]);
+      }))];
+  }
+  function advEval() {
+    return [h('p', { class: 'note' }, 'Compare two to four writers side by side on your own brief. Nothing is sent.'),
+      btn('btn', 'Open writer evaluation', { 'data-fk': 'adv-eval-open' }, function () { location.hash = 'eval'; })];
+  }
+  function advSignal() {
+    if (!SIG.st) { if (!SIG.loading && !SIG.err) sigLoad(); return h('p', { class: 'note', role: 'status' }, SIG.err || 'Loading…'); }
+    return sigImport(SIG.st);
+  }
+  function advStartOver() {
+    return [h('p', { class: 'note' }, 'These delete for good. Each asks first.'), chatBlock('startover'), memoryBlock('startover')];
+  }
+
+  /* ----- the settings index: every setting, its place (and Advanced section), what to focus, search words and
+     the API fields it covers. Find a setting (Setup home) and Find or ask both use it. ----- */
+  var SETTINGS = [
+    ['connections', null, 'Areas', '[data-fk="achip:new"]', 'area work personal employer add delete', ['areas']],
+    ['connections', null, 'Google accounts', '.areachips', 'gmail calendar mail connect sign in disconnect calendars', ['accounts', 'services', 'calendars']],
+    ['connections', null, 'What an area may read', '.areachips', 'calendar mail chat ai writer reads', ['reads']],
+    ['connections', null, 'Slack', '.areachips', 'workspace ignore channels', ['slack']],
+    ['connections', null, 'Signal', '[data-fk="sig-h"]', 'link phone ignore chats unlink', ['signal']],
+    ['connections', null, 'Notes folders', '[data-fk="src-notes"]', 'obsidian drive vault know me', ['index']],
+    ['connections', null, 'GitHub', '[data-fk="src-gh"]', 'repos token projects code', ['github']],
+    ['day', null, 'Your name', '#f-name', 'name', ['name']],
+    ['day', null, 'Time zone', '[data-fk="tz"]', 'timezone zone clock', ['timezone']],
+    ['day', null, 'Time format', '[data-fk="tf:12h"]', '12-hour 24-hour clock', ['time_format']],
+    ['day', null, 'Brief times', '#ct-morning', 'call times morning midday afternoon check-ins days schedule', ['call_times']],
+    ['day', null, 'Urgent checks: days', '[data-fk="ugday:mon"]', 'working days off weekend workdays', ['workdays', 'skip_checkins_days_off']],
+    ['day', null, 'Phones to notify', '#push-h', 'phone notifications send to', ['targets']],
+    ['day', null, 'Phone note after each brief', '[data-fk="p-calls"]', 'notification summary call times', ['at_call_times']],
+    ['day', null, 'Urgent alerts between briefs', '[data-fk="p-urgent"]', 'notification urgent vip', ['urgent']],
+    ['day', null, 'Quiet hours', '#p-qs', 'night sleep do not disturb', ['quiet_start', 'quiet_end']],
+    ['day', null, 'Send a test notification', '[data-fk="p-test"]', 'phone test', []],
+    ['day', null, 'VIPs', '#f-vname', 'important people always', ['vips']],
+    ['day', null, 'Needs a reply after', '#f-age', 'unanswered days wait', ['reply_age_days']],
+    ['day', null, 'Never-reply rules', '#nnr-h', 'doesn’t need a reply hidden sender domain suppress', ['suppress']],
+    ['day', null, 'Look and mode', '[data-fk="look-open"]', 'theme dark light colours bold jam', ['look', 'mode']],
+    ['day', null, 'Density', '[data-fk="dens:compact"]', 'compact comfortable rows', []],
+    ['day', null, 'Sound', '[data-fk="snd"]', 'tick all clear audio', []],
+    ['ai', null, 'Who writes', '.where.writer .opts', 'writer ai off claude local model on this box', ['provider']],
+    ['ai', null, 'Morning: Careful or Fast', '[data-fk="wp-m:fast"]', 'preset morning brief', ['call_presets']],
+    ['ai', null, 'Check-ins: Careful or Fast', '[data-fk="wp-c:fast"]', 'preset check-ins refresh', ['call_presets']],
+    ['ai', null, 'Suggest replies', '[data-fk="w-sug"]', 'drafts', ['suggest_replies']],
+    ['ai', null, 'Chat', '[data-fk="ai-chat"]', 'chat tab ask', []],
+    ['ai', null, 'Memory', '#mem-h', 'notes remember', ['memory']],
+    ['ai', null, 'Get to know me', '[data-fk="kn-open"]', 'know me profile scan index', []],
+    ['ai', null, 'People', '[data-fk="pp-open"]', 'same person merge', ['people']],
+    ['ai', null, 'Writing style', '[data-fk="ai-style"]', 'profile tone', ['active_profile']],
+    ['advanced', 'key', 'Google sign-in key', '[data-fk="adv:key"]', 'client id secret oauth cloud console', ['google_client']],
+    ['advanced', 'server', 'Claude key and model', '#w-ckey', 'anthropic api key cost usd', ['claude.api_key', 'claude.model']],
+    ['advanced', 'server', 'Model server', '#w-lurl', 'local url openai llama ollama lm studio api key', ['local.base_url', 'local.model', 'local.api_key']],
+    ['advanced', 'server', 'Thinking', '#w-lurl', 'reasoning budget', ['local.thinking', 'local.reasoning_budget']],
+    ['advanced', 'server', 'Server limits and slot', '[data-fk="w-adv"]', 'max tokens context timeout slot effort', ['local.max_tokens', 'local.context', 'local.timeout', 'local.id_slot', 'local.effort', 'local.kwargs']],
+    ['advanced', 'server', 'If the local model fails, use Claude', '[data-fk="w-fb"]', 'fallback', ['fallback_to_claude']],
+    ['advanced', 'presets', 'Presets', '[data-fk="adv:presets"]', 'careful fast preset per call time reload', ['presets', 'call_presets', 'reload_fast']],
+    ['advanced', 'chat', 'Chat engine', '#ch-h', 'chat model local claude', ['chat.provider', 'chat.local.base_url', 'chat.local.model', 'chat.local.api_key', 'chat.claude.model', 'chat.claude.effort', 'chat.claude.thinking']],
+    ['advanced', 'chat', 'Chat limits and slot', '#ch-tools', 'tool use timeout max tokens server slot jinja', ['chat.local.tools', 'chat.local.timeout', 'chat.local.max_tokens', 'chat.local.id_slot', 'chat.local.thinking']],
+    ['advanced', 'chat', 'Test chat', '[data-fk="ch-test"]', 'chat test', []],
+    ['advanced', 'alerts', 'Urgent alerts per hour', '#p-max', 'rate limit', ['max_per_hour']],
+    ['advanced', 'alerts', 'Alert privacy', '[data-fk="p-subj"]', 'subject show privacy push', ['show_subject']],
+    ['advanced', 'writing', 'Writing instructions', '[data-fk="adv:writing"]', 'rules summary drafts style examples prompt profile', ['prompt_profiles']],
+    ['advanced', 'writing', 'Safety rules (read-only)', '[data-fk="adv:writing"]', 'safety fixed locked', []],
+    ['advanced', 'memory', 'Memory file', '#mem-text', 'memory.md markdown edit', []],
+    ['advanced', 'eval', 'Writer evaluation', '[data-fk="adv-eval-open"]', 'compare contenders evaluate', ['eval']],
+    ['advanced', 'signal', 'Signal history import', '[data-fk="adv:signal"]', 'history export desktop import', []],
+    ['advanced', 'startover', 'Clear all chats', '[data-fk="ch-clr"]', 'delete chats start over', []],
+    ['advanced', 'startover', 'Clear memory', '[data-fk="ask:mem-reset"]', 'delete notes reset start over', []]];
+  function setWhere(x) { return placeName(x[0]) + (x[1] ? ' › ' + advName(x[1]) : ''); }
+  function findSettings(q) {
+    var ws = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!ws.length) return [];
+    return SETTINGS.filter(function (x) {
+      var hay = (x[2] + ' ' + x[4] + ' ' + setWhere(x)).toLowerCase();
+      return ws.every(function (w) { return hay.indexOf(w) >= 0; });
+    });
+  }
+  function openSetting(x) { ui.wiz = null; openSetup(x[0], x[3], x[1]); }
+  /* Setup home's "Find a setting" (the results update as you type; Enter opens the first) */
+  function setFind() {
+    var list = h('ul', { class: 'sfind-l', id: 'sfind-l', 'aria-live': 'polite' });
+    var inp = h('input', { class: 'inp', type: 'search', id: 'sfind', autocomplete: 'off', spellcheck: 'false', placeholder: 'quiet hours, slot, VIPs…', 'aria-describedby': 'sfind-l' });
+    function draw() {
+      list.textContent = '';
+      var hits = findSettings(inp.value);
+      if (inp.value.trim() && !hits.length) add(list, h('li', { class: 'muted' }, 'No setting matches.'));
+      hits.slice(0, 8).forEach(function (x) {
+        add(list, h('li', null, btn('tbtn sres', [h('span', null, x[2]), h('span', { class: 'muted' }, ' · ' + setWhere(x))], null, function () { openSetting(x); })));
+      });
+    }
+    on(inp, 'input', draw);
+    on(inp, 'keydown', function (e) { if (e.key === 'Enter') { var x = findSettings(inp.value)[0]; if (x) { e.preventDefault(); openSetting(x); } } });
+    return h('div', { class: 'sfind', role: 'search' }, [h('label', { class: 'label', for: 'sfind' }, 'Find a setting'), inp, list]);
+  }
+
+  /* ----- per device: density (Replies rows) and the All clear tick (opt-in, a short tone, no file) ----- */
+  function density() { return load(KEY_DENSITY) === 'comfortable' ? 'comfortable' : 'compact'; }
+  function applyDensity() { document.getElementById('app').setAttribute('data-density', density()); }
+  function densSeg(lbl) {
+    return h('div', { class: 'chips seg dens', role: 'group', 'aria-labelledby': lbl || null, 'aria-label': lbl ? null : 'Density' }, [['compact', 'Compact'], ['comfortable', 'Comfortable']].map(function (o) {
+      return h('button', { type: 'button', class: 'chip', 'aria-pressed': String(density() === o[0]), 'data-dens': o[0], 'data-fk': 'dens:' + o[0] }, o[1]);
+    }));
+  }
+  function setDensity(v) {
+    save(KEY_DENSITY, v === 'comfortable' ? 'comfortable' : 'compact'); applyDensity();
+    document.querySelectorAll('[data-dens]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-dens') === density())); });
+  }
+  function tick(force) {
+    if (!force && load(KEY_SOUND) !== '1') return;
+    try {
+      var C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+      var c = new C(), o = c.createOscillator(), g = c.createGain(), t = c.currentTime;
+      o.type = 'sine'; o.frequency.setValueAtTime(880, t);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.06, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.25); o.onended = function () { c.close(); };
+    } catch (e) { /* no sound */ }
   }
   /* 0.7.1: help paragraphs in a Setup section fold behind one "?": the first sentence stays, the rest opens on
      demand. Open or closed is remembered per section on this device. State lines (status, errors, "No … yet",
@@ -3179,50 +3493,6 @@
       first.appendChild(q);
     });
   }
-  function stepReview() {
-    var lines = reviewLines(), err = errBox();
-    var ls = S.last_sync || {};
-    var refresh = btn('btn primary', 'Refresh now', { 'data-fk': 'sync' }, function () { syncNow([refresh, goB], err, 'sync'); });
-    var goB = btn('btn', 'Go to my brief', null, function () {
-      if (S.setup_done) { location.hash = 'brief'; return; }
-      run([goB, refresh], err, function () { return api('PATCH', 'api/settings', { setup_done: true }); }, function () {
-        S.setup_done = true; location.hash = 'brief';
-      });
-    });
-    var errs = Array.isArray(ls.errors) ? ls.errors : [];
-    return [
-      h('p', { class: 'intro' }, [h('b', null, 'Ready.'), ' Check each part, then refresh to build your brief.']),
-      h('ul', { class: 'review' }, lines.map(function (s, i) {
-        return h('li', null, [h('span', { class: 'num' }, String(i + 1)), h('span', { class: 'nm' }, STEPS[i]), h('span', { class: 'sum' }, s),
-          btn('tbtn', 'Edit', { 'aria-label': 'Edit ' + STEPS[i] }, function () { go(i + 1); })]);
-      })),
-      h('div', { class: 'go' }, [refresh, goB]),
-      err,
-      h('p', { class: 'syncst', role: 'status' }, ls.at ? 'Last refreshed ' + fmtWhen(ls.at, true) + (ls.ok === false ? ', with problems:' : '.') : 'Not refreshed yet.'),
-      errs.length ? h('ul', { class: 'syncerr' }, errs.map(function (x) { return h('li', null, String(x)); })) : null];
-  }
-  /* the steps' one-line summaries (Review, and the cards on Setup home) */
-  function reviewLines() {
-    var st = S.settings, nAcc = 0;
-    var nSlack = 0, sig = false;
-    S.areas.forEach(function (a) { nAcc += (a.accounts || []).length; nSlack += (a.slack || []).length; sig = sig || !!a.signal; });
-    var cts = (st.call_times || []).filter(function (c) { return c.enabled; });
-    var morning = cts.filter(function (c) { return c.id === 'morning'; })[0], checks = cts.filter(function (c) { return c.id !== 'morning'; });
-    function onDays(c) { var d = DAYS.filter(function (x) { return (c.days || DAYS).indexOf(x) >= 0; }); return d.length === 7 ? '' : ' (' + daysSummary(d) + ')'; }  /* 0.6.2 */
-    var timesSum = [morning ? morning.time + ' brief' + onDays(morning) : 'No morning brief',
-      checks.length ? checks.map(function (c) { return c.time + onDays(c); }).join(' and ') + (checks.length > 1 ? ' check-ins' : ' check-in') : 'no check-ins'].join(' · ');
-    var lines = [
-      [st.name || 'No name yet', (st.timezone || '').replace(/_/g, ' '), daysSummary(st.workdays), st.time_format === '24h' ? '24-hour times' : '12-hour times', 'Look: ' + LOOKNAME[PREFS.look] + ', ' + MODENAME[PREFS.mode]].filter(Boolean).join(' · '),
-      [S.areas.map(function (a) { return a.name; }).join(', '),
-        S.google_client.configured ? plural(nAcc, 'Google account', 'Google accounts') + ' connected' : 'Google sign-in key not added yet',
-        nSlack ? plural(nSlack, 'Slack workspace', 'Slack workspaces') : null, sig ? 'Signal linked' : null].filter(Boolean).join(' · '),
-      plural(S.vips.length, 'person', 'people') + ' · needs a reply after ' + plural(st.reply_age_days || 2, 'day', 'days') +
-        ((S.suppress || []).length ? ' · ' + plural(S.suppress.length, 'never-reply rule', 'never-reply rules') : ''),
-      timesSum,
-      'Sidebar page in Home Assistant' + (pushOn() ? ' · Phone notifications' : '') + ' · Writer: ' + writerName(writerOf()) + profileLine()];
-    return lines;
-  }
-
   /* ---------- 0.5.1: Setup → Areas → Signal: link (QR code), status, area, ignored chats, unlink, history import ----------
      signal-cli runs on the server as a read-only linked device. The QR code is an SVG the server draws from the
      code's modules; the page shows it as an <img> from a data: URL, so it is never parsed into the page. */
@@ -3238,7 +3508,7 @@
   }
   /* redraws only the Signal card (the rest of Setup keeps its state and focus) */
   function sigRedraw(focusKey) {
-    if (ui.view !== 'setup' || ui.step !== 2) return;
+    if (ui.view !== 'setup') return;
     var old = main.querySelector('.sigcard');
     if (!old) return;
     var a = document.activeElement, fk = focusKey || (a && old.contains(a) ? a.getAttribute('data-fk') : null);
@@ -3252,7 +3522,7 @@
     if (SIG.timer) return;
     SIG.timer = setTimeout(function () {
       SIG.timer = null;
-      if (ui.view !== 'setup' || ui.step !== 2 || !SIG.st || !SIG.st.link || SIG.st.link.state !== 'waiting') return;
+      if (ui.view !== 'setup' || !SIG.st || !SIG.st.link || SIG.st.link.state !== 'waiting') return;
       api('GET', 'api/signal').then(function (r) {
         SIG.st = r || SIG.st;
         if (SIG.st.linked) return reload('sig-h');  /* the areas' Chat chip changes too */
@@ -3308,7 +3578,7 @@
       }
       kids.push(err);
     }
-    kids.push(sigImport(st));
+    /* 0.9.0: the history import is in Advanced */
     return h('section', { class: 'sigcard', 'aria-label': 'Signal' }, kids);
   }
   function sigQr(link, err) {
@@ -3480,14 +3750,14 @@
   function loadMemory() {
     var seq = ++MEM.seq;
     MEM.loading = true;
-    function done() { MEM.loading = false; if (seq === MEM.seq && ui.view === 'setup' && ui.step === 5) renderSetup(); }
+    function done() { MEM.loading = false; if (seq === MEM.seq && ui.view === 'setup') renderSetup(); }
     return api('GET', 'api/memory').then(function (m) { if (seq !== MEM.seq) return; MEM.data = m; MEM.err = null; done(); },
       function (e) { if (seq !== MEM.seq) return; MEM.err = e && e.message ? e.message : 'error'; done(); });
   }
-  function memoryBlock() {
+  function memoryBlock(part) {  /* 0.9.0: 'ai' (notes, Get to know me, People), 'adv' (the file), 'startover' (Clear) */
     if (!MEM.data && !MEM.err && !MEM.loading) loadMemory();
     var m = MEM.data, cap = m && Number(m.cap) || 1500;
-    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h' }, 'Memory'), knowEntry(),
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'mem-h', tabindex: '-1' }, 'Memory'), knowEntry(), peopleEntry('People'),
       btn('act ghost', 'Projects and GitHub', null, function () { PJ.view = 'setup'; PJ.open = null; location.hash = 'projects'; })]);  /* 0.7.0: Setup, Projects */  /* 0.6.0 index: entry */
     var intro = h('p', { class: 'note' }, 'Your notes to Callsheet, kept as one Markdown file on this box. Before each brief the writer gets ' +
       'the notes that fit the day (the same people, email domains, area or topic words), up to about ' + fmtNum(cap) + ' characters. ' +
@@ -3527,6 +3797,29 @@
         MEM.data = r; MEM.draft = null; ui.confirm = null; renderSetup('[data-fk="ask:mem-reset"]');
       });
     }) : askBtn('mem-reset', 'Clear memory');
+    if (part === 'startover') return clear;
+    if (part === 'ai') {
+      return h('section', { class: 'where mem', 'aria-labelledby': 'mem-h' }, [head,
+        h('p', { class: 'note' }, 'Your notes to Callsheet. Before each brief the writer reads the ones that fit the day.'),
+        m.error ? h('p', { class: 'err', role: 'alert' }, 'The memory file has a problem, so no notes are read until it’s fixed (Advanced, Memory file).') : null,
+        memChatList(m, cur !== saved),
+        h('div', { class: 'memfoot' }, [h('span', { class: 'muted' }, m.error ? 'Notes aren’t read right now.' : plural(n, 'note', 'notes') + ' in the memory.'),
+          btn('tbtn', 'Edit the memory file', { 'data-fk': 'mem-file' }, function () { openSetup('advanced', '#mem-text', 'memory'); })])]);
+    }
+    if (part === 'adv') {
+      return h('div', { class: 'where mem', role: 'group', 'aria-label': 'Memory file' }, [intro,
+        m.error ? h('p', { class: 'err', role: 'alert' }, 'The file has a problem, so no notes are read until it’s fixed: ' + m.error) : null,
+        h('label', { class: 'label', for: 'mem-text' }, 'memory.md'),
+        h('p', { class: 'help', id: 'mem-help' }, 'Each note starts with “### ” and a title, then “- key: value” lines (people, emails, domains, topics, area), a blank line and the note. ' +
+          'A note without people, emails, domains or topics applies to its whole area. Profile and Answers hold what you saved in Get to know me.'),
+        ta,
+        h('div', { class: 'wfoot' }, [cnt, h('span', { class: 'btns' }, [said, undoB, saveB])]), err, warnB,
+        h('div', { class: 'memfoot' }, [h('span', { class: 'muted' }, m.error ? 'Notes aren’t read right now.' : plural(n, 'note', 'notes') + ' in the memory.')]),
+        h('div', { class: 'locked', role: 'group', 'aria-labelledby': 'mem-lock' }, [
+          h('div', { class: 'lh', id: 'mem-lock' }, [ico('lock'), 'Sent with your notes (can’t be changed)']),
+          h('p', { class: 'fixtext' }, m.rule || ''),
+          h('p', { class: 'muted' }, 'Your notes go to the writer in their own block, apart from mail and chat. The safety rules still come first.')])]);
+    }
     return h('div', { class: 'where mem', role: 'region', 'aria-labelledby': 'mem-h' }, [head, intro,
       m.error ? h('p', { class: 'err', role: 'alert' }, 'The file has a problem, so no notes are read until it’s fixed: ' + m.error) : null,
       memChatList(m, cur !== saved),
@@ -3582,7 +3875,7 @@
   function loadPush() {
     var seq = ++PUSH.seq;
     PUSH.loading = true;
-    function done() { PUSH.loading = false; if (seq === PUSH.seq && ui.view === 'setup' && ui.step === 5) renderSetup(); }
+    function done() { PUSH.loading = false; if (seq === PUSH.seq && ui.view === 'setup') renderSetup(); }
     var a = api('GET', 'api/push').then(function (r) { if (seq === PUSH.seq) { PUSH.data = r; PUSH.err = null; } },
       function (e) { if (seq === PUSH.seq) PUSH.err = e && e.message ? e.message : 'error'; });
     var b = api('GET', 'api/push/targets').then(function (r) {
@@ -3595,9 +3888,9 @@
     var c = (PUSH.data && PUSH.data.settings) || (S && S.push) || {};
     return !!((c.targets || []).length && (c.at_call_times || c.urgent));
   }
-  function pushBlock() {
+  function pushBlock(part) {  /* 0.9.0: 'day' (phones, switches, quiet hours, test) or 'adv' (per hour, privacy) */
     if (!PUSH.data && !PUSH.err && !PUSH.loading) loadPush();
-    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'push-h' }, 'Phone notifications')]);
+    var head = h('div', { class: 'shd' }, [h('h2', { class: 'h3', id: 'push-h', tabindex: '-1' }, 'Phone')]);
     var intro = h('p', { class: 'note' }, 'Through the Home Assistant app on your phone. A notification says who wrote and the subject, ' +
       'never the message itself.');
     var d = PUSH.data;
@@ -3675,6 +3968,31 @@
     var le = d.last_error, ls = d.last_sent;
     var KIND = { brief: 'brief summary', urgent: 'urgent alert', 'urgent batch': 'urgent alerts', test: 'test' };
     var every = Number(d.every_min) || 10;
+    if (part === 'adv') {
+      return h('div', { class: 'where push', role: 'group', 'aria-label': 'Alert limits and privacy' }, [
+        h('div', { class: 'swrow' }, [subj, h('span', { 'aria-hidden': 'true' }, 'Show the subject in notifications')]),
+        h('p', { class: 'note' }, 'Notification text passes through Apple’s or Google’s push service. Off: the sender’s name only (“New urgent message from Priya”).'),
+        h('div', { class: 'pfields' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-max' }, 'Urgent alerts per hour'), perHour])]),
+        qErr, err,
+        h('p', { class: 'note' }, 'More than that in an hour are grouped into one “more urgent messages” alert.')]);
+    }
+    if (part === 'day') {
+      return h('section', { class: 'where push', 'aria-labelledby': 'push-h' }, [head, intro,
+        d.available ? null : h('p', { class: 'syncst bad' }, 'Phone notifications work when Callsheet runs as a Home Assistant app.'),
+        phones, err,
+        h('div', { class: 'swrow' }, [calls, h('span', { 'aria-hidden': 'true' }, 'After each brief')]),
+        h('p', { class: 'note' }, 'How many replies and events, and the top item. Tap it to open Callsheet.'),
+        h('div', { class: 'swrow' }, [urg, h('span', { 'aria-hidden': 'true' }, 'Urgent alerts between briefs')]),
+        h('p', { class: 'note' }, 'Every ' + every + ' minutes, without AI: a VIP, mail that says urgent, ASAP or emergency (or today with a deadline), or a sender saying something is approved, paid or signed. ' +
+          'Each message once. Only on the urgent checks’ days (Brief times), never in quiet hours.'),
+        h('div', { class: 'pfields' }, [
+          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qs' }, 'Quiet hours from'), timeIn('p-qs', 'quiet_start')]),
+          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'p-qe' }, 'Quiet hours until'), timeIn('p-qe', 'quiet_end')])]),
+        qErr,
+        h('div', { class: 'testrow' }, [test, res]), tstErr,
+        le && le.text ? h('p', { class: 'syncst bad', role: 'status' }, 'Last problem ' + fmtWhen(le.at, true) + ': ' + le.text)
+          : h('p', { class: 'syncst', role: 'status' }, ls && ls.at ? 'Last sent ' + fmtWhen(ls.at, true) + ' (' + (KIND[ls.kind] || 'notification') + ').' : 'Nothing sent yet.')]);
+    }
     return h('div', { class: 'where push', role: 'region', 'aria-labelledby': 'push-h' }, [head, intro,
       d.available ? null : h('p', { class: 'syncst bad' }, 'Phone notifications work when Callsheet runs as a Home Assistant app.'),
       phones, err,
@@ -3901,7 +4219,7 @@
         h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup · Advanced'), h('h1', { id: 'ev-title', tabindex: '-1' }, 'Writer evaluation')]),
         h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Runs kept'), h('div', { class: 'disp' }, runs.length + ' / 5')])]),
       h('section', { class: 'step', 'aria-labelledby': 'ev-title' }, body),
-      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { EV.edit = null; ui.step = 5; location.hash = 'setup'; })])]);
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: Advanced', null, function () { EV.edit = null; openSetup('advanced', '[data-fk="adv:eval"]', 'eval'); })])]);
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
@@ -4199,7 +4517,7 @@
       h('div', { class: 'knhead' }, knSteps(scanning ? 1 : 0)),
       h('section', { class: 'step', 'aria-labelledby': 'kn-title' }, body),
       wipe ? h('div', { class: 'step knwipe' }, wipe) : null,
-      h('div', { class: 'wnav' }, [btn('btn', 'Back: Delivery', null, function () { ui.step = 5; location.hash = 'setup'; })])]);
+      h('div', { class: 'wnav' }, [btn('btn', ui.wiz === 2 ? 'Back: First-run steps' : 'Back: AI', null, function () { if (ui.wiz === 2) openSetup('home'); else openSetup('ai', '#mem-h'); })])]);
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
@@ -4361,7 +4679,7 @@
         h('div', { class: 't' }, [h('div', { class: 'label' }, 'Setup'), h('h1', { id: 'pp-title', tabindex: '-1' }, 'People')]),
         h('div', { class: 'box call' }, [h('div', { class: 'label' }, 'Suggestions'), h('div', { class: 'disp' }, v ? String((v.proposals || []).length) : '–')])]),
       h('section', { class: 'step', 'aria-labelledby': 'pp-title' }, body),
-      h('div', { class: 'wnav' }, [btn('btn', 'Back: Setup', null, function () { ui.step = 0; location.hash = 'setup'; })])]);
+      h('div', { class: 'wnav' }, [btn('btn', 'Back: AI', null, function () { openSetup('ai', '#mem-h'); })])]);
     var keep = focusSel ? null : document.activeElement && document.activeElement.getAttribute('data-fk');
     main.textContent = '';
     add(main, sheet);
@@ -4683,7 +5001,7 @@
     return [h('h2', { class: 'pfend' }, 'Callsheet now knows: ' + plural(ppl, 'person', 'people') + ', ' + plural(pj, 'project', 'projects') + ', ' + plural(v.interview.answered, 'answer', 'answers')),
       h('div', { class: 'stats' }, [knStat('People', fmtNum(ppl)), knStat('Projects', fmtNum(pj)), knStat('Answers', fmtNum(v.interview.answered))]),
       h('p', { class: 'help' }, 'It is all in Memory, in your words. Briefs and drafts use it from now on.'),
-      h('div', { class: 'go' }, [btn('act', 'See it in Memory (Setup)', { 'data-fk': 'pf-mem' }, function () { PF.done = false; ui.step = 5; location.hash = 'setup'; }),
+      h('div', { class: 'go' }, [btn('act', 'See it in Memory (Setup)', { 'data-fk': 'pf-mem' }, function () { PF.done = false; openSetup('ai', '#mem-h'); }),
         btn('act ghost pfchat', [ico('chat'), 'Open Chat'], { 'data-fk': 'pf-chat' }, function () { PF.done = false; location.hash = 'chat'; }),  /* knowme-v2 frame 5 */
         btn('btn ghost', 'Back to the draft', null, function () { PF.done = false; location.hash = 'profile'; })])];
   }
@@ -5109,14 +5427,14 @@
     else if (d.cclear) { CH.clearAsk = true; chatRender('[data-cclearno]'); }
     else if (d.cclearno) { CH.clearAsk = false; chatRender('[data-cclear]'); }
     else if (d.cclearyes) chatClearAll(t);
-    else if (d.csetup) { ui.step = 5; ui.focusNext = '#ch-h'; location.hash = 'setup'; }
+    else if (d.csetup) openSetup('advanced', '#ch-h', 'chat');
     else if (d.cknow) location.hash = 'knowme';
     else if (d.cretry) { CH.err = ''; chatLoad(); }
     /* 0.8.1 Remember: the Save card */
     else if (d.psave) chatSaveNote(d.psave, t);
     else if (d.pedit) { var em = chatCardMsg(d.pedit); if (em) { var es = cardState(em.proposal); es.edit = !es.edit; chatRender(es.edit ? '[data-ptext="' + d.pedit + '"]' : '[data-pedit="' + d.pedit + '"]'); } }
     else if (d.pdismiss) { var dm = chatCardMsg(d.pdismiss); if (dm) { cardState(dm.proposal).dismissed = true; chatRender('[data-ask-in]'); } }
-    else if (d.pmem) { ui.step = 5; ui.focusNext = '#mem-h'; location.hash = 'setup'; }
+    else if (d.pmem) openSetup('ai', '#mem-h');
   });
   document.addEventListener('input', function (e) {
     if (e.target.dataset && e.target.dataset.askIn) CH.input = e.target.value;
@@ -5134,12 +5452,12 @@
   /* Setup → Delivery → Chat: the chat's own model (local or Claude), independent of the writer */
   var CHS = null, CHS_LOADING = false, CHM = null, CHS_CLEAR = false;  /* settings, loaded models, the clear confirm */
   function chatSetupRender(focusKey) {
-    if (ui.view !== 'setup' || ui.step !== 5) return;
+    if (ui.view !== 'setup') return;
     var a = document.activeElement, keep = focusKey || (a && a.getAttribute && main.contains(a) ? a.getAttribute('data-fk') : null);
     renderSetup(keep ? '[data-fk="' + cssq(keep) + '"]' : null);
   }
-  function chatBlock() {
-    var title = h('h2', { class: 'h3', id: 'ch-h', tabindex: '-1' }, 'Chat');
+  function chatBlock(part) {  /* 0.9.0: 'adv' (the engine) or 'startover' (Clear all chats) */
+    var title = h('h2', { class: 'h3', id: 'ch-h', tabindex: '-1' }, 'Chat engine');
     if (!CHS || CHS.error) {
       if (!CHS && !CHS_LOADING) {
         CHS_LOADING = true;
@@ -5271,14 +5589,14 @@
       clr = h('div', { class: 'confirm', role: 'group', 'aria-label': 'Delete all chats' }, [h('p', null, 'Delete all chats? They can’t be brought back.'),
         h('div', { class: 'btns' }, [yes, btn('btn', 'Cancel', { 'data-fk': 'ch-clrno' }, function () { CHS_CLEAR = false; chatSetupRender('ch-clr'); })]), clrErr]);
     } else clr = h('div', { class: 'testrow' }, btn('tbtn', 'Clear all chats', { 'data-fk': 'ch-clr' }, function () { CHS_CLEAR = true; chatSetupRender('ch-clryes'); }));
+    if (part === 'startover') return clr;
     return h('div', { class: 'where chatset' }, [
       title,
       h('p', { class: 'note' }, 'Ask about your own mail, chat, calendar and notes in the Chat tab. It searches the index on this box with read-only tools: it can’t send, reply or change anything.'),
       opts, err, local, claude,
       h('div', { class: 'testrow' }, [tBtn, tRes]), tErr,
       h('p', { class: 'syncst' + (c.ready ? '' : ' bad'), role: 'status' }, c.ready ? 'Chat uses ' + c.label + '.' : c.why),
-      h('p', { class: 'note' }, 'Chats are kept on this box for ' + c.retention_days + ' days after the last message, then deleted. Nothing you ask is added to Memory.'),
-      clr]);
+      h('p', { class: 'note' }, 'Chats are kept on this box for ' + c.retention_days + ' days after the last message, then deleted. Nothing you ask is added to Memory.')]);
   }
   /* ---------- end 0.6.0 chat ---------- */
 
