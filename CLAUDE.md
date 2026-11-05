@@ -38,6 +38,15 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   minutes), fetches no images or pages linked from a feed, and sends no cookies or owner data. Feed text is untrusted
   `<data>`: shown as text, links defanged, items that read like instructions marked and never followed. A new
   connector kind needs the owner's approval here and its own injection test.
+- **Reports (0.10.2a, owner approved 2026-11-05).** Callsheet may read Markdown reports that other agents or services
+  write, one file per report, from one folder per Reports connector the owner picks: a folder under Home Assistant's
+  `/share` or `/media` (the existing read-only mappings; no new add-on permission), or a Google Drive folder through the
+  existing `drive.readonly` access (no new host). Read-only: files are never moved, changed or deleted. Only regular
+  `*.md` files inside the chosen folder (no symlinks or paths out of it), capped in number and size. Callsheet accepts
+  no inbound connections for reports (no endpoint, no MQTT). Report text is untrusted `<data>` like mail: inject checks,
+  defanged links, instruction marking; a report's `importance` is a hint the owner's per-source choice overrides, so a
+  report can never place itself above Needs you. Design: `~/project/daily-brief/wheatley/design.md` 3.9; injection test
+  W-RP before release.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
   absolute paths. `tests/test_server.py` checks this.
