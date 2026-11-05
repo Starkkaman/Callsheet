@@ -564,6 +564,7 @@ class ShadowAndPage(Base):
         self.sorter.run_pass()
 
     def test_shadow_leaves_the_brief_untouched(self):
+        self.sorter.update_settings({"mode": "shadow"})   # 0.9.1: on by default; shadow is still a choice
         self.assertEqual(self.sorter.settings()["mode"], "shadow")
         self.labelled()
         key = rules.row_key("mail:t1:1")
@@ -638,6 +639,9 @@ class ApiGate(unittest.TestCase):
     def test_routes_and_gate(self):
         brief_before = json.dumps(self.app.brief(), sort_keys=True)
         v = self.app.handle("GET", "sorting", None)
+        self.assertEqual(v["settings"]["mode"], "on")   # 0.9.1: a new install starts on, without the notice
+        self.assertFalse(self.app.state()["sorting"]["notice"])
+        v = self.app.handle("PATCH", "sorting/settings", {"mode": "shadow"})
         self.assertEqual(v["settings"]["mode"], "shadow")
         self.assertEqual(v["settings"]["model"], triage.GEMMA)
         self.assertEqual(json.dumps(self.app.brief(), sort_keys=True), brief_before)

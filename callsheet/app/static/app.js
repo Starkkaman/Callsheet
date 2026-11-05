@@ -1637,6 +1637,14 @@
     var banner = S && !S.setup_done && noAccounts() ? h('div', { class: 'banner', role: 'region', 'aria-label': 'Setup' }, [
       h('p', null, 'This is sample data. Set up Callsheet to see your own day.'),
       btn('btn primary', 'Start setup', null, function () { wizGo(0); })]) : null;
+    /* 0.9.1: the one-time notice after the update that turned AI sorting on (dismissed on the server) */
+    if (!banner && !B.sample && S && S.sorting && S.sorting.notice) banner = h('div', { class: 'banner srnotice', role: 'region', 'aria-label': 'AI sorting' }, [
+      h('p', null, 'Callsheet now sorts with AI. Your notes guide it. Switch off in Setup → AI.'),
+      btn('btn', 'Got it', null, function () {
+        S.sorting.notice = false;
+        renderBrief('#tab-' + U.tab);
+        api('POST', 'api/sorting/notice', {}).catch(function () {});
+      })]);
     var nOpen = openReplies().length;
     if (U.tab === 'chat' && chatOff()) U.tab = 'briefing';  /* 0.9.0 */
     var tabs = h('nav', { class: 'tabbar', role: 'tablist', 'aria-label': 'Sections' }, TABS.filter(function (t) { return liveTabs().indexOf(t[0]) >= 0 || t[0] === 'tasks'; }).map(function (t) {
@@ -4784,7 +4792,8 @@
         x.ai ? srCodes(x.ai_codes) : null,
         x.quote ? h('blockquote', { class: 'srquote' }, x.quote) : null,
         lnWhy(x),  /* 0.8.5 */
-        h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + (x.learned && x.learned.how === 'prior' ? 'what you taught it.' : srWhyText(x.why)))])]),
+        noteWhy(x, r),  /* 0.9.1 */
+        h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + (x.note && x.note.how === 'note' ? 'your note.' : x.learned && x.learned.how === 'prior' ? 'what you taught it.' : srWhyText(x.why)))])]),
       srMarks(x.marks), fixes, err]);
   }
   /* sorting on: the reply rows in sections (B.sorting.sections, built by the server; every row in exactly one). Needs you
@@ -4887,6 +4896,24 @@
   var LN_KIND = { sender: 'Sender', person: 'Person', domain: 'Domain' };
   var LN = { sure: false };
   function lnRefetch(focusSel) { refetch().then(function () { renderBrief(focusSel); }, function () { }); }
+  /* 0.9.1: the owner's note that moved this row (or would have: some rows never move), with "Make this a rule" (the
+     existing doesn't-need-a-reply rules, api/suppress); else the notes the AI read for it. Note text is the owner's own. */
+  var NOTE_BLOCK = { security: 'Security alerts always stay in Needs you.', invite: 'Invites always stay in Needs you.',
+    flagged: 'It holds text that reads like instructions, so it stays in Needs you.',
+    vip: 'VIPs stay in Needs you unless your note names them.',
+    rules: 'A note about a whole domain doesn’t move people you know or mail that names you.' };
+  function noteWhy(x, r) {
+    var n = x && x.note;
+    if (n && n.text) {
+      var t = '“' + n.text + '”' + (n.how === 'blocked' ? ' ' + (NOTE_BLOCK[n.reason] || 'It still shows here.') : '');
+      return h('div', { class: 'srnote' }, [h('dt', null, 'Your note'), h('dd', null, [h('span', null, t),
+        n.how === 'blocked' ? null : btn('act ghost', 'Make this a rule', { title: 'Never ask about ' + (n.scope === 'domain' ? 'this domain' : 'this sender') + ' again' },
+          function () { suppress(r.id, n.scope === 'domain' ? 'domain' : 'sender'); })])]);
+    }
+    var rd = (x && x.read) || [];
+    if (!rd.length) return null;
+    return h('div', { class: 'srnote' }, [h('dt', null, 'Notes it read'), h('dd', null, rd.map(function (z) { return h('span', null, '“' + z.text + '”'); }))]);
+  }
   function lnWhy(x) {
     var l = x && x.learned;
     if (!l || !LN_NAME[l.label]) return null;

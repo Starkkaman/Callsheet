@@ -124,6 +124,10 @@ class App:
                                     scanner=self.scanner)
         self.syncer.sorter = self.sorter
         self._connectors_init()  # 0.10.0 connectors
+        try:   # 0.9.1: sorting on by default; a 0.9.0 shadow week turns on once, with a one-time notice
+            self.sorter.migrate()
+        except Exception as e:  # noqa: BLE001 (the app always starts)
+            sys.stderr.write(f"Callsheet sorting: settings not migrated ({type(e).__name__})\n")
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -286,7 +290,9 @@ class App:
                 ("GET", r"sorting/learned", self.sorting_learned),
                 ("POST", r"sorting/forget", self.sorting_forget),
                 # 0.8.5 server faults: "Check again" runs the local model's health probe now
-                ("POST", r"sorting/model-check", self.sorting_model_check)]
+                ("POST", r"sorting/model-check", self.sorting_model_check),
+                # 0.9.1: the one-time "Callsheet now sorts with AI" notice, dismissed
+                ("POST", r"sorting/notice", self.sorting_notice)]
 
     @staticmethod
     def _srt(fn, *args):
@@ -328,6 +334,9 @@ class App:
             return self.sorter.check_model()
         except writer.WriterError as e:  # the server is busy with Callsheet's own requests
             raise Conflict(str(e)) from None
+
+    def sorting_notice(self, _body=None):
+        return self.sorter.notice_seen()
 
     def _sorting_summary(self):
         try:

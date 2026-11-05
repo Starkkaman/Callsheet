@@ -423,7 +423,7 @@ def _check_text(text):
 
 
 # --- relevance ----------------------------------------------------------------------------------------------
-def relevant(entries, rows, events, cap=NOTES_CAP, people=None):
+def relevant(entries, rows, events, cap=NOTES_CAP, people=None, ids=False):
     """The notes for today's writer input, most relevant first, their texts together at most cap characters.
     rows: [{id, who, email (mail sender, lower case, or ""), domain, area (name), subject}] (the reply rows sent);
     events: [{id, title, area (name)}] (the events sent). An entry applies when one of its specific keys matches:
@@ -434,7 +434,8 @@ def relevant(entries, rows, events, cap=NOTES_CAP, people=None):
     applies every day. Ranked by how specific the match is (email 8, person 6, domain 4, topic 2 each up to 3,
     area 1), newest first on ties. Returns [{text, about {people, area, topics}, applies_to [ids], written}].
     people (0.8.2, a people.Directory): a note's people and emails also match every handle of those people (their
-    other addresses, Slack and Signal) through the rows' "person" id, scored like an email."""
+    other addresses, Slack and Signal) through the rows' "person" id, scored like an email.
+    ids (0.9.1, AI sorting only): each item also gets the note's "id" (the writer's input never has it)."""
     directory = people  # the name "people" is a note's names below
     rows, events = list(rows or ()), list(events or ())
     areas_today = {_norm_name(x.get("area")) for x in rows + events if x.get("area")}
@@ -496,6 +497,8 @@ def relevant(entries, rows, events, cap=NOTES_CAP, people=None):
         item = {"text": text, "about": about, "applies_to": hits[:10]}
         if created:
             item["written"] = created
+        if ids:
+            item["id"] = str(m.get("id") or "")
         out.append(item)
     return out
 

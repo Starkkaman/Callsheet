@@ -316,6 +316,21 @@ class Syncer:
         self.store.set_tokens(acc["id"], acc["access_token"], acc["expires_at"], res.get("refresh_token"))
         return acc["access_token"]
 
+    def message_body(self, acc_id, message_id):
+        """0.9.1 (AI sorting's cards): one Gmail message's text as a reader sees it (quotes, signatures and hidden
+        HTML text removed: sources.mail_text_info), or "". One read-only messages.get (format=full, the allowlisted
+        path) with the account's token, refreshed once on a 401. Called by the sorter outside a sync."""
+        import sources  # noqa: PLC0415 (sources imports more than the sync needs)
+        acc = self.store.account_secret(acc_id)
+        client = self.store.google_client()
+        try:
+            msg = google.gmail_message_full(self._token(acc, client), message_id)
+        except google.GoogleError as e:
+            if e.status != 401:
+                raise
+            msg = google.gmail_message_full(self._token(acc, client, force=True), message_id)
+        return sources.mail_text_info(msg)[0] or ""
+
     def _call(self, acc, client, fn, *args):
         """fn(token, *args), refreshing the token once on 401."""
         if self.clock() > self._deadline:

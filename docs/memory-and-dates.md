@@ -70,6 +70,12 @@ fixed texts say "message" for "email" and the pinned shape is 0.5.3's. With note
 `NOTES_RULE` and the `<notes>` block (`tests/test_release_050_shape.py`). Both writers (Claude and local) and the writer evaluation
 (`Syncer.writer_data`) get the notes.
 
+### To AI sorting (0.9.1)
+The sorter reads the same saved notes (Notes, Profile, Answers) that fit the cards it sorts, in its own trusted
+`<owner_notes>` block, and plain "doesn't need a reply / ignore / can wait" notes also work as demote-only rules after
+the model. Notes flagged as an instruction or a claim are never used there. See `docs/sorting.md` "Your notes".
+`memory.relevant(..., ids=True)` adds each note's id for the sorter only; the writer's input is unchanged.
+
 ### API (mutations need X-Callsheet: 1)
 - `GET api/memory` returns `{text, notes, max, note_max, error, exists, rule, cap}`
 - `PATCH api/memory` takes `{text}` (the whole file, validated)

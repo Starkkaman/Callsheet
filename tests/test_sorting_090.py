@@ -44,9 +44,9 @@ class PromptT0832(unittest.TestCase):
         self.assertIn("before, you_copied. from.kind", text)
         self.assertNotIn("<<", triage.system_text())
 
-    def test_gemma_and_shadow_by_default(self):
+    def test_gemma_and_on_by_default(self):   # 0.9.1: on by default (the owner skipped the shadow week)
         d = triage.default_settings()
-        self.assertEqual((d["model"], d["mode"]), ("gemma-4-26b-a4b-it-qat-q4_0", "shadow"))
+        self.assertEqual((d["model"], d["mode"]), ("gemma-4-26b-a4b-it-qat-q4_0", "on"))
         card, _ = built(src("1", "Sam <sam@known.example>", "Q", "Hi Isaac, can you send it?"))
         body = triage.request_body(d["model"], [dict({"id": "c1"}, **card)], ctx().system(), TUE.date(), "UTC")
         self.assertEqual(body["model"], triage.GEMMA)

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import api  # noqa: E402
 import rules  # noqa: E402
 import store  # noqa: E402
+import test_upgrade  # noqa: E402  (0.9.1: the sorting migration row)
 import writer  # noqa: E402
 from fake_google import event, thread  # noqa: E402
 from test_writer import WriterBase  # noqa: E402
@@ -348,7 +349,7 @@ class Upgrade034Test(unittest.TestCase):
         after = {t: sorted(db.execute(f"SELECT * FROM {t}").fetchall(), key=repr) for t in self.before}
         self.assertEqual(db.execute("SELECT COUNT(*) FROM slack").fetchone(), (0,))
         db.close()
-        self.assertEqual(after, self.before)  # opening rewrites nothing
+        self.assertEqual(test_upgrade.migrated(after), self.before)  # opening rewrites nothing (0.9.1: but sorting)
         s = app.store
         self.assertEqual(s.settings()["time_format"], "12h")
         w = s.writer_public()

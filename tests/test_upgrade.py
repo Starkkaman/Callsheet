@@ -38,6 +38,18 @@ def dump(path):
         db.close()
 
 
+def migrated(d):
+    """0.9.1: opening an older install writes one row, the sorting settings (AI sorting on, the one-time notice);
+    everything else stays as stored. d without that row, after checking it."""
+    rows = [r for r in d["meta"] if r[0] == "sorting"]
+    if len(rows) != 1:
+        raise AssertionError(f"one sorting row expected: {rows}")
+    s = json.loads(rows[0][1])
+    if s.get("mode") != "on" or s.get("v091") is not True:
+        raise AssertionError(f"not the 0.9.1 migration: {s}")
+    return dict(d, meta=[r for r in d["meta"] if r[0] != "sorting"])
+
+
 class UpgradeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -90,7 +102,7 @@ class UpgradeTest(unittest.TestCase):
         st = app.state()
         self.assertEqual(len([x for a in st["areas"] for x in a["accounts"]]), 2)
         self.assertEqual(st["writer"]["provider"], "off")
-        self.assertEqual(dump(self.dir / store.DB_NAME), self.before)
+        self.assertEqual(migrated(dump(self.dir / store.DB_NAME)), self.before)
 
     def test_options_seed_writes_only_the_writer(self):
         (self.dir / "options.json").write_text(json.dumps(
@@ -98,7 +110,7 @@ class UpgradeTest(unittest.TestCase):
         app = api.App(self.dir)
         self.addCleanup(app.close)
         self.assertEqual(app.store.writer_public()["provider"], "local")
-        after = dump(self.dir / store.DB_NAME)
+        after = migrated(dump(self.dir / store.DB_NAME))
         for t in TABLES:
             if t != "meta":
                 self.assertEqual(after[t], self.before[t], t)
@@ -193,7 +205,7 @@ class Upgrade030Test(unittest.TestCase):
         self.assertEqual(app.state()["writer"]["local"]["max_tokens"], 4096)
         b = app.brief()  # the old cached brief (from another day) still composes
         self.assertTrue(all("suggestion_warning" not in r for r in b.get("replies") or []))
-        self.assertEqual(dump(self.dir / store.DB_NAME), self.before)
+        self.assertEqual(migrated(dump(self.dir / store.DB_NAME)), self.before)
 
 
 if __name__ == "__main__":

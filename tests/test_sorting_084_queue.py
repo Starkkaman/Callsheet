@@ -199,6 +199,7 @@ class Sections(Q):
         self.post.reply = lambda ids, body: json.dumps({c: t84.answer("promo", "no", ("automated",)) for c in ids})
         self.sorter.collect_sync(self.threads(3, text="Big sale this week, 40% off everything"))
         self.sorter.run_pass()
+        self.sorter.update_settings({"mode": "shadow"})   # 0.9.1: on by default; shadow is still a choice
         brief = {"replies": [{"id": f"r{i + 1}", "key": rules.row_key(f"mail:t{i}:{i}")} for i in range(3)],
                  "date": "2026-11-03"}
         before = json.dumps(brief, sort_keys=True)
