@@ -247,8 +247,8 @@ class Design090(unittest.TestCase):
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")
-        self.assertRegex(cfg, r'(?m)^version: "0\.9\.0"$')
-        self.assertIn('APP_VERSION = "0.9.0"', (APP / "api.py").read_text(encoding="utf-8"))
+        self.assertRegex(cfg, r'(?m)^version: "0\.9\.1"$')
+        self.assertIn('APP_VERSION = "0.9.1"', (APP / "api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

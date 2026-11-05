@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.1 (Your notes guide the sorting)
+
+You kept writing notes about mail that shouldn't show up in Needs you, and it kept showing up. Now your notes guide
+the sorting, and sorting is on.
+
+- **Sorting is on.** If you were in the shadow week, Callsheet turns sorting on once and says so at the top of the
+  brief: "Callsheet now sorts with AI. Your notes guide it. Switch off in Setup → AI." If you had switched sorting
+  Off, it stays off. Nothing is ever hidden: the brief shows **Needs you**, **For your info** and **Sorted for you**
+  with counts, and when the local model isn't healthy the rules sort on their own.
+- **Your notes guide it.** The sorter now reads the notes you saved (on brief items, from Chat, in Get to know me or
+  in the memory file) that fit the mail it is sorting, as your own wishes, kept apart from the mail. A note that
+  plainly says someone "doesn't need a reply", "can wait", "is just FYI", "isn't important" or "ignore" also works as
+  a rule after the AI: their mail moves from Needs you to For your info (or Sorted for you for "ignore"). A note made
+  on one item ("This one doesn't need a reply") moves just that item.
+- **What a note never moves**: security alerts, invites, mail that reads like instructions, and VIPs unless the note
+  names that VIP. A note about a whole domain doesn't move people you know or mail that names you. Notes that read
+  like an instruction or a claim copied from a message are never used for sorting, even if you saved them anyway.
+  Mail can't pretend to be a note.
+- **Why is this here?** now shows **Your note** with the note's words when a note placed the row (or why it couldn't
+  move it), and **Make this a rule** turns it into a "never needs a reply" rule for that sender or domain. When the AI
+  read a note for a row, it shows **Notes it read**.
+- **The sorter reads the whole message**, not only Gmail's short preview: quotes, signatures and hidden text are
+  removed and it reads up to 1,500 characters (from the Know me index when the message is there, else one read-only
+  Gmail request).
+
 ## 0.9.0 (AI sorting, Learning, Setup in four places, Find or ask, One at a time)
 
 This release brings 0.8.4 ("AI sorting") and 0.8.5 ("Learning"), described below, together with a calmer page. In
