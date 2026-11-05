@@ -41,7 +41,7 @@ import inject
 import net
 from store import Conflict, InputError, NotFound
 
-KIND_IDS = ("youtube", "news")
+KIND_IDS = ("youtube", "news", "reports")
 EVERY_CHOICES = ((3600, "every hour"), (7200, "every 2 hours"), (21600, "every 6 hours"), (86400, "once a day"))
 DEFAULT_EVERY = 7200
 LEVELS = (("always", "Always tell me"), ("big", "If it’s big"), ("never", "Never"))
@@ -86,10 +86,17 @@ def _stderr(line):
 
 
 def kinds():
-    """The registry: kind id -> plugin. A new kind needs the owner's approval (CLAUDE.md) and its own tests."""
+    """The registry: kind id -> plugin. A new kind needs the owner's approval (CLAUDE.md) and its own tests.
+    0.10.2a: "reports" (owner approved 2026-11-05), a local folder kind (`local`: no host, no net.py)."""
     import conn_news
+    import conn_reports
     import conn_youtube
-    return {"youtube": conn_youtube.YouTube(), "news": conn_news.News()}
+    return {"youtube": conn_youtube.YouTube(), "news": conn_news.News(), "reports": conn_reports.Reports()}
+
+
+def is_local(k):
+    """A kind that reads a local folder (0.10.2a reports): no host, no network, its own read()."""
+    return bool(getattr(k, "local", False))
 
 
 # --- text: feed text is someone else's words ---------------------------------------------------------------------
@@ -122,8 +129,8 @@ def clip(text, n):
     return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
-def defang(text):
-    """Every link in feed text becomes plain text without its scheme plus DEFANG_NOTE. The page shows feed text as
+def defang(text, note=DEFANG_NOTE):
+    """Every link in feed text becomes plain text without its scheme plus `note` (DEFANG_NOTE; reports have their own). The page shows feed text as
     text only; this keeps a planted link from looking like one (and from being copied as one). Idempotent."""
     if not text:
         return text
@@ -135,10 +142,10 @@ def defang(text):
                 break
             u = u[:-1]
         rest = m.string[m.start() + len(u):]
-        if not u or rest.startswith(" " + DEFANG_NOTE):
+        if not u or rest.startswith(" " + note):
             return m.group(0)
         shown = re.sub(r"^[a-z][a-z0-9+.-]*://", "", u, flags=re.I)
-        return clip(shown, 80) + " " + DEFANG_NOTE + m.group(0)[len(u):]
+        return clip(shown, 80) + " " + note + m.group(0)[len(u):]
     return inject.URL.sub(bare, text)
 
 
@@ -267,6 +274,8 @@ def every_label(s):
     for v, label in EVERY_CHOICES:
         if v == s:
             return label
+    if s < 3600:
+        return f"every {max(1, round(s / 60))} minutes"
     return f"every {max(1, round(s / 3600))} hours"
 
 
@@ -310,6 +319,9 @@ class Connectors:
         self.thread = None
         with store.lock:
             store.db.executescript(_SCHEMA)
+            for k in self.kinds.values():          # 0.10.2a: a kind's own tables (reports: report_files)
+                if getattr(k, "schema", None):
+                    store.db.executescript(k.schema)
 
     # rows -----------------------------------------------------------------------------------------------------
     def _rows(self):
@@ -376,6 +388,8 @@ class Connectors:
                "link_offer": [h for h in (st.get("link_offer") or []) if isinstance(h, str)][:LINK_OFFERS]}
         if r["kind"] == "youtube":
             out["skip_shorts"] = bool(cfg.get("skip_shorts"))
+        if is_local(k):
+            out = k.public(self, r, out)
         return out
 
     def view(self):
@@ -424,7 +438,7 @@ class Connectors:
         kind = body.get("kind")
         k = self.kinds.get(kind)
         if k is None:
-            raise InputError("Choose a YouTube channel or a news feed.")
+            raise InputError("Choose a YouTube channel, a news feed or a reports folder.")
         address = str(body.get("address") or "").strip()
         if not address or len(address) > 2000:
             raise InputError("Paste an address first.")
@@ -437,6 +451,16 @@ class Connectors:
         finally:
             for h, n in ctx.fetched:
                 self.log(f"Callsheet connectors: check {h}, {n} bytes")
+        if is_local(k):           # 0.10.2a reports: a folder, nothing contacted
+            dup = self._duplicate(kind, k.key(draft["config"]))
+            draft["fetched_at"] = self.clock()
+            token = self._keep(draft)
+            out = {key: draft.get(key) for key in ("title", "label", "folder", "latest", "files", "unreadable",
+                                                   "unreadable_n", "instruction", "note")}
+            out.update(stage="found", token=token, kind=kind, noun=k.noun, host="", every_s=k.every_s,
+                       every=every_label(k.every_s), hostline=k.hostline(draft["folder"], k.every_s), duplicate=dup,
+                       tells=[list(x) for x in k_tells(k)], link_hosts=[], link_offer=[])
+            return out
         if draft.get("stage") == "other_host":
             token = self._keep(draft)
             return {"stage": "other_host", "token": token, "host": draft["host"], "feed_url": draft["feed_url"],
@@ -460,8 +484,9 @@ class Connectors:
         return f"Callsheet will read {host} {every_label(every_s)}. {NOTHING_SENT}"
 
     def _duplicate(self, kind, feed_url):
+        k = self.kinds.get(kind)
         for r in self._rows():
-            if r["kind"] == kind and self._cfg(r).get("feed_url") == feed_url:
+            if r["kind"] == kind and (k.key(self._cfg(r)) if is_local(k) else self._cfg(r).get("feed_url")) == feed_url:
                 return r["label"]
         return None
 
@@ -473,6 +498,8 @@ class Connectors:
         if d.get("stage") == "other_host":
             raise InputError("Check the feed's own address first.")
         k = self.kinds[d["kind"]]
+        if is_local(k):
+            return self._add_local(k, d, body)
         label = clean(body.get("label") if body.get("label") is not None else d["title"], single_line=True)
         label = clip(label, LABEL_MAX) if label else clip(clean(d["title"], True), LABEL_MAX) or k.noun
         if self._duplicate(d["kind"], d["config"].get("feed_url")):
@@ -510,6 +537,31 @@ class Connectors:
         self.log(f"Callsheet connectors: added {cid} ({d['kind']}, {d['host']})")
         return self.public(self._row(cid))
 
+    def _add_local(self, k, d, body):
+        """0.10.2a reports: the folder the owner checked, the name and the owner's choice (Always tell me, If it's
+        important, Only in the list); no host is written (nothing is contacted). The first look happens at once."""
+        label = clean(body.get("label") if body.get("label") is not None else d.get("label"), single_line=True)
+        label = clip(label, LABEL_MAX) if label else clip(clean(d.get("label") or "", True), LABEL_MAX) or k.noun
+        tell = body.get("tell", "important")
+        if tell not in [x[0] for x in k_tells(k)]:
+            raise InputError("Choose Always tell me, If it’s important or Only in the list.")
+        if self._duplicate(d["kind"], k.key(d["config"])):
+            raise Conflict("You've already added this folder.")
+        if len(self._rows()) >= MAX_CONNECTORS:
+            raise Conflict(f"Callsheet reads at most {MAX_CONNECTORS} connectors. Remove one first.")
+        now = self.clock()
+        cid = "c" + secrets.token_hex(4)
+        cfg = dict(d["config"], tell=tell)
+        st = {"last_read": None, "last_new": 0, "next_at": now}
+        with self.store.lock:
+            self.store.db.execute("INSERT INTO connectors (id, kind, label, config, every_s, added, paused, state) "
+                                  "VALUES (?,?,?,?,?,?,0,?)", (cid, d["kind"], label, json.dumps(cfg), k.every_s, now,
+                                                               json.dumps(st)))
+        with self.lock:
+            self.drafts.pop(str(body.get("token")), None)
+        self.log(f"Callsheet connectors: added {cid} ({d['kind']})")
+        return self.read(cid)
+
     def patch(self, cid, body):
         if not isinstance(body, dict):
             raise InputError("Send the change as a JSON object.")
@@ -529,6 +581,8 @@ class Connectors:
                 sets.append("paused=?")
                 args.append(1 if val else 0)
             elif key == "every_s":
+                if is_local(self.kinds.get(r["kind"])):
+                    raise InputError("every_s can't be changed here.")
                 if val not in [x[0] for x in EVERY_CHOICES]:
                     raise InputError("Choose how often from the list.")
                 sets.append("every_s=?")
@@ -537,6 +591,12 @@ class Connectors:
                 st["next_at"] = min(st.get("next_at") or self.clock(), self.clock() + int(val))
                 sets.append("state=?")
                 args.append(json.dumps(st))
+            elif key == "tell" and is_local(self.kinds.get(r["kind"])):
+                if val not in [x[0] for x in k_tells(self.kinds[r["kind"]])]:
+                    raise InputError("Choose Always tell me, If it’s important or Only in the list.")
+                cfg["tell"] = val
+                sets.append("config=?")
+                args.append(json.dumps(cfg))
             elif key == "skip_shorts" and r["kind"] == "youtube":
                 if not isinstance(val, bool):
                     raise InputError("skip_shorts takes true or false.")
@@ -563,6 +623,9 @@ class Connectors:
                 self.store.db.execute("ROLLBACK")
                 raise
         n = self.index.delete(r["kind"], cid) if self.index is not None else 0
+        k = self.kinds.get(r["kind"])
+        if is_local(k):
+            k.forget(self.store, cid)
         self.log(f"Callsheet connectors: removed {cid} ({n} items)")
         return self.view()
 
@@ -606,9 +669,10 @@ class Connectors:
             for r in self.due():
                 if self.stop_event.is_set():
                     break
-                hosts = self._hosts_of(r["id"])
-                if not hosts or self.net.wait_s(hosts[0]) > 0:
-                    continue
+                if not is_local(self.kinds.get(r["kind"])):
+                    hosts = self._hosts_of(r["id"])
+                    if not hosts or self.net.wait_s(hosts[0]) > 0:
+                        continue
                 self.read(r["id"])
                 n += 1
             return n
@@ -632,6 +696,8 @@ class Connectors:
         k = self.kinds.get(r["kind"])
         cfg, st = self._cfg(r), self._state(r)
         now = self.clock()
+        if is_local(k):
+            return self._read_local(k, r, st, now)
         hosts = self._hosts_of(cid)
         if k is None or not hosts:
             st.update(error="This connector can't be read. Remove it and add it again.", next_at=now + BACKOFF_S[-1])
@@ -689,6 +755,25 @@ class Connectors:
         self.log(f"Callsheet connectors: {hosts[0]} 200, {len(a.body)} bytes, {len(items)} items, {new} new")
         return self.public(self._row(cid))
 
+    def _read_local(self, k, r, st, now):
+        """0.10.2a reports: one look at the folder (conn_reports.Reports.read); a failure shows in Setup in plain
+        words and is tried again after BACKOFF_S."""
+        try:
+            new, ch = k.read(self, r)
+        except Exception as e:  # noqa: BLE001 (type only: the folder is someone else's)
+            self.log(f"Callsheet connectors: {r['id']} folder error {type(e).__name__}")
+            new, ch = 0, {"error": "Callsheet couldn't read the folder just now."}
+        if ch.get("error"):
+            fails = int(st.get("fails") or 0) + 1
+            st.update(error=ch["error"], fails=fails,
+                      next_at=now + BACKOFF_S[min(fails, len(BACKOFF_S)) - 1])
+        else:
+            later = ch.get("later") or 0
+            st.update(error=None, fails=0, last_read=now, last_new=new,
+                      next_at=now + 60 if later else self._next(now, r["every_s"]))
+        self._set_state(r["id"], st)
+        return self.public(self._row(r["id"]))
+
     def _items_cfg(self, r, cfg):
         """The config a kind's items() reads: the connector id and every story-link host the owner allowed."""
         c = dict(cfg, id=r["id"])
@@ -713,7 +798,7 @@ class Connectors:
         if r["paused"]:
             raise Conflict("This connector is paused. Resume it first.")
         hosts = self._hosts_of(cid)
-        wait = self.net.wait_s(hosts[0]) if hosts else 0
+        wait = self.net.wait_s(hosts[0]) if hosts and not is_local(self.kinds.get(r["kind"])) else 0
         if wait > 0:
             mins = max(1, int((wait + 59) // 60))
             raise Conflict(f"Callsheet read {hosts[0]} a moment ago and reads each place at most once in 15 minutes. "
@@ -801,7 +886,7 @@ class Connectors:
     def brief_list(self, hours=BRIEF_HOURS, limit=BRIEF_MAX):
         """"From your channels and feeds": the newest items of the active connectors, newest first. None when the
         owner has no connectors. Feed text only as text; links only Callsheet-built and never on flagged items."""
-        rows = [r for r in self._rows()]
+        rows = [r for r in self._rows() if not is_local(self.kinds.get(r["kind"]))]
         if not rows:
             return None
         if self.index is None:
@@ -834,6 +919,21 @@ class Connectors:
                                  ([["hidden", HIDDEN_MARK]] if x["hidden"] else []) +
                                  ([["short", "Short"]] if x["kind"] == "short" else [])})
         return {"items": out, "more": max(0, len(found) - limit), "hours": hours, "connectors": len(rows)}
+
+    def reports_list(self):
+        """0.10.2a "From your reports" (conn_reports): None when the owner has no Reports folders."""
+        k = self.kinds.get("reports")
+        if k is None:
+            return None
+        return k.brief_list(self, [r for r in self._rows() if r["kind"] == "reports"])
+
+    def folders(self, body):
+        """0.10.2a: the Reports folder picker (subfolder names under /share and /media; no file is opened)."""
+        import conn_reports
+        path = body.get("path") if isinstance(body, dict) else None
+        if path is not None and not isinstance(path, str):
+            raise InputError("Send {path}.")
+        return conn_reports.folders(path)
 
     # interests ("What to watch for", stored for 0.10.2) --------------------------------------------------------
     def interests(self):
@@ -922,6 +1022,11 @@ class Connectors:
                 self.log(f"Callsheet connectors: loop error: {type(e).__name__}")
 
 
+def k_tells(k):
+    """A local kind's per-source choices (reports: Always tell me, If it's important, Only in the list)."""
+    return getattr(k, "tells", ())
+
+
 def _shown_link(url, r, cfg):
     """The stored link checked once more at display time: https and on the connector's own site."""
     host = net.host_of(url, True)
@@ -946,6 +1051,7 @@ class ConnectorsApi:
     def routes(self):
         return [("GET", r"connectors", lambda b: self.c.view()),
                 ("POST", r"connectors/check", lambda b: self.c.check(b)),
+                ("POST", r"connectors/reports/folders", lambda b: self.c.folders(b)),  # 0.10.2a
                 ("POST", r"connectors", lambda b: self.c.add(b)),
                 ("PATCH", rf"connectors/{CID}", lambda b, cid: self.c.patch(cid, b)),
                 ("DELETE", rf"connectors/{CID}", lambda b, cid: self.c.remove(cid)),

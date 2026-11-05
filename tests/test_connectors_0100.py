@@ -859,7 +859,7 @@ class Page(unittest.TestCase):
         self.assertEqual(self.block.count("extA("), 1)              # the Briefing's one link, through cnLink
         self.assertIn("if (/(^|\\.)youtube\\.com$/i.test(x.hostname) && !/^\\/watch$/.test(x.pathname)) return null;", self.block)
         self.assertIn("connectorsSlot(),  /* 0.10.0 connectors */", self.js)
-        self.assertIn("sortedSection(), feedsSection()]", self.js)
+        self.assertIn("sortedSection(), feedsSection(), reportsSection()]", self.js)   # 0.10.2a reports after feeds
         self.assertIn("['connections', null, 'Connectors', ", self.js)
         self.assertNotRegex(self.block, r"api\('[A-Z]+', '/")       # relative URLs only
 
@@ -868,7 +868,8 @@ class Page(unittest.TestCase):
         self.assertNotRegex(self.css, r"rgba?\(|hsl\(")
 
     def test_only_the_approved_kinds(self):
-        self.assertEqual(sorted(C.kinds()), ["news", "youtube"])   # a new kind needs the owner's approval (CLAUDE.md)
+        # a new kind needs the owner's approval (CLAUDE.md); reports: owner approved 2026-11-05 (0.10.2a)
+        self.assertEqual(sorted(C.kinds()), ["news", "reports", "youtube"])
 
 
 if __name__ == "__main__":

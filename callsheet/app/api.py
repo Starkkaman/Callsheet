@@ -276,6 +276,13 @@ class App:
             sys.stderr.write(f"Callsheet connectors list failed: {type(e).__name__}\n")
         if feeds is not None:
             brief["feeds"] = feeds
+        try:  # 0.10.2a reports: "From your reports" (conn_reports.py)
+            reports = self.connectors.reports_list()
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            reports = None
+            sys.stderr.write(f"Callsheet reports list failed: {type(e).__name__}\n")
+        if reports is not None:
+            brief["reports"] = reports
     # --- end 0.10.0 connectors ---------------------------------------------------------------------------------------
 
     # --- 0.8.4: AI sorting (triage.py, docs/sorting.md) -----------------------------------------------------------

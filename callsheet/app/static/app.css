@@ -2441,3 +2441,24 @@ html.fa-lock{overflow:hidden}
   .cn10 .cnint .seg{grid-column:1 / -1;grid-row:2}
   .cn10 .cnint .rm{grid-column:2;grid-row:1}
 }
+/* ===== 0.10.2a: Reports (Setup › Connections › Connectors › Add a reports folder) and the Briefing's "From your reports" ===== */
+.cn10 .rppath{margin:8px 0;overflow-wrap:anywhere}
+.cn10 .rpdirs,.cn10 .rpbad{list-style:none;margin:0 0 12px;padding:0}
+.cn10 .rpdirs li{border-top:var(--rule-w) solid var(--rule)}
+.cn10 .rpdirs li:last-child{border-bottom:var(--rule-w) solid var(--rule)}
+.cn10 .rpdir{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;width:100%;min-height:44px;padding:8px 4px;text-align:left;color:var(--text);background:none;font:inherit}
+.cn10 .rpdir:hover{background:var(--surface-2)}
+.cn10 .rpdir .rpdn{font-weight:600;overflow-wrap:anywhere;min-width:0}
+.cn10 .rpdir.up{color:var(--muted)}
+.cn10 .rpnone{margin:0 0 12px}
+.cn10 .rpbad li{padding:4px 0;overflow-wrap:anywhere}
+.cn10 .rpinsw{margin:16px 0 0}
+.cn10 .rpinsw .label{display:block;color:var(--muted);margin-bottom:6px}
+.cn10 .rpins{display:block;width:100%;min-height:180px;font-family:var(--font-mono, monospace);font-size:var(--fs-md);white-space:pre-wrap;resize:vertical}
+.cn10 .rpinsw .btns{margin-top:8px}
+.cn10 .rptell{flex-wrap:wrap}
+.cn10 .rpflow .field{margin-bottom:12px}
+.bv .rp10 .rpex{margin:0;overflow-wrap:anywhere}
+@media (max-width:700px){
+  .cn10 .rpinsw .btn{width:100%}
+}

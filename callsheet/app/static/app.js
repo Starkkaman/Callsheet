@@ -603,7 +603,7 @@
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
     return [startCard(), h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
-      changedSection(), comingSection(), sortedSection(), feedsSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted; 0.10.0 feeds */
+      changedSection(), comingSection(), sortedSection(), feedsSection(), reportsSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted; 0.10.0 feeds; 0.10.2a reports */
   }
   function T_replies() {
     if (U.oat) return oatView();  /* 0.9.0 */
@@ -3390,6 +3390,7 @@
     ['connections', null, 'Connectors', '[data-fk="cn-add-yt"]', 'youtube channel news feed rss atom add pause remove', ['connectors']],  /* 0.10.0 */
     ['connections', null, 'Skip Shorts, how often', '.cnadvb', 'youtube shorts every hour daily advanced connector', ['skip_shorts', 'every_s']],  /* 0.10.0 */
     ['connections', null, 'What to watch for', '#cn-int', 'interests topics watch always big never rundown', ['interests']],  /* 0.10.0 */
+    ['connections', null, 'Reports from other agents', '[data-fk="cn-add-rp"]', 'reports agent folder share media markdown digest audit', ['reports', 'tell']],  /* 0.10.2a */
     ['connections', null, 'Places Callsheet contacts', '#cn-h', 'hosts sites outbound places contacts network', ['hosts']],  /* 0.10.0 */
     ['day', null, 'Your name', '#f-name', 'name', ['name']],
     ['day', null, 'Time zone', '[data-fk="tz"]', 'timezone zone clock', ['timezone']],
@@ -6032,7 +6033,8 @@
      list "From your channels and feeds". Feed text is someone else's words: textContent only, and the only links are
      the ones Callsheet built (checked again here); an item that reads like instructions gets a mark and no link. */
   var CN = { v: null, loading: false, err: null, at: 0, seq: 0, focus: null, msg: '',
-    flow: null, addr: '', draft: null, other: null, label: '', open: {}, intText: '' };
+    flow: null, addr: '', draft: null, other: null, label: '', open: {}, intText: '',
+    rp: null, tell: 'important' };  /* 0.10.2a reports: rp = the folder picker */
   function cnLoad() {
     var seq = ++CN.seq;
     CN.loading = true;
@@ -6072,20 +6074,22 @@
           : h('p', { class: 'muted' }, 'Loading…')]);
     }
     return h('section', { class: 'where cn10', 'aria-labelledby': 'cn-h' }, [head,
-      h('p', { class: 'note' }, 'Public channels and feeds you add yourself. Callsheet only reads them, and treats what they say as someone else’s words.'),
+      h('p', { class: 'note' }, 'Public channels and feeds, and folders other agents write reports to, that you add yourself. Callsheet only reads them, and treats what they say as someone else’s words.'),
       CN.msg ? h('p', { class: 'cnmsg', role: 'status' }, CN.msg) : null,
-      cnList(v), CN.flow ? cnFlow(v) : cnAddBtns(v), cnInterests(v), cnPlaces(v)]);
+      cnList(v), CN.flow === 'reports' ? rpFlow(v) : CN.flow ? cnFlow(v) : cnAddBtns(v), cnInterests(v), cnPlaces(v)]);
   }
   function cnAddBtns(v) {
     var full = (v.connectors || []).length >= (v.max || 40);
     function go(kind, fk) {
-      return btn('btn', kind === 'youtube' ? 'Add a YouTube channel' : 'Add a news feed', { 'data-fk': fk, disabled: full }, function () {
-        CN.flow = kind; CN.addr = ''; CN.draft = null; CN.other = null; CN.msg = ''; renderSetup('#cn-addr');
+      return btn('btn', kind === 'youtube' ? 'Add a YouTube channel' : kind === 'news' ? 'Add a news feed' : 'Add a reports folder', { 'data-fk': fk, disabled: full }, function () {
+        CN.flow = kind; CN.addr = ''; CN.draft = null; CN.other = null; CN.msg = '';
+        if (kind === 'reports') { CN.tell = 'important'; rpBrowse(null, '#rp-h'); }
+        renderSetup(kind === 'reports' ? '#rp-h' : '#cn-addr');
       });
     }
-    return h('div', { class: 'btns cnadd' }, [go('youtube', 'cn-add-yt'), go('news', 'cn-add-news')]);
+    return h('div', { class: 'btns cnadd' }, [go('youtube', 'cn-add-yt'), go('news', 'cn-add-news'), go('reports', 'cn-add-rp')]);
   }
-  function cnCancel() { var k = CN.flow; CN.flow = null; CN.draft = null; CN.other = null; renderSetup('[data-fk="' + (k === 'news' ? 'cn-add-news' : 'cn-add-yt') + '"]'); }
+  function cnCancel() { var k = CN.flow; CN.flow = null; CN.draft = null; CN.other = null; CN.rp = null; renderSetup('[data-fk="' + (k === 'news' ? 'cn-add-news' : k === 'reports' ? 'cn-add-rp' : 'cn-add-yt') + '"]'); }
   function cnLast(c) {
     if (c.paused) return 'paused';
     if (c.status === 'new') return 'not read yet';
@@ -6098,16 +6102,17 @@
     return h('ul', { class: 'cnlist', 'aria-label': 'Your connectors' }, cs.map(function (c) { return cnRow(c, n[c.host] > 1); }));
   }
   function cnRow(c, shared) {
-    var err = errBox(), open = !!CN.open[c.id], rmKey = 'cn-rm:' + c.id, advId = 'cn-adv-' + c.id;
+    var err = errBox(), open = !!CN.open[c.id], rmKey = 'cn-rm:' + c.id, advId = 'cn-adv-' + c.id, rp = c.kind === 'reports';
     var pauseB = btn('btn sm', c.paused ? 'Resume' : 'Pause', { 'data-fk': 'cn-pause:' + c.id, 'aria-label': (c.paused ? 'Resume ' : 'Pause ') + c.label }, function () {
       run([pauseB], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { paused: !c.paused }); }, function () {
-        return cnAgain('[data-fk="' + cssq('cn-pause:' + c.id) + '"]', c.paused ? '' : 'Paused. Nothing is read from ' + c.host + ' until you resume it.');
+        return cnAgain('[data-fk="' + cssq('cn-pause:' + c.id) + '"]', c.paused ? '' : 'Paused. Nothing is read from ' + (rp ? c.folder : c.host) + ' until you resume it.');
       });
     });
-    var acts = ui.confirm === rmKey ? confirmRow('Remove ' + c.label + '? Callsheet stops reading it' + (shared ? '' : ', and ' + c.host + ' leaves Places Callsheet contacts') + '. What was read from it is deleted.', 'Remove', function (yesB, noB, e2) {
+    var acts = ui.confirm === rmKey ? confirmRow(rp ? 'Remove ' + c.label + '? Callsheet stops reading the folder and forgets what it read. The files stay where they are.'
+      : 'Remove ' + c.label + '? Callsheet stops reading it' + (shared ? '' : ', and ' + c.host + ' leaves Places Callsheet contacts') + '. What was read from it is deleted.', 'Remove', function (yesB, noB, e2) {
       run([yesB, noB], e2, function () { return api('DELETE', 'api/connectors/' + encodeURIComponent(c.id)); }, function (r) {
         ui.confirm = null; CN.v = r || CN.v; CN.open[c.id] = false;
-        CN.msg = 'Removed ' + c.label + '.' + (shared ? '' : ' ' + c.host + ' is no longer contacted.');
+        CN.msg = 'Removed ' + c.label + '.' + (rp || shared ? '' : ' ' + c.host + ' is no longer contacted.');
         renderSetup('[data-fk="cn-add-yt"]');
       });
     }) : h('div', { class: 'btns cnacts' }, [pauseB,
@@ -6118,12 +6123,12 @@
       });
     return h('li', { class: 'cnrow' + (c.paused ? ' paused' : ''), 'data-cn': c.id }, [
       h('div', { class: 'cnmain' }, [h('b', { class: 'cnname' }, c.label),
-        h('span', { class: 'muted cnline' }, [c.noun, c.host, c.every, cnLast(c)].filter(Boolean).join(' · '))]),
+        h('span', { class: 'muted cnline' }, (rp ? [c.noun, c.folder, c.tell_label, cnLast(c)] : [c.noun, c.host, c.every, cnLast(c)]).filter(Boolean).join(' · '))]),
       acts,
       c.error && !c.paused ? cnWarn(c, err) : null,
       c.paused ? null : cnAsk(c, err),
       advB,
-      h('div', { class: 'cnadv', id: advId, hidden: !open }, open ? cnAdv(c, err) : null),
+      h('div', { class: 'cnadv', id: advId, hidden: !open }, open ? (rp ? rpAdv(c, err) : cnAdv(c, err)) : null),
       err]);
   }
   /* 0.10.0 follow-up: a failed read says so, with Try again (one read, within the host's 15-minute gap) */
@@ -6309,6 +6314,139 @@
           u ? extA('fd10t', u, x.title, x.title + ' (opens ' + (x.noun === 'YouTube channel' ? 'YouTube' : 'the site') + ')') : h('span', { class: 'fd10t' }, x.title),
           h('span', { class: 'fd10m' }, [h('span', { class: 'muted' }, [x.label || '', x.when ? ' · ' + fmtWhen(x.when, true) : ''].join('')),
             marks.length ? h('span', { class: 'mks' }, marks.map(cnFlag)) : null])]);
+      })),
+      f.more ? h('p', { class: 'muted fd10more' }, 'and ' + f.more + ' more. Ask Chat to find them.') : null]);
+  }
+
+  /* ---------- 0.10.2a: Reports (conn_reports.py, docs/connectors.md "Reports") ----------
+     A folder under /share or /media that another agent writes short Markdown digests to, one folder per source.
+     Pick the folder (subfolder names only), Check (the report files found: title, name, date), name the source and
+     choose when to be told; the instruction for the other agent is shown filled in, with Copy. The Briefing gets
+     "From your reports". Report text is someone else's words: textContent only, no links. */
+  var RP_SEQ = 0;
+  function rpBrowse(path, focus) {
+    var seq = ++RP_SEQ;
+    CN.rp = { path: path, data: CN.rp && CN.rp.data, loading: true, err: null };
+    api('POST', 'api/connectors/reports/folders', { path: path }).then(function (r) {
+      if (seq !== RP_SEQ || !CN.rp) return;
+      CN.rp = { path: path, data: r, loading: false, err: null };
+      if (inPlace('connections')) renderSetup(focus || '#rp-h');
+    }, function (e) {
+      if (seq !== RP_SEQ || !CN.rp) return;
+      CN.rp.loading = false; CN.rp.err = e.message;
+      if (inPlace('connections')) renderSetup(focus || '#rp-h');
+    });
+  }
+  function rpTells(list, cur, label, fk, onPick) {
+    var gid = fk + '-h';
+    return h('div', { class: 'field' }, [h('span', { class: 'label', id: gid }, label),
+      h('div', { class: 'chips seg rptell', role: 'group', 'aria-labelledby': gid }, (list || []).map(function (o) {
+        var b = btn('chip', o[1], { 'aria-pressed': String(cur === o[0]), 'data-fk': fk + ':' + o[0] }, function () { onPick(o[0], b); });
+        return b;
+      }))]);
+  }
+  /* the text to paste into the other agent, with Copy (the clipboard, or the text selected to copy by hand) */
+  function rpInstr(text, id) {
+    var ta = h('textarea', { class: 'inp rpins', id: id, rows: '9', readonly: '', spellcheck: 'false' });
+    ta.value = text || '';
+    var b = btn('btn sm', 'Copy', { 'data-fk': 'copy:' + id, 'aria-label': 'Copy the instruction for the other agent' }, function () {
+      function said(t) { b.textContent = t; setTimeout(function () { b.textContent = 'Copy'; }, 2000); }
+      function sel() {
+        var ok = false;
+        try { ta.focus(); ta.select(); ok = document.execCommand && document.execCommand('copy'); } catch (e) { ok = false; }
+        said(ok ? 'Copied' : 'Selected: press Ctrl+C');
+      }
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(ta.value).then(function () { said('Copied'); }, sel);
+      else sel();
+    });
+    return h('div', { class: 'field rpinsw' }, [h('label', { class: 'label', for: id }, 'For the other agent'), ta, h('div', { class: 'btns' }, [b])]);
+  }
+  function rpUnread(list) {
+    var xs = Array.isArray(list) ? list.filter(function (x) { return x && x.name; }) : [];
+    if (!xs.length) return null;
+    return h('div', { class: 'field' }, [h('span', { class: 'label' }, 'Couldn’t read'),
+      h('ul', { class: 'rpbad' }, xs.map(function (x) { return h('li', null, [h('b', null, x.name), h('span', { class: 'muted' }, ' · ' + (x.why || ''))]); }))]);
+  }
+  function rpAdv(c, err) {
+    return [rpTells(c.tells, c.tell, 'When to tell you', 'rp-tell:' + c.id, function (t, b) {
+      run([b], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { tell: t }); },
+        function () { return cnAgain('[data-fk="' + cssq('rp-tell:' + c.id + ':' + t) + '"]'); });
+    }), rpUnread(c.unreadable), rpInstr(c.instruction, 'rp-ins-' + c.id)];
+  }
+  function rpFlow(v) {
+    var err = errBox(), d = CN.draft, p = CN.rp || {}, data = p.data;
+    var kids = [h('h3', { class: 'cnflow-h', id: 'rp-h', tabindex: '-1' }, 'Add a reports folder')];
+    if (!d) {
+      kids.push(h('p', { class: 'note' }, 'Pick the folder another agent writes its reports to, one folder for each source. Other Home Assistant add-ons can read /share and /media too, so use a folder just for these short digests and keep full reports somewhere else.'));
+      if (p.err) kids.push(h('p', { class: 'cnerr', role: 'alert' }, p.err));
+      if (!data) kids.push(h('p', { class: 'muted' }, 'Loading…'));
+      else {
+        var fs = Array.isArray(data.folders) ? data.folders : [];
+        kids.push(h('p', { class: 'rppath' }, data.path ? ['In ', h('b', null, data.path)] : 'Home Assistant’s shared folders'));
+        var list = fs.map(function (f) {
+          var n = typeof f.reports === 'number' ? (f.reports ? ' · ' + plural(f.reports, 'report', 'reports') : '') : '';
+          return h('li', null, btn('rpdir', [h('span', { class: 'rpdn' }, f.name), n ? h('span', { class: 'muted' }, n) : null],
+            { 'data-fk': 'rp-dir:' + f.path, 'aria-label': 'Open ' + f.name }, function () { rpBrowse(f.path, '#rp-h'); }));
+        });
+        if (data.path) list.unshift(h('li', null, btn('rpdir up', '↑ Up', { 'data-fk': 'rp-up', 'aria-label': 'Up to ' + (data.parent || 'the shared folders') }, function () { rpBrowse(data.parent || null, '#rp-h'); })));
+        kids.push(list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : null);
+        if (!fs.length) kids.push(h('p', { class: 'muted rpnone' }, data.path ? 'No folders in here.' : 'Callsheet can’t see /share or /media.'));
+        var checkB = btn('btn primary', 'Check this folder', { 'data-fk': 'rp-check', disabled: !data.pickable || p.loading }, function () {
+          run([checkB], err, function () { return api('POST', 'api/connectors/check', { kind: 'reports', address: data.path }); }, function (r) {
+            CN.draft = r; CN.label = r.label || r.title || ''; renderSetup('#cn-label');
+          });
+        });
+        kids.push(data.pickable ? null : h('p', { class: 'muted' }, 'Open the folder for this source, inside /share or /media.'),
+          h('div', { class: 'btns' }, [checkB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err);
+      }
+      return h('div', { class: 'cnflow rpflow', role: 'group', 'aria-labelledby': 'rp-h' }, kids);
+    }
+    var lab = h('input', { class: 'inp', type: 'text', id: 'cn-label', autocomplete: 'off', maxlength: '60', value: CN.label });
+    var ins = rpInstr(String(d.instruction || '').replace('\nfrom: ' + (d.label || '') + '\n', '\nfrom: ' + (CN.label || d.label || '') + '\n'), 'rp-ins-new');
+    on(lab, 'input', function () {
+      CN.label = lab.value;
+      var ta = ins.querySelector('textarea');
+      if (ta) ta.value = String(d.instruction || '').replace('\nfrom: ' + (d.label || '') + '\n', '\nfrom: ' + (lab.value.trim() || d.label || '') + '\n');
+    });
+    var addB = h('button', { type: 'submit', class: 'btn primary', 'data-fk': 'cn-add-go' }, 'Add folder');
+    var latest = Array.isArray(d.latest) ? d.latest : [];
+    kids.push(h('div', { class: 'cnfound' }, [h('b', { class: 'cnfname' }, d.folder || ''),
+      h('span', { class: 'label' }, d.files ? plural(d.files, 'report', 'reports') : 'No reports yet'),
+      latest.length ? h('ol', { class: 'cnlatest' }, latest.map(function (x) {
+        return h('li', null, [h('span', null, x.title || ''), h('span', { class: 'muted' }, ' · ' + (x.name || '')),
+          x.flagged ? cnFlag(['instructions', 'Reads like instructions · shown as text']) : null, x.expired ? mk8('', 'Expired') : null]);
+      })) : null,
+      rpUnread(d.unreadable),
+      d.note ? h('p', { class: 'cnnote', role: 'status' }, d.note) : null]),
+      d.duplicate ? h('p', { class: 'cnerr' }, 'You’ve already added this folder as ' + d.duplicate + '.') : null,
+      on(h('form', { class: 'cnform', novalidate: '', 'aria-label': 'Add the folder' }, [
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on your Briefing'), lab]),
+        rpTells(d.tells, CN.tell, 'When to tell you', 'rp-tell-new', function (t) { CN.tell = t; renderSetup('[data-fk="' + cssq('rp-tell-new:' + t) + '"]'); }),
+        h('p', { class: 'cnhost' }, d.hostline || ''),
+        h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
+        e.preventDefault();
+        run([addB], err, function () { return api('POST', 'api/connectors', { token: d.token, label: lab.value.trim() || null, tell: CN.tell }); }, function (r) {
+          CN.flow = null; CN.draft = null; CN.rp = null; CN.open[r.id] = true;
+          return cnAgain('[data-cn="' + cssq(r.id) + '"] [data-fk^="cn-pause"]', 'Added. Paste the instruction under ' + (r.label || 'it') + ' › Advanced into the other agent.');
+        });
+      }), ins);
+    return h('div', { class: 'cnflow rpflow', role: 'group', 'aria-labelledby': 'rp-h' }, kids);
+  }
+  function rpFlag(m) { return mk8(m[0] === 'instructions' ? 'lure' : m[0] === 'unverified' ? 'unverified' : '', m[1]); }
+  /* the Briefing: From your reports (B.reports: unexpired, newest first, a few per source; text only, no links) */
+  function reportsSection() {
+    var f = B && B.reports && typeof B.reports === 'object' ? B.reports : null;
+    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title; }) : [];
+    if (!items.length) return null;
+    return h('section', { class: 's8 fd10 rp10', 'aria-labelledby': 'rp10-h' }, [
+      h('h2', { class: 'sub-h', id: 'rp10-h' }, 'From your reports'),
+      h('ul', { class: 'fd10l' }, items.map(function (x) {
+        var marks = (Array.isArray(x.marks) ? x.marks : []).filter(function (m) { return Array.isArray(m) && m[1]; });
+        return h('li', { class: 'fd10r' + (x.flagged ? ' flagged' : '') }, [
+          h('span', { class: 'fd10t' }, x.title),
+          x.excerpt ? h('p', { class: 'rpex' }, x.excerpt) : null,
+          h('span', { class: 'fd10m' }, [h('span', { class: 'muted' }, [x.label || '', x.when ? ' · ' + fmtWhen(x.when, true) : ''].join('')),
+            marks.length ? h('span', { class: 'mks' }, marks.map(rpFlag)) : null])]);
       })),
       f.more ? h('p', { class: 'muted fd10more' }, 'and ' + f.more + ' more. Ask Chat to find them.') : null]);
   }
