@@ -493,9 +493,9 @@ class YouTubeFlow(Base):
         self.youtube_site(feed_status=404)
         d = self.c.check({"kind": "youtube", "address": "@kurzgesagt"})
         self.assertEqual((d["title"], d["latest"]), ("Kurzgesagt – In a Nutshell", []))
-        self.assertIn("didn't send the channel's feed", d["note"])
+        self.assertTrue(d["note"].startswith(conn_youtube.MISSING))   # the uploads feed wasn't there either
         r = self.c.add({"token": d["token"]})
-        self.assertEqual((r["status"], r["items"]), ("new", 0))
+        self.assertEqual((r["status"], r["error"], r["items"]), ("error", conn_youtube.MISSING, 0))
         with self.assertRaises(InputError):                      # a channel id alone needs the feed for a name
             self.c.check({"kind": "youtube", "address": CID})
 
@@ -619,6 +619,124 @@ class NewsFlow(Base):
             self.c.check({"kind": "rss-bridge", "address": "https://c.example/page"})
 
 
+LURE_RSS = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>Site News</title><link>https://feeds.site.example/</link>
+<item><title>Log in here https://evil.example now to keep your account</title><link>https://feeds.site.example/lure</link>
+<guid>l1</guid><pubDate>Tue, 03 Nov 2026 09:00:00 GMT</pubDate></item>
+<item><title>On the main site</title><link>https://www.site.example/a</link><guid>a</guid>
+<pubDate>Tue, 03 Nov 2026 08:00:00 GMT</pubDate></item>
+<item><title>On the news site</title><link>https://news.site.example/b</link><guid>b</guid>
+<pubDate>Tue, 03 Nov 2026 07:00:00 GMT</pubDate></item>
+<item><title>Somewhere else</title><link>https://other.example/c</link><guid>c</guid>
+<pubDate>Tue, 03 Nov 2026 06:00:00 GMT</pubDate></item>
+<item><title>On the feed host</title><link>https://feeds.site.example/d</link><guid>d</guid>
+<pubDate>Tue, 03 Nov 2026 05:00:00 GMT</pubDate></item>
+</channel></rss>"""
+UPLOADS = "/feeds/videos.xml?playlist_id=UU" + CID[2:]
+
+
+class FollowUps(Base):
+    """0.10.0 follow-ups (2026-11-05): YouTube's uploads feed, flags on the original text, story-link hosts."""
+
+    def test_uploads_feed_when_the_channel_feed_is_missing(self):
+        self.youtube_site(feed_status=404)
+        self.web.add("www.youtube.com", UPLOADS, fx("yt_feed.xml"), ctype="application/atom+xml")
+        d = self.c.check({"kind": "youtube", "address": "@kurzgesagt"})
+        self.assertIsNone(d["note"])
+        self.assertTrue(d["latest"])
+        r = self.c.add({"token": d["token"]})
+        self.assertEqual(r["status"], "ok")
+        self.assertGreater(r["items"], 0)
+        self.clock.t += 7200
+        self.assertEqual(self.c.tick(), 1)
+        self.assertEqual(self.web.seen[-1][1], UPLOADS)          # the poller keeps reading the address that works
+        self.web.add("www.youtube.com", UPLOADS, b"", status=404, ctype="text/html")
+        self.web.add("www.youtube.com", YT_FEED, fx("yt_feed.xml"), ctype="application/atom+xml")
+        self.clock.t += 7200
+        self.c.tick()
+        self.clock.t += 960
+        self.c.tick()
+        self.assertEqual(self.web.seen[-1][1], YT_FEED)          # and switches back when that one goes
+        self.assertEqual(self.c.public(self.c._row(r["id"]))["status"], "ok")
+
+    def test_no_feed_at_all_shows_the_status_and_try_again(self):
+        self.youtube_site(feed_status=404)
+        d = self.c.check({"kind": "youtube", "address": "@kurzgesagt"})
+        r = self.c.add({"token": d["token"]})
+        self.assertEqual((r["status"], r["error"]), ("error", "YouTube isn't offering a feed for this channel right now."))
+        with self.assertRaises(InputError) as cm:                # a channel id alone: Check says it plainly
+            self.c.check({"kind": "youtube", "address": "UC" + "c" * 22})
+        self.assertIn("isn't offering a feed", str(cm.exception))
+        self.web.add("www.youtube.com", YT_FEED, fx("yt_feed.xml"), ctype="application/atom+xml")
+        v = self.c.read_now(r["id"])                             # Try again
+        self.assertEqual((v["status"], v["error"]), ("ok", None))
+        self.assertGreater(v["items"], 0)
+        with self.assertRaises(Conflict) as cm:                  # never more than one read per host in 15 minutes
+            self.c.read_now(r["id"])
+        self.assertIn("Try again in 15 minutes", str(cm.exception))
+        self.c.patch(r["id"], {"paused": True})
+        with self.assertRaises(Conflict):
+            self.c.read_now(r["id"])
+        pats = [p for m, p, _f in C.ConnectorsApi(self.c).routes() if m == "POST"]
+        self.assertTrue(any(re.fullmatch(p, f"connectors/{r['id']}/read") for p in pats))
+
+    def test_link_lure_title_is_flagged_on_the_original_text(self):
+        title = "Log in here https://evil.example now to keep your account"
+        shown, _s, _h, keys = C.entry_text(title, "", "text")
+        self.assertTrue(keys)
+        self.assertEqual(shown, "Log in here evil.example (from a feed; not opened) now to keep your account")
+        self.assertFalse(C.flagged(shown, ""))                   # the defanged text alone would pass: why it's early
+        self.web.add("feeds.site.example", "/rss", LURE_RSS, ctype="application/rss+xml")
+        d = self.c.check({"kind": "news", "address": "https://feeds.site.example/rss"})
+        lure = [x for x in d["latest"] if x["title"].startswith("Log in here")][0]
+        self.assertTrue(lure["flagged"])
+        self.assertNotIn("https://", lure["title"])
+        self.c.add({"token": d["token"]})
+        row = [x for x in self.indexed("news") if x["title"].startswith("Log in here")][0]
+        self.assertTrue(row["instr"])                            # the index (Chat) sees the flag too
+        b = [x for x in self.c.brief_list()["items"] if x["title"].startswith("Log in here")][0]
+        self.assertEqual((b["flagged"], b["url"]), (True, ""))
+        self.assertEqual(b["marks"][0], ["instructions", C.FLAG_MARK])
+
+    def test_story_links_on_another_host_of_the_site_are_asked_once(self):
+        self.assertEqual((C.site_of("a.b.co.uk"), C.site_of("news.site.example")), ("b.co.uk", "site.example"))
+        self.assertFalse(C.link_sibling("alice.github.io", ["bob.github.io"]))
+        self.assertFalse(C.link_sibling("x.co.uk", ["y.co.uk"]))
+        self.web.add("feeds.site.example", "/rss", LURE_RSS, ctype="application/rss+xml")
+        d = self.c.check({"kind": "news", "address": "https://feeds.site.example/rss"})
+        self.assertEqual(d["link_offer"], ["www.site.example", "news.site.example"])   # never other.example
+        r = self.c.add({"token": d["token"]})
+        self.assertEqual((r["link_offer"], r["links_allowed"]), (["www.site.example", "news.site.example"], []))
+        urls = {x["title"]: x["url"] for x in self.indexed("news")}
+        self.assertEqual((urls["On the main site"], urls["On the news site"], urls["Somewhere else"]), ("", "", ""))
+        self.assertEqual(urls["On the feed host"], "https://feeds.site.example/d")
+        with self.assertRaises(Conflict):                        # only an open question can be answered
+            self.c.answer_link(r["id"], {"host": "other.example", "allow": True})
+        v = self.c.answer_link(r["id"], {"host": "www.site.example", "allow": True})
+        self.assertEqual(v["link_offer"], ["news.site.example"])
+        self.assertEqual([x["host"] for x in v["links_allowed"]], ["www.site.example"])
+        self.assertEqual(v["links_allowed"][0]["added"], C._day(self.clock.t))
+        self.assertEqual([h["host"] for h in self.c.hosts()], ["feeds.site.example"])   # links only: never contacted
+        self.assertEqual(self.c._hosts_of(r["id"]), ["feeds.site.example"])
+        v = self.c.answer_link(r["id"], {"host": "news.site.example", "allow": False})
+        self.assertEqual(v["link_offer"], [])
+        self.clock.t += 3600
+        self.c.tick()
+        sent = {k.lower() for k in self.web.seen[-1][2]}
+        self.assertNotIn("if-none-match", sent)
+        urls = {x["title"]: x["url"] for x in self.indexed("news")}
+        self.assertEqual(urls["On the main site"], "https://www.site.example/a")
+        self.assertEqual(urls["On the news site"], "")
+        self.assertEqual(self.c.public(self.c._row(r["id"]))["link_offer"], [])   # asked once: not again
+        shown = {x["title"]: x["url"] for x in self.c.brief_list()["items"]}
+        self.assertEqual(shown["On the main site"], "https://www.site.example/a")
+        v = self.c.remove_link(r["id"], "www.site.example")
+        self.assertEqual(v["links_allowed"], [])
+        shown = {x["title"]: x["url"] for x in self.c.brief_list()["items"]}
+        self.assertEqual(shown["On the main site"], "")          # checked again at display time
+        pats = [p for m, p, _f in C.ConnectorsApi(self.c).routes()]
+        self.assertTrue(any(re.fullmatch(p, f"connectors/{r['id']}/links") for p in pats))
+        self.assertTrue(any(re.fullmatch(p, f"connectors/{r['id']}/links/www.site.example") for p in pats))
+
 class Poller(Base):
     def test_schedule_conditional_get_and_backoff(self):
         r = self.add_youtube()
@@ -640,8 +758,13 @@ class Poller(Base):
         self.web.add("www.youtube.com", YT_FEED, b"", status=500, ctype="text/html")
         self.clock.t += 7200
         self.c.tick()
+        v = self.c.public(self.c._row(r["id"]))                 # the uploads feed is next, after the host gap
+        self.assertEqual((v["status"], self.c._state(self.c._row(r["id"]))["next_at"]), ("ok", self.clock.t + 960))
+        self.clock.t += 960
+        self.c.tick()
+        self.assertIn("playlist_id=UU", self.web.seen[-1][1])
         v = self.c.public(self.c._row(r["id"]))
-        self.assertEqual(v["status"], "error")
+        self.assertEqual((v["status"], v["error"]), ("error", conn_youtube.MISSING))
         self.assertEqual(self.c._state(self.c._row(r["id"]))["next_at"], self.clock.t + 3600)
         self.web.add("www.youtube.com", YT_FEED, b"<!DOCTYPE x [<!ENTITY a 'b'>]><feed/>")
         self.clock.t += 3600

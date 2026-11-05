@@ -11,6 +11,12 @@ involved yet, and nothing about you is sent.
   www.youtube.com every 2 hours. Nothing about you is sent." Nothing is read on a schedule until you press **Add**.
 - Each connector has **Pause** and **Remove**, and a closed **Advanced** part for how often it is read and, for a
   YouTube channel, **Skip Shorts** (off by default).
+- If a channel or feed can't be read, its row says so in plain words (for a YouTube channel: "YouTube isn't
+  offering a feed for this channel right now.") with **Try again**. When YouTube's channel feed doesn't answer,
+  Callsheet reads the channel's uploads feed instead (the same videos).
+- If a feed's stories link to another part of the same site (a feed on feeds.example.com, stories on
+  www.example.com), the row asks once: "Show those links?" **Show links** lists that site under Advanced with the
+  date, removable; **Keep hidden** means Callsheet doesn't ask again. Links elsewhere are never shown.
 - **Places Callsheet contacts** lists every site connectors read, with the date you added it. Removing a
   connector removes its site from the list and deletes what was read from it.
 - **What to watch for**: a short list of topics, each **Always tell me**, **If it's big** or **Never**. It is stored
@@ -21,7 +27,8 @@ involved yet, and nothing about you is sent.
 - **Safety**: reads go only over https to the sites you added, never to an address on your own network (checked
   after the name is looked up), never follow a redirect to another site, and stop at 2 MB and 15 seconds; each site
   is read at most once every 15 minutes. Feeds with a DOCTYPE are refused. Feed text is shown as text only, links in
-  it are shown without being links, and an item that reads like instructions to an assistant is marked "Reads like
+  it are shown without being links (the check for planted instructions reads the text before that, so a "log in
+  here" lure is still caught), and an item that reads like instructions to an assistant is marked "Reads like
   instructions" and gets no link. Chat can find connector items, as data like everything else it reads.
 
 ## 0.9.0 (AI sorting, Learning, Setup in four places, Find or ask, One at a time)

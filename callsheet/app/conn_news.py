@@ -58,8 +58,7 @@ class News:
         link_hosts = cfg.get("link_hosts") or [net.host_of(url, allow_test_names)]
         out, seen = [], set()
         for e in feed.entries:
-            title = C.title_text(e.title)
-            summary, hidden = C.summary_text(e.summary, e.summary_type)
+            title, summary, hidden, keys = C.entry_text(e.title, e.summary, e.summary_type)
             href = story_href(e)
             key = e.id or href or (title + "\n" + str(e.published))
             iid = C.item_id("news", url, key)
@@ -67,11 +66,12 @@ class News:
                 continue
             seen.add(iid)
             title = title or C.clip(summary.split("\n")[0], 120)
+            link = C.story_link(href, url, link_hosts, allow_test_names)
             out.append({"source": self.kind, "connector_id": cfg.get("id", ""), "id": iid, "kind": "article",
                         "title": title, "published": C.when_ok(e.published or e.updated, now),
                         "author": C.clip(C.clean(e.author or "", True), 120),
-                        "url": C.story_link(href, url, link_hosts, allow_test_names),
-                        "summary": summary, "hidden_text": hidden, "flagged": C.flagged(title, summary)})
+                        "url": link, "link_offer": "" if link else C.link_offer(href, url, link_hosts, allow_test_names),
+                        "summary": summary, "hidden_text": hidden, "flagged": bool(keys), "instr": keys})
         return out
 
     def _get(self, ctx, url, cap, hosts):
@@ -134,9 +134,14 @@ class News:
             link_hosts.append(site)
         cfg = {"feed_url": url, "link_hosts": link_hosts}
         items = self.items(cfg, feed, ctx.c.clock(), ctx.allow_test_names)
+        offers = []
+        for it in items:
+            if it["link_offer"] and it["link_offer"] not in offers:
+                offers.append(it["link_offer"])
         latest = [{"title": it["title"], "when": C._iso(it["published"]), "kind": it["kind"],
                    "flagged": it["flagged"]} for it in sorted(items, key=lambda x: -x["published"])[:3]]
         title = C.title_text(feed.title) or host
         return {"kind": self.kind, "title": title, "latest": latest, "host": host, "link_hosts": link_hosts,
-                "config": {"feed_url": url}, "items": items, "note": None if items else
+                "config": {"feed_url": url}, "items": items, "link_offer": offers[:C.LINK_OFFERS],
+                "note": None if items else
                 "The feed is empty right now. Callsheet will show stories when they appear."}

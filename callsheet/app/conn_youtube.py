@@ -24,8 +24,16 @@ PAGE_CAP = 1536 * 1024          # the channel page is large; Callsheet reads its
 FEED_CAP = 1024 * 1024
 
 
+MISSING = "YouTube isn't offering a feed for this channel right now."
+
+
 def feed_of(channel_id):
     return f"https://{HOST}/feeds/videos.xml?channel_id={channel_id}"
+
+
+def uploads_of(channel_id):
+    """The channel's uploads playlist feed (UC… -> UU…): the same videos when the channel feed doesn't answer."""
+    return f"https://{HOST}/feeds/videos.xml?playlist_id=UU{channel_id[2:]}"
 
 
 def watch_link(video_id):
@@ -127,10 +135,17 @@ class YouTube:
     item_kind = "video"
     every_s = C.DEFAULT_EVERY
     feed_cap = FEED_CAP
+    missing = MISSING
 
     @staticmethod
     def feed_url(cfg):
         return feed_of(cfg["channel_id"])
+
+    @staticmethod
+    def feed_urls(cfg):
+        """The channel feed, then the uploads playlist feed (read when the first doesn't answer; checked live
+        2026-11-05: both answer with the same 15 entries and the same /shorts/ links)."""
+        return [feed_of(cfg["channel_id"]), uploads_of(cfg["channel_id"])]
 
     def items(self, cfg, feed, now, allow_test_names=False):
         out, seen = [], set()
@@ -139,14 +154,14 @@ class YouTube:
             if not vid or vid in seen:
                 continue
             seen.add(vid)
-            title = C.title_text(e.title) or "Untitled video"
-            summary, hidden = C.summary_text(e.summary, e.summary_type)
+            title, summary, hidden, keys = C.entry_text(e.title, e.summary, e.summary_type)
+            title = title or "Untitled video"
             out.append({"source": self.kind, "connector_id": cfg.get("id", ""), "id": "yt:" + vid,
                         "kind": "short" if is_short(e, vid) else "video", "title": title,
                         "published": C.when_ok(e.published or e.updated, now),
                         "author": C.clip(C.clean(e.author or feed.title or "", True), 120),
                         "url": watch_link(vid), "summary": summary, "hidden_text": hidden,
-                        "flagged": C.flagged(title, summary)})
+                        "flagged": bool(keys), "instr": keys})
         return out
 
     def check(self, ctx, address, via=None):
@@ -168,21 +183,24 @@ class YouTube:
                 raise C.InputError("Callsheet couldn't find the channel id on that page. Paste the channel's "
                                    "/channel/UC… address instead.")
         cid = val
-        feed, items = None, None
-        try:
-            a = ctx.get(feed_of(cid), [HOST], FEED_CAP)
-            feed = feedxml.parse(a.body)
-        except net.RateLimited:
-            raise
-        except (net.NetError, feedxml.FeedError) as e:
+        feed, items, feed_i = None, None, 0
+        for feed_i, url in enumerate(self.feed_urls({"channel_id": cid})):   # the channel feed, then uploads
+            try:
+                feed = feedxml.parse(ctx.get(url, [HOST], FEED_CAP).body)
+                break
+            except net.RateLimited:
+                raise
+            except (net.NetError, feedxml.FeedError):
+                continue
+        if feed is None:
             if not page_read:
-                raise C.InputError("YouTube didn't send this channel's feed: " + str(e).rstrip(".") + ".") from None
-            note = ("YouTube didn't send the channel's feed just now. You can add it anyway: Callsheet tries "
-                    "again every 2 hours.")
+                raise C.InputError(MISSING + " Check the address, or try again later.")
+            feed_i = 0
+            note = MISSING + " You can add it anyway: Setup shows when Callsheet reads it, with Try again."
         latest, shorts = [], 0
         if feed is not None:
             items = self.items({"channel_id": cid}, feed, ctx.c.clock(), ctx.allow_test_names)
-            name = name or C.clean(feed.title, True)
+            name = name or re.sub(r"^Uploads from\s+", "", C.clean(feed.title, True))
             shorts = sum(1 for it in items if it["kind"] == "short")
             for it in sorted(items, key=lambda x: -x["published"])[:3]:
                 latest.append({"title": it["title"], "when": C._iso(it["published"]), "kind": it["kind"],
@@ -190,4 +208,4 @@ class YouTube:
         return {"kind": self.kind, "title": C.clip(name, C.TITLE_MAX) or "YouTube channel", "latest": latest,
                 "host": HOST, "link_hosts": [HOST], "config": {"channel_id": cid, "feed_url": feed_of(cid),
                                                                "skip_shorts": False},
-                "items": items, "note": note, "shorts_seen": shorts}
+                "items": items, "note": note, "shorts_seen": shorts, "feed_i": feed_i}

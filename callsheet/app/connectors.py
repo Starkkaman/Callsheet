@@ -58,6 +58,8 @@ BRIEF_MAX = 10
 DRAFT_S = 15 * 60
 MAX_DRAFTS = 20
 TICK_S = 60
+ALT_S = 16 * 60        # a kind's other feed address is tried after the host's 15-minute gap
+LINK_OFFERS = 3
 BACKOFF_S = (3600, 3 * 3600, 12 * 3600)
 FUTURE_SLACK_S = 600
 CID = r"(c[0-9a-f]{8})"
@@ -140,26 +142,75 @@ def defang(text):
     return inject.URL.sub(bare, text)
 
 
-def title_text(raw):
-    """An entry or feed title as the page shows it (titles may carry HTML entities or tags in RSS)."""
+def _plain_title(raw):
     t = str(raw or "")
     if "<" in t or "&" in t:
         t = htmltext.html_text(t)[0]
-    return clip(defang(clean(t, single_line=True)), TITLE_MAX)
+    return clean(t, single_line=True)
 
 
-def summary_text(raw, kind="html", limit=SUMMARY_MAX):
-    """(text, hidden_text): an entry's summary as plain text, hidden HTML dropped (htmltext), links defanged."""
+def _plain_summary(raw, kind):
     raw = str(raw or "")[:200000]
     hidden = False
     if kind == "html" or re.search(r"<[a-zA-Z/!]", raw):
         raw, hidden = htmltext.html_text(raw)
-    return clip(defang(clean(raw)), limit), bool(hidden)
+    return clean(raw), bool(hidden)
+
+
+def title_text(raw):
+    """An entry or feed title as the page shows it (titles may carry HTML entities or tags in RSS)."""
+    return clip(defang(_plain_title(raw)), TITLE_MAX)
+
+
+def summary_text(raw, kind="html", limit=SUMMARY_MAX):
+    """(text, hidden_text): an entry's summary as plain text, hidden HTML dropped (htmltext), links defanged."""
+    t, hidden = _plain_summary(raw, kind)
+    return clip(defang(t), limit), hidden
+
+
+def entry_text(raw_title, raw_summary, summary_type="html"):
+    """(title, summary, hidden_text, keys) for one feed entry. inject's rules (link lures included) read the ORIGINAL
+    text, links intact, before defang() rewrites them (a lure needs its link); the title and summary returned are the
+    shown, defanged form. `keys`: the flagged sentences' hashes (what index.db stores as `instr`), [] when none."""
+    t = _plain_title(raw_title)
+    s, hidden = _plain_summary(raw_summary, summary_type)
+    keys = inject.keys(t, s[:4 * SUMMARY_MAX], None)
+    return clip(defang(t), TITLE_MAX), clip(defang(s), SUMMARY_MAX), hidden, keys
 
 
 def flagged(title, summary):
-    """Does the item read like instructions to an assistant (inject.py's rules, link lures included)?"""
+    """Does the item read like instructions to an assistant (inject.py's rules, link lures included)? On text that
+    is already defanged this can miss a link lure: items carry the flag found on the original text (entry_text)."""
     return bool(inject.item_instructions(title, summary, None))
+
+
+# 0.10.0 follow-up: a story link on another host of the feed's own site (feeds.example.com -> www.example.com) is
+# offered to the owner once in Setup, never allowed by itself. Without the public suffix list (stdlib only), these
+# suffixes count as one label so a.co.uk and b.co.uk, or two people's blogs on one platform, are never siblings.
+_SUFFIX2 = frozenset(
+    "co.uk org.uk ac.uk gov.uk me.uk ltd.uk plc.uk net.uk sch.uk nhs.uk police.uk com.au net.au org.au edu.au "
+    "gov.au asn.au id.au co.nz org.nz net.nz govt.nz ac.nz co.jp ne.jp or.jp ac.jp go.jp com.br net.br org.br "
+    "gov.br co.in net.in org.in gov.in ac.in co.za org.za gov.za ac.za com.cn net.cn org.cn gov.cn com.hk org.hk "
+    "com.tw org.tw com.sg org.sg gov.sg com.mx org.mx gob.mx com.ar com.tr gov.tr co.kr or.kr go.kr co.il org.il "
+    "ac.il com.my com.ph com.pk com.ng com.eg com.sa com.ua co.id or.id ac.id "
+    "github.io gitlab.io blogspot.com wordpress.com substack.com tumblr.com medium.com netlify.app vercel.app "
+    "pages.dev herokuapp.com appspot.com web.app firebaseapp.com cloudfront.net azurewebsites.net "
+    "s3.amazonaws.com fly.dev onrender.com glitch.me neocities.org wixsite.com squarespace.com ghost.io".split())
+
+
+def site_of(host):
+    """The registrable domain of a host, approximately: the last two labels, three under a listed suffix."""
+    parts = str(host or "").lower().rstrip(".").split(".")
+    if len(parts) < 2:
+        return ""
+    n = 3 if ".".join(parts[-2:]) in _SUFFIX2 else 2
+    return ".".join(parts[-n:]) if len(parts) >= n else ""
+
+
+def link_sibling(host, feed_hosts):
+    """A story link's host that isn't allowed but sits on the same registrable domain as the feed: Setup asks."""
+    site = site_of(host)
+    return bool(site) and not same_site(host, feed_hosts) and any(site_of(f) == site for f in feed_hosts)
 
 
 def when_ok(ts, now):
@@ -195,6 +246,17 @@ def story_link(href, base, link_hosts, allow_test_names=False):
     if not same_site(host, link_hosts):
         return ""
     return f"https://{host}{target}"
+
+
+def link_offer(href, base, link_hosts, allow_test_names=False):
+    """The host to ask the owner about when story_link() dropped a link: an https link on another host of the feed's
+    own registrable domain (feeds.example.com -> news.example.com). "" for anything else (never offered)."""
+    try:
+        u = urllib.parse.urljoin(base, str(href or "").strip())
+        host = net.split_url(u, allow_test_names)[0]
+    except (ValueError, net.NetError):
+        return ""
+    return host if link_sibling(host, link_hosts) else ""
 
 
 def item_id(prefix, *parts):
@@ -264,7 +326,13 @@ class Connectors:
     def _hosts_of(self, cid):
         with self.store.lock:
             return [r["host"] for r in self.store.db.execute(
-                "SELECT host FROM outbound_hosts WHERE connector=? ORDER BY host", (cid,)).fetchall()]
+                "SELECT host FROM outbound_hosts WHERE connector=? AND how<>'link' ORDER BY host", (cid,)).fetchall()]
+
+    def _link_rows(self, cid):
+        """Story-link hosts the owner allowed for this connector (never contacted: links only)."""
+        with self.store.lock:
+            return self.store.db.execute("SELECT host, added FROM outbound_hosts WHERE connector=? AND how='link' "
+                                         "ORDER BY host", (cid,)).fetchall()
 
     @staticmethod
     def _cfg(r):
@@ -303,7 +371,9 @@ class Connectors:
                "every_s": r["every_s"], "every": every_label(r["every_s"]), "paused": bool(r["paused"]),
                "added": _day(r["added"]), "last_read": _iso(st.get("last_read")), "last_new": st.get("last_new", 0),
                "items": self._count(r["kind"], r["id"]), "status": status, "error": st.get("error") or None,
-               "next_at": _iso(st.get("next_at"))}
+               "next_at": _iso(st.get("next_at")),
+               "links_allowed": [{"host": x["host"], "added": _day(x["added"])} for x in self._link_rows(r["id"])],
+               "link_offer": [h for h in (st.get("link_offer") or []) if isinstance(h, str)][:LINK_OFFERS]}
         if r["kind"] == "youtube":
             out["skip_shorts"] = bool(cfg.get("skip_shorts"))
         return out
@@ -319,7 +389,8 @@ class Connectors:
         with self.store.lock:
             rows = self.store.db.execute(
                 "SELECT o.host, MIN(o.added) AS added, GROUP_CONCAT(c.label, ' · ') AS labels, COUNT(*) AS n "
-                "FROM outbound_hosts o JOIN connectors c ON c.id = o.connector GROUP BY o.host ORDER BY o.host"
+                "FROM outbound_hosts o JOIN connectors c ON c.id = o.connector WHERE o.how<>'link' GROUP BY o.host "
+                "ORDER BY o.host"
             ).fetchall()
         return [{"host": r["host"], "added": _day(r["added"]), "connectors": r["labels"] or "", "n": r["n"]}
                 for r in rows]
@@ -378,7 +449,7 @@ class Connectors:
                "host": draft["host"], "link_hosts": draft.get("link_hosts") or [], "every_s": k.every_s,
                "every": every_label(k.every_s), "note": draft.get("note") or None,
                "hostline": self.hostline(k, draft["host"], k.every_s, draft.get("link_hosts")),
-               "duplicate": dup}
+               "duplicate": dup, "link_offer": draft.get("link_offer") or []}
         if kind == "youtube":
             out["shorts_seen"] = draft.get("shorts_seen", 0)
         return out
@@ -413,7 +484,10 @@ class Connectors:
         cfg = dict(d["config"])
         cfg["link_hosts"] = d.get("link_hosts") or []
         st = {"last_read": d["fetched_at"] if d.get("items") is not None else None, "last_new": 0,
-              "next_at": self._next(now, k.every_s)}
+              "next_at": self._next(now, k.every_s), "feed_i": int(d.get("feed_i") or 0),
+              "link_offer": list(d.get("link_offer") or [])[:LINK_OFFERS]}
+        if d.get("items") is None and d.get("note"):      # Check couldn't read a feed: say so in Setup at once
+            st.update(error=getattr(k, "missing", None) or d["note"], fails=len(_feed_urls(k, cfg)), next_at=now + BACKOFF_S[0])
         with self.store.lock:
             self.store.db.execute("BEGIN IMMEDIATE")
             try:
@@ -497,7 +571,7 @@ class Connectors:
         host = str(host or "").lower()
         with self.store.lock:
             ids = [r["connector"] for r in self.store.db.execute(
-                "SELECT connector FROM outbound_hosts WHERE host=?", (host,)).fetchall()]
+                "SELECT connector FROM outbound_hosts WHERE host=? AND how<>'link'", (host,)).fetchall()]
         if not ids:
             raise NotFound("Callsheet doesn't contact that place.")
         for cid in ids:
@@ -541,8 +615,19 @@ class Connectors:
         finally:
             self.read_lock.release()
 
+    def _fail(self, cid, st, now, msg, alts=1):
+        """A failed read: with another feed address left to try (YouTube's uploads playlist), try it after the host's
+        gap without an error yet; otherwise show `msg` in Setup and back off 1 h, 3 h, 12 h."""
+        fails = int(st.get("fails") or 0) + 1
+        st["fails"] = fails
+        if fails < alts:
+            st.update(error=None, next_at=now + ALT_S)
+        else:
+            st.update(error=msg, next_at=now + BACKOFF_S[min(max(1, fails - alts + 1), len(BACKOFF_S)) - 1])
+        self._set_state(cid, st)
+
     def read(self, cid):
-        """Read one connector now (the poller). Returns its public view."""
+        """Read one connector now (the poller, or the owner's Try again). Returns its public view."""
         r = self._row(cid)
         k = self.kinds.get(r["kind"])
         cfg, st = self._cfg(r), self._state(r)
@@ -552,7 +637,16 @@ class Connectors:
             st.update(error="This connector can't be read. Remove it and add it again.", next_at=now + BACKOFF_S[-1])
             self._set_state(cid, st)
             return self.public(self._row(cid))
-        url = k.feed_url(cfg)
+        urls = _feed_urls(k, cfg)
+        fi = int(st.get("feed_i") or 0) % len(urls)
+        url = urls[fi]
+        missing = getattr(k, "missing", None)
+
+        def other_address(msg):       # the feed isn't there: next time read the kind's other address (if any)
+            if len(urls) > 1:
+                st.update(feed_i=(fi + 1) % len(urls), etag=None, last_modified=None)
+            self._fail(cid, st, now, missing or msg, len(urls))
+            return self.public(self._row(cid))
         cond = {}
         if self._count(r["kind"], cid):          # after an index wipe, read everything again
             if st.get("etag"):
@@ -569,10 +663,10 @@ class Connectors:
             self.log(f"Callsheet connectors: {hosts[0]} wait {int(e.wait)} s")
             return self.public(self._row(cid))
         except net.NetError as e:
-            fails = int(st.get("fails") or 0) + 1
-            st.update(error=str(e), fails=fails, next_at=now + BACKOFF_S[min(fails, len(BACKOFF_S)) - 1])
-            self._set_state(cid, st)
             self.log(f"Callsheet connectors: {hosts[0]} error {e.why} {e.status or ''}".rstrip())
+            if e.status in (403, 404, 410, 500, 502, 503) and missing:
+                return other_address(str(e))
+            self._fail(cid, st, now, str(e))
             return self.public(self._row(cid))
         if a.not_modified:
             st.update(error=None, fails=0, last_read=now, last_new=0, next_at=self._next(now, r["every_s"]))
@@ -583,20 +677,92 @@ class Connectors:
         try:
             feed = feedxml.parse(a.body)
         except feedxml.FeedError as e:
-            fails = int(st.get("fails") or 0) + 1
-            st.update(error=f"{hosts[0]} sent something Callsheet couldn't read: {e}", fails=fails,
-                      next_at=now + BACKOFF_S[min(fails, len(BACKOFF_S)) - 1])
-            self._set_state(cid, st)
             self.log(f"Callsheet connectors: {hosts[0]} 200, {len(a.body)} bytes, not a feed")
-            return self.public(self._row(cid))
-        items = k.items(cfg, feed, now, self.net.allow_test_names)
+            return other_address(f"{hosts[0]} sent something Callsheet couldn't read: {e}")
+        items = k.items(self._items_cfg(r, cfg), feed, now, self.net.allow_test_names)
         new = self._store_items(r, items)
         st.update(error=None, fails=0, last_read=now, last_new=new, next_at=self._next(now, r["every_s"]),
                   etag=(a.headers.get("etag") or "")[:200] or None,
-                  last_modified=(a.headers.get("last-modified") or "")[:100] or None)
+                  last_modified=(a.headers.get("last-modified") or "")[:100] or None,
+                  link_offer=self._offers(r, st, items))
         self._set_state(cid, st)
         self.log(f"Callsheet connectors: {hosts[0]} 200, {len(a.body)} bytes, {len(items)} items, {new} new")
         return self.public(self._row(cid))
+
+    def _items_cfg(self, r, cfg):
+        """The config a kind's items() reads: the connector id and every story-link host the owner allowed."""
+        c = dict(cfg, id=r["id"])
+        c["link_hosts"] = (list(cfg.get("link_hosts") or self._hosts_of(r["id"])) +
+                           [x["host"] for x in self._link_rows(r["id"])])
+        return c
+
+    def _offers(self, r, st, items):
+        """Hosts to ask the owner about (story links on another host of the feed's site), at most LINK_OFFERS: the
+        open questions plus new ones, without the hosts already allowed or declined."""
+        known = set(self._items_cfg(r, self._cfg(r))["link_hosts"]) | set(st.get("link_declined") or [])
+        out = [h for h in (st.get("link_offer") or []) if isinstance(h, str) and h not in known]
+        for it in items:
+            h = it.get("link_offer")
+            if h and h not in known and h not in out:
+                out.append(h)
+        return out[:LINK_OFFERS]
+
+    def read_now(self, cid):
+        """The owner's Try again: one read now, within the host's 15-minute gap (net.py)."""
+        r = self._row(cid)
+        if r["paused"]:
+            raise Conflict("This connector is paused. Resume it first.")
+        hosts = self._hosts_of(cid)
+        wait = self.net.wait_s(hosts[0]) if hosts else 0
+        if wait > 0:
+            mins = max(1, int((wait + 59) // 60))
+            raise Conflict(f"Callsheet read {hosts[0]} a moment ago and reads each place at most once in 15 minutes. "
+                           f"Try again in {mins} minute{'s' if mins != 1 else ''}.")
+        if not self.read_lock.acquire(timeout=30):
+            raise Conflict("Callsheet is reading your connectors right now. Try again in a minute.")
+        try:
+            return self.read(cid)
+        finally:
+            self.read_lock.release()
+
+    def answer_link(self, cid, body):
+        """The owner's answer to "Stories in this feed link to <host>. Show those links?": allow (recorded with the
+        date, like the feed's host, and removable) or keep hidden (never asked again). Only an open question can be
+        answered: Callsheet never allows a link host by itself."""
+        if not isinstance(body, dict) or not isinstance(body.get("allow"), bool):
+            raise InputError("Send {host, allow: true or false}.")
+        r = self._row(cid)
+        st = self._state(r)
+        host = str(body.get("host") or "").lower()
+        if host not in (st.get("link_offer") or []):
+            raise Conflict("Callsheet isn't asking about that host now.")
+        st["link_offer"] = [h for h in st["link_offer"] if h != host]
+        if body["allow"]:
+            st.update(etag=None, last_modified=None, next_at=min(st.get("next_at") or 0, self.clock()) or self.clock())
+            with self.store.lock:
+                self.store.db.execute("INSERT OR IGNORE INTO outbound_hosts (host, connector, added, how) "
+                                      "VALUES (?,?,?,'link')", (host, cid, self.clock()))
+            self.log(f"Callsheet connectors: {cid} links to {host} allowed by the owner")
+        else:
+            st["link_declined"] = (list(st.get("link_declined") or []) + [host])[-20:]
+        self._set_state(cid, st)
+        return self.public(self._row(cid))
+
+    def remove_link(self, cid, host):
+        """Links to `host` aren't shown any more (the items keep no link from the next read; shown links are checked
+        again at display time)."""
+        self._row(cid)
+        with self.store.lock:
+            n = self.store.db.execute("DELETE FROM outbound_hosts WHERE connector=? AND host=? AND how='link'",
+                                      (cid, str(host or "").lower())).rowcount
+        if not n:
+            raise NotFound("That host isn't allowed for this connector.")
+        r = self._row(cid)
+        st = self._state(r)
+        st["link_declined"] = (list(st.get("link_declined") or []) + [str(host).lower()])[-20:]
+        st.update(etag=None, last_modified=None)
+        self._set_state(cid, st)
+        return self.public(r)
 
     def _store_items(self, r, items):
         """Items into index.db (src = kind, account = connector id; the index flags planted instructions). Skip
@@ -613,6 +779,14 @@ class Connectors:
                          "url": it.get("url") or "", "body": it.get("summary") or "",
                          "hidden_text": bool(it.get("hidden_text"))})
         n = self.index.commit_step(rows)
+        # the flag found on the ORIGINAL text (entry_text): the index's own check reads the stored, defanged text,
+        # where a link lure has lost its link. Re-applied on every read, so a later re-check can't drop it for long.
+        keys = [(json.dumps(it["instr"][:inject.MAX_KEYS]), it["id"]) for it in items if it.get("instr")]
+        if keys:
+            with self.index.lock:
+                for k, sid in keys:
+                    self.index.db.execute("UPDATE items SET instr=? WHERE source=? AND account=? AND source_id=? "
+                                          "AND instr=''", (k, r["kind"], r["id"], sid))
         self._prune(r["kind"], r["id"])
         return n.get("added", 0)
 
@@ -654,7 +828,7 @@ class Connectors:
             k = self.kinds.get(r["kind"])
             out.append({"id": x["id"], "connector": r["id"], "label": r["label"], "noun": k.noun if k else "",
                         "kind": x["kind"], "title": x["title"], "when": _iso(x["ts"]),
-                        "url": "" if flag else _shown_link(x["url"], r, self._cfg(r)),
+                        "url": "" if flag else _shown_link(x["url"], r, self._items_cfg(r, self._cfg(r))),
                         "flagged": flag, "hidden": bool(x["hidden"]),
                         "marks": ([["instructions", FLAG_MARK]] if flag else []) +
                                  ([["hidden", HIDDEN_MARK]] if x["hidden"] else []) +
@@ -759,6 +933,12 @@ def _shown_link(url, r, cfg):
     return url if same_site(host, cfg.get("link_hosts") or []) else ""
 
 
+def _feed_urls(k, cfg):
+    """The feed addresses a kind may read for one connector, in order (YouTube: the channel feed, then the channel's
+    uploads playlist feed); one for most kinds."""
+    return k.feed_urls(cfg) if hasattr(k, "feed_urls") else [k.feed_url(cfg)]
+
+
 class ConnectorsApi:
     def __init__(self, conns):
         self.c = conns
@@ -770,6 +950,9 @@ class ConnectorsApi:
                 ("PATCH", rf"connectors/{CID}", lambda b, cid: self.c.patch(cid, b)),
                 ("DELETE", rf"connectors/{CID}", lambda b, cid: self.c.remove(cid)),
                 ("DELETE", r"connectors/hosts/([a-z0-9.-]{1,253})", lambda b, h: self.c.remove_host(h)),
+                ("POST", rf"connectors/{CID}/read", lambda b, cid: self.c.read_now(cid)),
+                ("POST", rf"connectors/{CID}/links", lambda b, cid: self.c.answer_link(cid, b)),
+                ("DELETE", rf"connectors/{CID}/links/([a-z0-9.-]{{1,253}})", lambda b, cid, h: self.c.remove_link(cid, h)),
                 ("POST", r"connectors/interests", lambda b: self.c.add_interest(b)),
                 ("PATCH", rf"connectors/interests/{IID}", lambda b, iid: self.c.patch_interest(iid, b)),
                 ("DELETE", rf"connectors/interests/{IID}", lambda b, iid: self.c.delete_interest(iid))]

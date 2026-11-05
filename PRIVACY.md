@@ -63,7 +63,9 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   site learns is that a Callsheet feed reader at your home's internet address read its feed. Callsheet never opens
   the stories or videos, and never downloads images or thumbnails. Each site is listed under **Places Callsheet
   contacts** with the date you added it; removing the connector stops the reading and deletes what was read.
-  Items are kept for 30 days in the local index.
+  Items are kept for 30 days in the local index. For a YouTube channel the feed is the channel's feed or, when that
+  one doesn't answer, its uploads feed on the same site. A story site you allow with **Show links** is only used to
+  show links; Callsheet never contacts it.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

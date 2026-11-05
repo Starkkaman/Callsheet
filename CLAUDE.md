@@ -27,8 +27,10 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   setup first. The
   browser page itself never calls out. Each new outbound destination needs the owner's approval, written here.
 - **Connectors (0.10, owner approved 2026-11-04).** Callsheet may read public RSS and Atom feeds the owner adds in
-  Setup → Connections → Connectors (news feeds; YouTube channel feeds `https://www.youtube.com/feeds/videos.xml?channel_id=…`,
-  plus one GET of the channel page the owner pasted to find its id). Each host is allowed only when the owner adds
+  Setup → Connections → Connectors (news feeds; YouTube channel feeds `https://www.youtube.com/feeds/videos.xml?channel_id=…` or, when that one
+  doesn't answer, the channel's uploads feed `…?playlist_id=UU…`, plus one GET of the channel page the owner pasted to
+  find its id). Story links on another host of a feed's own site are shown only after the owner allows that host
+  (asked once in Setup, stored with the date, removable; never contacted). Each host is allowed only when the owner adds
   it (stored with the date in `outbound_hosts`, listed in Setup → Connections, removable; removing the connector
   removes the host). `net.py` allows only GET over HTTPS on port 443 to exactly those hosts, refuses private,
   loopback, link-local, CGNAT and Supervisor addresses (checked after DNS; the connection is pinned to the checked

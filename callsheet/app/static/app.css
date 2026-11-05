@@ -2422,6 +2422,12 @@ html.fa-lock{overflow:hidden}
 .bv .fd10m{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:var(--fs-md)}
 .bv .fd10m .mks{display:inline-flex;flex-wrap:wrap;gap:4px}
 .bv .fd10more{margin:8px 0 0;font-size:var(--fs-md)}
+.cn10 .cnrow>.cnwarn,.cn10 .cnrow>.cnask{grid-column:1 / -1}
+.cn10 .cnwarn{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.cn10 .cnwarn .cnerr{flex:1 1 220px;min-width:0}
+.cn10 .cnask{display:flex;flex-direction:column;gap:8px}
+.cn10 .cnq{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 12px;background:var(--surface-2);border-radius:var(--radius)}
+.cn10 .cnq p{margin:0;flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
 @media (max-width:700px){
   .cn10 .cnrow{grid-template-columns:minmax(0,1fr)}
   .cn10 .cnacts{justify-content:flex-start}

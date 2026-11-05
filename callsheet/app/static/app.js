@@ -6093,10 +6093,53 @@
       h('div', { class: 'cnmain' }, [h('b', { class: 'cnname' }, c.label),
         h('span', { class: 'muted cnline' }, [c.noun, c.host, c.every, cnLast(c)].filter(Boolean).join(' · '))]),
       acts,
-      c.error && !c.paused ? h('p', { class: 'cnerr' }, c.error) : null,
+      c.error && !c.paused ? cnWarn(c, err) : null,
+      c.paused ? null : cnAsk(c, err),
       advB,
       h('div', { class: 'cnadv', id: advId, hidden: !open }, open ? cnAdv(c, err) : null),
       err]);
+  }
+  /* 0.10.0 follow-up: a failed read says so, with Try again (one read, within the host's 15-minute gap) */
+  function cnWarn(c, err) {
+    var k = 'cn-retry:' + c.id;
+    var b = btn('btn sm', 'Try again', { 'data-fk': k, 'aria-label': 'Try reading ' + c.label + ' again' }, function () {
+      run([b], err, function () { return api('POST', 'api/connectors/' + encodeURIComponent(c.id) + '/read'); }, function (r) {
+        return cnAgain('[data-fk="' + cssq(k) + '"]', r && r.error ? '' : 'Read ' + c.label + '.');
+      });
+    });
+    return h('div', { class: 'cnwarn' }, [h('p', { class: 'cnerr' }, c.error), b]);
+  }
+  /* story links on another host of the feed's own site: asked once, never allowed by Callsheet itself */
+  function cnAsk(c, err) {
+    var hs = (c.link_offer || []).filter(function (x) { return /^[a-z0-9.-]{1,253}$/.test(String(x)); });
+    if (!hs.length) return null;
+    return h('div', { class: 'cnask' }, hs.map(function (host) {
+      function answer(allow, k) {
+        var b = btn(allow ? 'btn sm' : 'tbtn', allow ? 'Show links' : 'Keep hidden', { 'data-fk': k, 'aria-label': (allow ? 'Show links to ' : 'Keep links hidden to ') + host }, function () {
+          run([b], err, function () { return api('POST', 'api/connectors/' + encodeURIComponent(c.id) + '/links', { host: host, allow: allow }); }, function () {
+            return cnAgain('[data-fk="' + cssq('cn-adv:' + c.id) + '"]', allow ? 'Links to ' + host + ' show from the next read.' : 'Links to ' + host + ' stay hidden.');
+          });
+        });
+        return b;
+      }
+      return h('div', { class: 'cnq', role: 'group', 'aria-label': 'Links to ' + host }, [
+        h('p', null, ['Stories in ' + c.label + ' link to ', h('b', null, host), '. Show those links?']),
+        h('div', { class: 'btns' }, [answer(true, 'cn-lk-y:' + c.id + ':' + host), answer(false, 'cn-lk-n:' + c.id + ':' + host)])]);
+    }));
+  }
+  function cnLinksAllowed(c, err) {
+    var ls = c.links_allowed || [];
+    if (!ls.length) return null;
+    return h('div', { class: 'field' }, [h('span', { class: 'label' }, 'Links shown from'),
+      h('ul', { class: 'cnhosts' }, ls.map(function (x) {
+        var k = 'cn-lk-rm:' + c.id + ':' + x.host;
+        var b = btn('tbtn', 'Remove', { 'data-fk': k, 'aria-label': 'Stop showing links to ' + x.host }, function () {
+          run([b], err, function () { return api('DELETE', 'api/connectors/' + encodeURIComponent(c.id) + '/links/' + encodeURIComponent(x.host)); }, function () {
+            return cnAgain('[data-fk="' + cssq('cn-adv:' + c.id) + '"]', 'Links to ' + x.host + ' are hidden again.');
+          });
+        });
+        return h('li', { class: 'cnhost' }, [h('span', null, [h('b', null, x.host), h('span', { class: 'muted' }, ' · added ' + cnDay(x.added))]), b]);
+      }))]);
   }
   function cnAdv(c, err) {
     var every = (CN.v.every_choices || []).map(function (o) {
@@ -6117,6 +6160,7 @@
       out.push(h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, 'Skip Shorts')]),
         h('p', { class: 'note' }, 'Works when YouTube marks a video as a Short in the channel’s feed.'));
     }
+    out.push(cnLinksAllowed(c, err));
     return out;
   }
 

@@ -57,7 +57,11 @@ read; Atom `summary` wins over `content`; YouTube's `media:description` is the s
 Addresses: `@handle`, `youtube.com/@handle[/videos]`, `/c/name`, `/user/name`, `/channel/UC…`, the feed address, a bare
 handle. Videos, Shorts, playlists and youtu.be links are refused with a plain sentence. The channel id comes from the
 page head (canonical link, og:url, the page's RSS link, then `itemprop=identifier`); the feed is
-`https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, read every 2 hours. Links are built as
+`https://www.youtube.com/feeds/videos.xml?channel_id=<id>`, read every 2 hours; when it doesn't answer (403, 404,
+410, 5xx or not a feed), the channel's uploads playlist feed `…/feeds/videos.xml?playlist_id=UU<id without UC>` (the same
+videos) is tried: on Check at once, by the poller at its next read after the host's 15-minute gap, and the poller keeps
+the address that works. When both fail, Setup shows "YouTube isn't offering a feed for this channel right now." with
+**Try again** (`POST api/connectors/<id>/read`, one read, refused within the host's 15-minute gap); then 1 h, 3 h, 12 h. Links are built as
 `https://www.youtube.com/watch?v=<11-character id>`; the feed's own links are used only to spot Shorts.
 
 **Shorts** count as Shorts when the feed's link for the video is a `/shorts/<id>` address. The feed has no duration,
@@ -67,7 +71,13 @@ so if YouTube stops marking them, Shorts show as videos and Skip Shorts skips no
 (2.7 MB; canonical link, RSS link, og:title and identifier at about 828 KB) and the channel id resolved; the feed
 address answered **404** (a Google error page) at that moment. Check therefore degrades: when the page gave the
 channel but the feed doesn't answer, the owner sees "YouTube didn't send the channel's feed just now" and can still
-add it (the poller tries again every 2 hours). The feed fixture in the tests is synthetic, in the documented shape.
+add it (Setup then shows the status with Try again). The feed fixture in the tests is synthetic, in the documented
+shape.
+
+**Checked live again on 2026-11-05** (one read of each form, outside the tests): both
+`?channel_id=UCsXVk37bltHxD1rDPwtNM8Q` and `?playlist_id=UUsXVk37bltHxD1rDPwtNM8Q` answered 200 (`text/xml`, about
+57 KB, 15 entries each, the uploads feed titled "Uploads from …"), and 9 of the 15 entries linked to `/shorts/<id>`,
+so Skip Shorts works on today's feeds.
 
 ## News
 
@@ -77,9 +87,21 @@ the `www.`/bare sibling is followed on Check; any other move is shown. Story lin
 on the feed's host (or, for a feed the site pointed to, that site), relative links resolved; anything else has no
 link. Read every hour by default.
 
+**Links on another host of the same site** (a feed on `feeds.example.com` whose stories are on `www.example.com` or
+`news.example.com`): Setup asks once, in the connector's row, "Stories in <name> link to <host>. Show those links?"
+(at most 3 hosts). **Show links** writes the host to `outbound_hosts` with the date and `how = 'link'` (listed under
+the connector's Advanced, removable; never contacted: net.py reads only the `owner` hosts, and Places Callsheet
+contacts lists only those); the next read stores the links. **Keep hidden** records the answer and Callsheet doesn't
+ask again. Callsheet never allows a host by itself, and only a host it is asking about can be allowed. "Same site"
+is the registrable domain, approximated without the public suffix list (the last two labels, three under a listed
+suffix such as `co.uk`, `com.au` or a shared host like `github.io`, `substack.com`), so two sites on one suffix are
+never offered. Shown links are checked against the allowed hosts again at display time.
+
 ## Text safety
 
-Feed text is someone else's words. Titles and summaries lose control, bidi-override, zero-width and private-use
+Feed text is someone else's words. inject's rules (link lures included) read each entry's ORIGINAL title and
+summary, links intact, before the links are rewritten (`entry_text`); the flag goes with the item to index.db
+(`instr`, re-applied on each read), and the page shows the defanged form. Titles and summaries lose control, bidi-override, zero-width and private-use
 characters; HTML is read with `htmltext` (hidden text dropped and marked "Had hidden text"); links in the text are
 defanged (`shop.example/x (from a feed; not opened)`); titles are capped at 200 characters and summaries at 1,500; a
 date in the future becomes "now". `inject.item_instructions` flags items that read like instructions: they show the
@@ -96,12 +118,14 @@ a topic that reads like an instruction is refused. 0.10.0 only stores the list (
 `GET api/connectors` (connectors, hosts with dates, interests, choices) · `POST api/connectors/check` ·
 `POST api/connectors` · `PATCH api/connectors/<id> {label | paused | every_s | skip_shorts}` ·
 `DELETE api/connectors/<id>` · `DELETE api/connectors/hosts/<host>` (every connector on that host) ·
+`POST api/connectors/<id>/read` (Try again) · `POST api/connectors/<id>/links {host, allow}` ·
+`DELETE api/connectors/<id>/links/<host>` ·
 `POST api/connectors/interests` · `PATCH|DELETE api/connectors/interests/<id>`.
 
 ## Storage
 
 callsheet.db (additive): `connectors (id, kind, label, config, every_s, added, paused, state)`,
-`outbound_hosts (host, connector, added, how)`, `interests (id, text, level, added)`. Items live in index.db.
+`outbound_hosts (host, connector, added, how)` (`how`: `owner` = read, `link` = story links only), `interests (id, text, level, added)`. Items live in index.db.
 
 ## A new kind
 
