@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.1 (Reports from your other agents)
+
+The planned "0.10.2a" step, numbered 0.10.1 so Home Assistant accepts the version. Other agents, services and
+scripts (a nightly security audit, a backup check) can now leave you a short report, and Callsheet shows it. No AI
+is involved yet, and nothing is sent anywhere.
+
+- **Setup → Connections → Connectors → Add a reports folder**: pick a folder under /share or /media (one folder for
+  each source), press **Check** to see the reports in it (name, title and date, and any file Callsheet couldn't read),
+  give the source a name and choose **Always tell me**, **If it's important** or **Only in the list**. **Add** starts
+  reading it every 15 minutes. Each folder has **Pause** and **Remove**; Remove never touches the files.
+- Setup shows a filled-in instruction to paste into the other agent, with **Copy**: write a short digest (counts and
+  the top items, no passwords, keys or addresses) as one Markdown file with a small header, under a temporary name
+  first, then rename it.
+- **The Briefing** gets a plain list, **From your reports**: the newest reports that haven't expired, at most three
+  from each source, each with its source's name and a line or two. Chat can find them too.
+- Reports are someone else's words: Callsheet only reads them, never changes or deletes a file, hides anything that
+  looks like a password or key before saving, shows links as plain text, marks text that reads like instructions,
+  and shows "Says it's from …" when a report claims to be from someone other than its folder's source. A report
+  marked urgent at most says so ("Marked urgent by …"); it never moves above what needs you.
+- Not in this step: reading reports from a Google Drive folder.
+
 ## 0.10.0 (Connectors: YouTube channels and news feeds)
 
 Callsheet can now read public feeds you choose, so the Briefing can tell you what's new from them. No AI is
