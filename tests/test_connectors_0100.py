@@ -8,6 +8,7 @@ import http.client
 import http.server
 import json
 import pathlib
+import re
 import socket
 import sys
 import tempfile
@@ -87,13 +88,16 @@ class Web:
                     self.send_header("Content-Length", str(len(body)))
                 self.send_header("Connection", "close")
                 self.end_headers()
-                if "Transfer-Encoding" in headers:
-                    for i in range(0, len(body), 65536):
-                        part = body[i:i + 65536]
-                        self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
-                    self.wfile.write(b"0\r\n\r\n")
-                else:
-                    self.wfile.write(body)
+                try:                   # the client hangs up on purpose when an answer is too big
+                    if "Transfer-Encoding" in headers:
+                        for i in range(0, len(body), 65536):
+                            part = body[i:i + 65536]
+                            self.wfile.write(b"%x\r\n" % len(part) + part + b"\r\n")
+                        self.wfile.write(b"0\r\n\r\n")
+                    else:
+                        self.wfile.write(body)
+                except OSError:
+                    pass
 
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.httpd.daemon_threads = True
@@ -713,6 +717,35 @@ class Rules(unittest.TestCase):
         self.assertEqual(C.story_link("//evil.example/x", "https://news.example/feed", ["news.example"], True), "")
         self.assertEqual(C.story_link("https://news.example:8443/x", "https://news.example/f", ["news.example"], True),
                          "")
+
+
+class Page(unittest.TestCase):
+    """The page: feed text as text only, links only Callsheet's (checked again), none on flagged items."""
+
+    def setUp(self):
+        js = (ROOT / "callsheet" / "app" / "static" / "app.js").read_text(encoding="utf-8")
+        self.js = js
+        self.block = js[js.index("/* ---------- 0.10.0: Connectors"):js.index("/* ---------- end 0.10.0 connectors ---------- */")]
+        css = (ROOT / "callsheet" / "app" / "static" / "app.css").read_text(encoding="utf-8")
+        self.css = css[css.index("/* ===== 0.10.0: Connectors"):]
+
+    def test_text_only_and_checked_links(self):
+        for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
+            self.assertNotIn(sink, self.block)
+        self.assertIn("var u = x.flagged ? null : cnLink(x.url);", self.block)
+        self.assertEqual(self.block.count("extA("), 1)              # the Briefing's one link, through cnLink
+        self.assertIn("if (/(^|\\.)youtube\\.com$/i.test(x.hostname) && !/^\\/watch$/.test(x.pathname)) return null;", self.block)
+        self.assertIn("connectorsSlot(),  /* 0.10.0 connectors */", self.js)
+        self.assertIn("sortedSection(), feedsSection()]", self.js)
+        self.assertIn("['connections', null, 'Connectors', ", self.js)
+        self.assertNotRegex(self.block, r"api\('[A-Z]+', '/")       # relative URLs only
+
+    def test_tokens_only(self):
+        self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}\b", self.css))
+        self.assertNotRegex(self.css, r"rgba?\(|hsl\(")
+
+    def test_only_the_approved_kinds(self):
+        self.assertEqual(sorted(C.kinds()), ["news", "youtube"])   # a new kind needs the owner's approval (CLAUDE.md)
 
 
 if __name__ == "__main__":

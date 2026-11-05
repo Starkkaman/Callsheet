@@ -2428,5 +2428,7 @@ html.fa-lock{overflow:hidden}
   .cn10 .cnfld .btn{flex:1 1 auto}
   .cn10 .cnflow{padding:12px}
   .bv a.fd10t{display:block;min-height:44px;padding-block:10px}
-  .cn10 .cnint .seg{flex:1 1 100%}
+  .cn10 .cnint{display:grid;grid-template-columns:minmax(0,1fr) auto}
+  .cn10 .cnint .seg{grid-column:1 / -1;grid-row:2}
+  .cn10 .cnint .rm{grid-column:2;grid-row:1}
 }

@@ -437,6 +437,26 @@ Callsheet knows that two addresses, a Slack user and a Signal contact can be one
   count), and **Split** a merge. **History** lists merges and splits. Merging into a VIP asks once more, with the
   evidence, before it merges; Split puts both people back exactly as they were.
 
+## Connectors (0.10.0, optional)
+
+Public YouTube channels and news feeds you choose. Open **Setup → Connections → Connectors**.
+
+- **Add a YouTube channel**: paste the channel's address (`youtube.com/@kurzgesagt`) or its @handle and press
+  **Check**. Callsheet reads the channel's page once to find its id, then the channel's public feed, and shows the
+  channel's name and three latest titles with "Callsheet will read www.youtube.com every 2 hours. Nothing about you is
+  sent." Press **Add channel** to start. **Skip Shorts** (in the channel's **Advanced**, off by default) leaves out
+  videos YouTube marks as Shorts in its feed.
+- **Add a news feed**: paste a feed address, or a site's address and Callsheet looks for the feed the site announces.
+  When a site's feed lives on another site, Callsheet tells you and checks that one only when you press it. News
+  feeds are read every hour; story links open only on the feed's own site.
+- Each connector has **Pause**, **Remove** and a closed **Advanced** part (how often it is read). **Places Callsheet
+  contacts** lists every site connectors read, with the date you added it; removing a connector (or a place) stops
+  the reading and deletes what was read from it.
+- **What to watch for**: topics, each **Always tell me**, **If it's big** or **Never**, kept for the coming rundown.
+- The Briefing's **From your channels and feeds** lists the newest videos and stories of the last two days. Feed text
+  is someone else's words: links inside it are shown without being links, and an item that reads like instructions
+  to an assistant is marked and has no link. Chat can find connector items. Details: `docs/connectors.md`.
+
 ## Looks
 
 Pick a look under **Look** in the header or in Setup > About you.
