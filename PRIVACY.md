@@ -56,6 +56,14 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   repos you pick: repo details, commits, issues and pull requests, from `api.github.com`. It never writes to
   GitHub. The token is stored in the app's private storage and never shown or logged; "Forget GitHub" deletes it
   and what was read.
+- Connectors (0.10.0, optional): Callsheet reads the public feeds you add in Setup → Connections → Connectors
+  (YouTube channels and news feeds), with a plain `GET` over https, about every one or two hours. What is fetched:
+  the feed itself, and once, when you add a YouTube channel by its @handle, the channel's public page to find its
+  id. Nothing about you is sent: no account, cookies, sign-in, search words or your watch list; the only thing a
+  site learns is that a Callsheet feed reader at your home's internet address read its feed. Callsheet never opens
+  the stories or videos, and never downloads images or thumbnails. Each site is listed under **Places Callsheet
+  contacts** with the date you added it; removing the connector stops the reading and deletes what was read.
+  Items are kept for 30 days in the local index.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

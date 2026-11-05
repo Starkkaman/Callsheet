@@ -2377,3 +2377,56 @@ html.fa-lock{overflow:hidden}
 @media (prefers-reduced-motion:reduce){.bv .oatcard,.bv .oathead .bar i{transition:none}}
 /* the 0.8.4/0.8.5 merge: AI › Sorting's Check the sorting row */
 .aisort .srcheck-l{margin:0 0 32px}
+/* ===== 0.10.0: Connectors (Setup › Connections › Connectors) and the Briefing's "From your channels and feeds" ===== */
+.cn10 .cnlist,.cn10 .cnintl,.cn10 .cnhosts,.bv .fd10l{list-style:none;margin:0;padding:0}
+.cn10 .cnrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:12px 0;border-top:var(--rule-w) solid var(--rule)}
+.cn10 .cnrow:last-child{border-bottom:var(--rule-w) solid var(--rule)}
+.cn10 .cnrow.paused .cnname{color:var(--muted)}
+.cn10 .cnmain{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cn10 .cnname,.cn10 .cnline,.cn10 .cnhost b,.cn10 .cnintt{overflow-wrap:anywhere}
+.cn10 .cnline{font-size:var(--fs-md)}
+.cn10 .cnacts{justify-content:flex-end}
+.cn10 .cnrow>.confirm,.cn10 .cnrow>.cnerr,.cn10 .cnrow>.cnadv,.cn10 .cnrow>.err{grid-column:1 / -1}
+.cn10 .cnadvb{justify-self:start;grid-column:1 / -1}
+.cn10 .cnadv{padding:8px 0 0}
+.cn10 .cnadv .field{margin-bottom:12px}
+.cn10 .cnerr{margin:0;color:var(--alert);font-size:var(--fs-md)}
+.cn10 .cnmsg{margin:8px 0 12px;font-weight:600}
+.cn10 .cnnone{margin:8px 0 12px}
+.cn10 .cnadd{margin:16px 0 0}
+.cn10 .cnflow{margin:16px 0 0;padding:16px;background:var(--surface-2);border-radius:var(--radius)}
+.cn10 .cnflow-h,.cn10 .cnsub{margin:0 0 8px;font-size:var(--fs-lg)}
+.cn10 .cnsub{margin-top:32px}
+.cn10 .cnform .label{display:block;color:var(--muted);margin-bottom:6px}
+.cn10 .cnfld{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.cn10 .cnfld .inp{flex:1 1 220px;min-width:0}
+.cn10 .cnfound{display:flex;flex-direction:column;gap:8px;margin:0 0 16px}
+.cn10 .cnfname{font-size:var(--fs-lg);overflow-wrap:anywhere}
+.cn10 .cnfound>.label{color:var(--muted)}
+.cn10 .cnlatest{margin:0;padding-left:24px;display:flex;flex-direction:column;gap:4px}
+.cn10 .cnlatest li{overflow-wrap:anywhere}
+.cn10 .cnlatest .mk8{margin-left:8px}
+.cn10 .cnnote{margin:0;color:var(--muted)}
+.cn10 .cnhost{margin:0 0 12px;overflow-wrap:anywhere}
+.cn10 .cnint{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 0;border-top:var(--rule-w) solid var(--rule)}
+.cn10 .cnintt{flex:1 1 200px;min-width:0}
+.cn10 .cnintl{margin-bottom:12px}
+.cn10 .cnhosts li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;padding:8px 0;border-top:var(--rule-w) solid var(--rule)}
+.cn10 .cnhosts li>span{min-width:0;overflow-wrap:anywhere}
+.cn10 .cnhosts .confirm{flex:1 1 100%}
+.bv .fd10l{display:flex;flex-direction:column}
+.bv .fd10r{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid var(--rule)}
+.bv .fd10r:first-child{border-top:0}
+.bv .fd10t{font-weight:600;overflow-wrap:anywhere;color:var(--text)}
+.bv a.fd10t{text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
+.bv .fd10m{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:var(--fs-md)}
+.bv .fd10m .mks{display:inline-flex;flex-wrap:wrap;gap:4px}
+.bv .fd10more{margin:8px 0 0;font-size:var(--fs-md)}
+@media (max-width:700px){
+  .cn10 .cnrow{grid-template-columns:minmax(0,1fr)}
+  .cn10 .cnacts{justify-content:flex-start}
+  .cn10 .cnfld .btn{flex:1 1 auto}
+  .cn10 .cnflow{padding:12px}
+  .bv a.fd10t{display:block;min-height:44px;padding-block:10px}
+  .cn10 .cnint .seg{flex:1 1 100%}
+}

@@ -34,6 +34,8 @@ import chat                          # 0.6.0 chat
 import inject
 import people as people_mod          # 0.8.2 people
 import triage                        # 0.8.4 AI sorting
+import connectors as connectors_mod  # 0.10.0 connectors
+import net                           # 0.10.0 connectors
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -42,7 +44,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.10.0"
 
 
 class MethodNotAllowed(Exception):
@@ -121,6 +123,7 @@ class App:
         self.sorter = triage.Sorter(self.store, self.syncer, self.index, self.people, clock=clock,
                                     scanner=self.scanner)
         self.syncer.sorter = self.sorter
+        self._connectors_init()  # 0.10.0 connectors
         self.routes = [
             ("GET", r"brief", self.brief),
             ("GET", r"state", self.state),
@@ -173,6 +176,7 @@ class App:
         self.routes += [("POST", r"horizon", self.horizon_mark)]  # 0.8.0 Coming up
         self.routes += self._people_routes()  # 0.8.2 people
         self.routes += self._sorting_routes()  # 0.8.4 AI sorting
+        self.routes += connectors_mod.ConnectorsApi(self.connectors).routes()  # 0.10.0 connectors
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -192,6 +196,7 @@ class App:
     def close(self):
         self.scheduler.stop()
         self.sorter.stop()  # 0.8.4 AI sorting
+        self.connectors.stop()  # 0.10.0 connectors
         self.signal.service.close()  # Signal (0.5.1): stops signal-cli cleanly
         self.chat.close()  # 0.6.0 chat
         if self.scanner:  # 0.6.0 index
@@ -232,6 +237,7 @@ class App:
         self._brief_writing(brief, cache, s, now)
         self._brief_people(brief)
         self._brief_sorting(brief)  # 0.8.4: only when sorting is on (shadow mode leaves the brief as it was)
+        self._brief_0100(brief)  # 0.10.0 connectors: "From your channels and feeds"
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
                 brief["projects"] = self.projects.brief_line()
@@ -251,6 +257,22 @@ class App:
         except (KeyError, TypeError, ValueError):
             since = None
         brief["writing"] = {"text": presets.WRITING, "since": since, "preset": w.get("preset"), "poll_s": 10}
+
+    # --- 0.10.0: connectors (connectors.py, net.py, docs/connectors.md) -------------------------------------------
+    def _connectors_init(self):
+        """Read-only public feeds the owner adds (owner approved 2026-11-04). The poller starts in server.py."""
+        net.set_version(APP_VERSION)
+        self.connectors = connectors_mod.Connectors(self.store, self.index, clock=self.clock)
+
+    def _brief_0100(self, brief):
+        try:
+            feeds = self.connectors.brief_list()
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            feeds = None
+            sys.stderr.write(f"Callsheet connectors list failed: {type(e).__name__}\n")
+        if feeds is not None:
+            brief["feeds"] = feeds
+    # --- end 0.10.0 connectors ---------------------------------------------------------------------------------------
 
     # --- 0.8.4: AI sorting (triage.py, docs/sorting.md) -----------------------------------------------------------
     def _sorting_routes(self):

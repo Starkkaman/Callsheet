@@ -95,6 +95,8 @@ class SourceTest(unittest.TestCase):
             hits = self.NET.findall(src)
             if f.name in ("google.py", "writer.py", "slack.py", "ha.py", "github.py"):  # ha.py: 0.5.1 notify only; github.py: 0.7.0 read-only
                 self.assertEqual(hits, ["urllib.request"], f.name)
+            elif f.name == "net.py":  # 0.10.0 connectors: the guarded GET (https:443, owner-added hosts, pinned address)
+                self.assertEqual(hits, ["http.client", "socket", "ssl"], f.name)
             else:
                 self.assertEqual(hits, [], f.name)
             # the Anthropic SDK is used (lazily) by writer.py only; no other HTTP libraries

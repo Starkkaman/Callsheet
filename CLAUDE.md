@@ -25,7 +25,17 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   (method, URL) allowlist permits only `GET /user/repos`, `/repos/{o}/{r}`, `/repos/{o}/{r}/commits`, `/issues` and
   `/pulls` (no other method, path or host, no redirects); nothing is ever written to GitHub. Each needs the user's
   setup first. The
-  browser page itself never calls out.
+  browser page itself never calls out. Each new outbound destination needs the owner's approval, written here.
+- **Connectors (0.10, owner approved 2026-11-04).** Callsheet may read public RSS and Atom feeds the owner adds in
+  Setup → Connections → Connectors (news feeds; YouTube channel feeds `https://www.youtube.com/feeds/videos.xml?channel_id=…`,
+  plus one GET of the channel page the owner pasted to find its id). Each host is allowed only when the owner adds
+  it (stored with the date in `outbound_hosts`, listed in Setup → Connections, removable; removing the connector
+  removes the host). `net.py` allows only GET over HTTPS on port 443 to exactly those hosts, refuses private,
+  loopback, link-local, CGNAT and Supervisor addresses (checked after DNS; the connection is pinned to the checked
+  address), follows no redirect to another host, caps size and time, rate-limits each host (at most one read per 15
+  minutes), fetches no images or pages linked from a feed, and sends no cookies or owner data. Feed text is untrusted
+  `<data>`: shown as text, links defanged, items that read like instructions marked and never followed. A new
+  connector kind needs the owner's approval here and its own injection test.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
   absolute paths. `tests/test_server.py` checks this.

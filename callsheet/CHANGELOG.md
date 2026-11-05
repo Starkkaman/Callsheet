@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.10.0 (Connectors: YouTube channels and news feeds)
+
+Callsheet can now read public feeds you choose, so the Briefing can tell you what's new from them. No AI is
+involved yet, and nothing about you is sent.
+
+- **Setup → Connections → Connectors**: add a **YouTube channel** (paste its address or @handle) or a **News feed**
+  (a feed address, or a site's address and Callsheet finds the site's own feed). **Check** shows what Callsheet
+  found (the name and the three latest titles) and the one line that matters: "Callsheet will read
+  www.youtube.com every 2 hours. Nothing about you is sent." Nothing is read on a schedule until you press **Add**.
+- Each connector has **Pause** and **Remove**, and a closed **Advanced** part for how often it is read and, for a
+  YouTube channel, **Skip Shorts** (off by default).
+- **Places Callsheet contacts** lists every site connectors read, with the date you added it. Removing a
+  connector removes its site from the list and deletes what was read from it.
+- **What to watch for**: a short list of topics, each **Always tell me**, **If it's big** or **Never**. It is stored
+  for the coming AI rundown and does nothing else yet.
+- **The Briefing** gets a plain list, **From your channels and feeds**: the newest videos and stories of the last
+  two days, newest first, each with its channel or feed. Links are made by Callsheet: a YouTube video opens at
+  youtube.com/watch, a story only on the feed's own site.
+- **Safety**: reads go only over https to the sites you added, never to an address on your own network (checked
+  after the name is looked up), never follow a redirect to another site, and stop at 2 MB and 15 seconds; each site
+  is read at most once every 15 minutes. Feeds with a DOCTYPE are refused. Feed text is shown as text only, links in
+  it are shown without being links, and an item that reads like instructions to an assistant is marked "Reads like
+  instructions" and gets no link. Chat can find connector items, as data like everything else it reads.
+
 ## 0.9.0 (AI sorting, Learning, Setup in four places, Find or ask, One at a time)
 
 This release brings 0.8.4 ("AI sorting") and 0.8.5 ("Learning"), described below, together with a calmer page. In

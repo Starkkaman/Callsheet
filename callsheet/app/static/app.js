@@ -603,7 +603,7 @@
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
     return [startCard(), h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
-      changedSection(), comingSection(), sortedSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted */
+      changedSection(), comingSection(), sortedSection(), feedsSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted; 0.10.0 feeds */
   }
   function T_replies() {
     if (U.oat) return oatView();  /* 0.9.0 */
@@ -3269,6 +3269,7 @@
       ui.newAreaOpen ? addAreaCard() : cur ? areaCard(cur) : null,
       signalCard(),
       otherSources(),
+      connectorsSlot(),  /* 0.10.0 connectors */
       h('div', { class: 'callout' }, [h('div', { class: 'h' }, 'Always'),
         h('p', null, 'The brief reads and drafts. It never sends, accepts or deletes anything.')])];
   }
@@ -3378,6 +3379,10 @@
     ['connections', null, 'Signal', '[data-fk="sig-h"]', 'link phone ignore chats unlink', ['signal']],
     ['connections', null, 'Notes folders', '[data-fk="src-notes"]', 'obsidian drive vault know me', ['index']],
     ['connections', null, 'GitHub', '[data-fk="src-gh"]', 'repos token projects code', ['github']],
+    ['connections', null, 'Connectors', '[data-fk="cn-add-yt"]', 'youtube channel news feed rss atom add pause remove', ['connectors']],  /* 0.10.0 */
+    ['connections', null, 'Skip Shorts, how often', '.cnadvb', 'youtube shorts every hour daily advanced connector', ['skip_shorts', 'every_s']],  /* 0.10.0 */
+    ['connections', null, 'What to watch for', '#cn-int', 'interests topics watch always big never rundown', ['interests']],  /* 0.10.0 */
+    ['connections', null, 'Places Callsheet contacts', '#cn-h', 'hosts sites outbound places contacts network', ['hosts']],  /* 0.10.0 */
     ['day', null, 'Your name', '#f-name', 'name', ['name']],
     ['day', null, 'Time zone', '[data-fk="tz"]', 'timezone zone clock', ['timezone']],
     ['day', null, 'Time format', '[data-fk="tf:12h"]', '12-hour 24-hour clock', ['time_format']],
@@ -5992,6 +5997,251 @@
       h('p', { class: 'note' }, 'Chats are kept on this box for ' + c.retention_days + ' days after the last message, then deleted. Nothing you ask is added to Memory.')]);
   }
   /* ---------- end 0.6.0 chat ---------- */
+
+  /* ---------- 0.10.0: Connectors (connectors.py, net.py, docs/connectors.md) ----------
+     Setup › Connections › Connectors: add a YouTube channel or a news feed (Check shows what was found and the one
+     place Callsheet will read; nothing is read on a schedule until Add), Pause and Remove (with a closed Advanced part
+     each), What to watch for, and Places Callsheet contacts with the date each was added. The Briefing gets the plain
+     list "From your channels and feeds". Feed text is someone else's words: textContent only, and the only links are
+     the ones Callsheet built (checked again here); an item that reads like instructions gets a mark and no link. */
+  var CN = { v: null, loading: false, err: null, at: 0, seq: 0, focus: null, msg: '',
+    flow: null, addr: '', draft: null, other: null, label: '', open: {}, intText: '' };
+  function cnLoad() {
+    var seq = ++CN.seq;
+    CN.loading = true;
+    function done() {
+      CN.at = Date.now();
+      if (!inPlace('connections')) return;
+      var fs = CN.focus; CN.focus = null;
+      var ae = document.activeElement, fk = ae && ae.getAttribute && ae.getAttribute('data-fk');
+      renderSetup(fs || (fk ? '[data-fk="' + cssq(fk) + '"]' : null));
+    }
+    return api('GET', 'api/connectors').then(function (r) { CN.loading = false; if (seq !== CN.seq) return; CN.v = r; CN.err = null; done(); },
+      function (e) { CN.loading = false; if (seq !== CN.seq) return; CN.err = e.message; done(); });
+  }
+  function cnAgain(focus, msg) { CN.focus = focus || null; CN.msg = msg || ''; return cnLoad(); }
+  function cnDay(d) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ''))) return '';
+    try { return new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); } catch (e) { return d; }
+  }
+  /* a link from a connector: https only, no user name, and YouTube links only to watch pages */
+  function cnLink(u) {
+    var s = safeHttps(u), x;
+    if (!s) return null;
+    try { x = new URL(s); } catch (e) { return null; }
+    if (x.protocol !== 'https:' || x.username || x.password || (x.port && x.port !== '443')) return null;
+    if (/(^|\.)youtube\.com$/i.test(x.hostname) && !/^\/watch$/.test(x.pathname)) return null;
+    return x.href;
+  }
+  function cnFlag(m) { return mk8(m[0] === 'instructions' ? 'lure' : m[0] === 'hidden' ? 'unverified' : '', m[1]); }
+
+  function connectorsSlot() {
+    if (!CN.loading && (!CN.at || Date.now() - CN.at > 60000)) cnLoad();
+    var v = CN.v, head = h('h2', { class: 'h3', id: 'cn-h' }, 'Connectors');
+    if (!v) {
+      return h('section', { class: 'where cn10', 'aria-labelledby': 'cn-h' }, [head,
+        CN.err ? h('p', { class: 'err', role: 'alert' }, ['Couldn’t load the connectors (' + CN.err + '). ',
+          btn('tbtn', 'Try again', { 'data-fk': 'cn-retry' }, function () { CN.err = null; CN.at = 0; renderSetup('[data-fk="cn-retry"]'); })])
+          : h('p', { class: 'muted' }, 'Loading…')]);
+    }
+    return h('section', { class: 'where cn10', 'aria-labelledby': 'cn-h' }, [head,
+      h('p', { class: 'note' }, 'Public channels and feeds you add yourself. Callsheet only reads them, and treats what they say as someone else’s words.'),
+      CN.msg ? h('p', { class: 'cnmsg', role: 'status' }, CN.msg) : null,
+      cnList(v), CN.flow ? cnFlow(v) : cnAddBtns(v), cnInterests(v), cnPlaces(v)]);
+  }
+  function cnAddBtns(v) {
+    var full = (v.connectors || []).length >= (v.max || 40);
+    function go(kind, fk) {
+      return btn('btn', kind === 'youtube' ? 'Add a YouTube channel' : 'Add a news feed', { 'data-fk': fk, disabled: full }, function () {
+        CN.flow = kind; CN.addr = ''; CN.draft = null; CN.other = null; CN.msg = ''; renderSetup('#cn-addr');
+      });
+    }
+    return h('div', { class: 'btns cnadd' }, [go('youtube', 'cn-add-yt'), go('news', 'cn-add-news')]);
+  }
+  function cnCancel() { var k = CN.flow; CN.flow = null; CN.draft = null; CN.other = null; renderSetup('[data-fk="' + (k === 'news' ? 'cn-add-news' : 'cn-add-yt') + '"]'); }
+  function cnLast(c) {
+    if (c.paused) return 'paused';
+    if (c.status === 'new') return 'not read yet';
+    return c.last_read ? 'read ' + fmtWhen(c.last_read, true) + (c.last_new ? ' · ' + c.last_new + ' new' : '') : '';
+  }
+  function cnList(v) {
+    var cs = v.connectors || [];
+    if (!cs.length) return h('p', { class: 'muted cnnone' }, 'No connectors yet.');
+    var n = {}; cs.forEach(function (c) { n[c.host] = (n[c.host] || 0) + 1; });
+    return h('ul', { class: 'cnlist', 'aria-label': 'Your connectors' }, cs.map(function (c) { return cnRow(c, n[c.host] > 1); }));
+  }
+  function cnRow(c, shared) {
+    var err = errBox(), open = !!CN.open[c.id], rmKey = 'cn-rm:' + c.id, advId = 'cn-adv-' + c.id;
+    var pauseB = btn('btn sm', c.paused ? 'Resume' : 'Pause', { 'data-fk': 'cn-pause:' + c.id, 'aria-label': (c.paused ? 'Resume ' : 'Pause ') + c.label }, function () {
+      run([pauseB], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { paused: !c.paused }); }, function () {
+        return cnAgain('[data-fk="' + cssq('cn-pause:' + c.id) + '"]', c.paused ? '' : 'Paused. Nothing is read from ' + c.host + ' until you resume it.');
+      });
+    });
+    var acts = ui.confirm === rmKey ? confirmRow('Remove ' + c.label + '? Callsheet stops reading it' + (shared ? '' : ', and ' + c.host + ' leaves Places Callsheet contacts') + '. What was read from it is deleted.', 'Remove', function (yesB, noB, e2) {
+      run([yesB, noB], e2, function () { return api('DELETE', 'api/connectors/' + encodeURIComponent(c.id)); }, function (r) {
+        ui.confirm = null; CN.v = r || CN.v; CN.open[c.id] = false;
+        CN.msg = 'Removed ' + c.label + '.' + (shared ? '' : ' ' + c.host + ' is no longer contacted.');
+        renderSetup('[data-fk="cn-add-yt"]');
+      });
+    }) : h('div', { class: 'btns cnacts' }, [pauseB,
+      btn('tbtn', 'Remove', { 'data-fk': 'ask:' + rmKey, 'aria-label': 'Remove ' + c.label }, function () { ui.confirm = rmKey; renderSetup('[data-fk="cancel"]'); })]);
+    var advB = btn('tbtn cnadvb', ['Advanced', h('span', { class: 'chev', 'aria-hidden': 'true' }, open ? ' −' : ' +')],
+      { 'aria-expanded': String(open), 'aria-controls': advId, 'data-fk': 'cn-adv:' + c.id, 'aria-label': 'Advanced: ' + c.label }, function () {
+        CN.open[c.id] = !open; renderSetup('[data-fk="' + cssq('cn-adv:' + c.id) + '"]');
+      });
+    return h('li', { class: 'cnrow' + (c.paused ? ' paused' : ''), 'data-cn': c.id }, [
+      h('div', { class: 'cnmain' }, [h('b', { class: 'cnname' }, c.label),
+        h('span', { class: 'muted cnline' }, [c.noun, c.host, c.every, cnLast(c)].filter(Boolean).join(' · '))]),
+      acts,
+      c.error && !c.paused ? h('p', { class: 'cnerr' }, c.error) : null,
+      advB,
+      h('div', { class: 'cnadv', id: advId, hidden: !open }, open ? cnAdv(c, err) : null),
+      err]);
+  }
+  function cnAdv(c, err) {
+    var every = (CN.v.every_choices || []).map(function (o) {
+      var b = btn('chip', o[1], { 'aria-pressed': String(c.every_s === o[0]), 'data-fk': 'cn-every:' + c.id + ':' + o[0] }, function () {
+        run([b], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { every_s: o[0] }); },
+          function () { return cnAgain('[data-fk="' + cssq('cn-every:' + c.id + ':' + o[0]) + '"]'); });
+      });
+      return b;
+    });
+    var out = [h('div', { class: 'field' }, [h('span', { class: 'label', id: 'cn-ev-' + c.id }, 'How often'),
+      h('div', { class: 'chips seg', role: 'group', 'aria-labelledby': 'cn-ev-' + c.id }, every)])];
+    if (c.kind === 'youtube') {
+      var s = sw(c.skip_shorts, 'Skip Shorts for ' + c.label, function () {
+        run([s], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { skip_shorts: !c.skip_shorts }); },
+          function () { return cnAgain('[data-fk="' + cssq('cn-shorts:' + c.id) + '"]'); });
+      });
+      s.setAttribute('data-fk', 'cn-shorts:' + c.id);
+      out.push(h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, 'Skip Shorts')]),
+        h('p', { class: 'note' }, 'Works when YouTube marks a video as a Short in the channel’s feed.'));
+    }
+    return out;
+  }
+
+  /* the add flow: Check (the owner's one read), then Add (the consent: the host is listed from now on) */
+  function cnFlow(v) {
+    var yt = CN.flow === 'youtube', err = errBox(), d = CN.draft, o = CN.other;
+    var kids = [h('h3', { class: 'cnflow-h', id: 'cn-flow-h' }, yt ? 'Add a YouTube channel' : 'Add a news feed')];
+    function check(btns, body) {
+      run(btns, err, function () { return api('POST', 'api/connectors/check', body); }, function (r) {
+        if (r && r.stage === 'other_host') { CN.other = r; CN.draft = null; renderSetup('[data-fk="cn-check-other"]'); return; }
+        CN.draft = r; CN.label = r.label || r.title || ''; renderSetup('#cn-label');
+      });
+    }
+    if (!d && o) {
+      var goB = btn('btn primary', 'Check ' + o.host, { 'data-fk': 'cn-check-other' }, function () {
+        check([goB], { kind: CN.flow, address: o.feed_url, via: o.token });
+      });
+      kids.push(h('p', null, ['This site’s feed is on another site, ', h('b', null, o.host), '. Check it there?']),
+        h('div', { class: 'btns' }, [goB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err);
+    } else if (!d) {
+      var inp = h('input', { class: 'inp', type: 'text', id: 'cn-addr', autocomplete: 'off', spellcheck: 'false', inputmode: 'url',
+        value: CN.addr, placeholder: yt ? 'youtube.com/@channel' : 'A feed or a site address' });
+      on(inp, 'input', function () { CN.addr = inp.value; });
+      var checkB = h('button', { type: 'submit', class: 'btn primary', 'data-fk': 'cn-check' }, 'Check');
+      kids.push(on(h('form', { class: 'cnform', novalidate: '', 'aria-labelledby': 'cn-flow-h' }, [
+        h('label', { class: 'label', for: 'cn-addr' }, yt ? 'Channel address or @handle' : 'Feed or site address'),
+        h('div', { class: 'cnfld' }, [inp, checkB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
+        e.preventDefault();
+        if (!inp.value.trim()) { err.textContent = 'Paste an address first.'; inp.focus(); return; }
+        check([checkB], { kind: CN.flow, address: inp.value.trim() });
+      }));
+    } else {
+      var lab = h('input', { class: 'inp', type: 'text', id: 'cn-label', autocomplete: 'off', maxlength: '60', value: CN.label });
+      on(lab, 'input', function () { CN.label = lab.value; });
+      var addB = h('button', { type: 'submit', class: 'btn primary', 'data-fk': 'cn-add-go' }, yt ? 'Add channel' : 'Add feed');
+      var latest = Array.isArray(d.latest) ? d.latest : [];
+      kids.push(h('div', { class: 'cnfound' }, [h('b', { class: 'cnfname' }, d.title || ''),
+        latest.length ? h('span', { class: 'label' }, yt ? 'Latest videos' : 'Latest stories') : null,
+        latest.length ? h('ol', { class: 'cnlatest' }, latest.map(function (x) {
+          return h('li', null, [h('span', null, x.title || ''), x.flagged ? cnFlag(['instructions', 'Reads like instructions · shown as text']) : null,
+            x.kind === 'short' ? mk8('', 'Short') : null]);
+        })) : null,
+        d.note ? h('p', { class: 'cnnote', role: 'status' }, d.note) : null]),
+        d.duplicate ? h('p', { class: 'cnerr' }, 'You’ve already added this as ' + d.duplicate + '.') : null,
+        on(h('form', { class: 'cnform', novalidate: '', 'aria-label': yt ? 'Add the channel' : 'Add the feed' }, [
+          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on your Briefing'), lab]),
+          h('p', { class: 'cnhost' }, ['Callsheet will read ', h('b', null, d.host || ''), ' ' + (d.every || '') + '. ' + (v.nothing_sent || 'Nothing about you is sent.')]),
+          h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
+          e.preventDefault();
+          run([addB], err, function () { return api('POST', 'api/connectors', { token: d.token, label: lab.value.trim() || null }); }, function (r) {
+            var host = d.host; CN.flow = null; CN.draft = null; CN.other = null;
+            return cnAgain('[data-cn="' + cssq(r.id) + '"] [data-fk^="cn-pause"]', 'Added. ' + host + ' is now listed in Places Callsheet contacts.');
+          });
+        }));
+    }
+    return h('div', { class: 'cnflow', role: 'group', 'aria-labelledby': 'cn-flow-h' }, kids);
+  }
+
+  /* What to watch for: stored for the coming rundown (0.10.2); each topic Always tell me, If it's big or Never */
+  function cnInterests(v) {
+    var err = errBox(), ints = v.interests || [], levels = v.levels || [];
+    var rows = ints.map(function (it) {
+      var rm = btn('rm', '×', { 'aria-label': 'Remove ' + it.text, 'data-fk': 'cn-int-rm:' + it.id }, function () {
+        run([rm], err, function () { return api('DELETE', 'api/connectors/interests/' + encodeURIComponent(it.id)); }, function () { return cnAgain('#cn-int'); });
+      });
+      var seg = h('div', { class: 'chips seg', role: 'group', 'aria-label': 'How to treat ' + it.text }, levels.map(function (l) {
+        var b = btn('chip', l[1], { 'aria-pressed': String(it.level === l[0]), 'data-fk': 'cn-lv:' + it.id + ':' + l[0] }, function () {
+          run([b], err, function () { return api('PATCH', 'api/connectors/interests/' + encodeURIComponent(it.id), { level: l[0] }); },
+            function () { return cnAgain('[data-fk="' + cssq('cn-lv:' + it.id + ':' + l[0]) + '"]'); });
+        });
+        return b;
+      }));
+      return h('li', { class: 'cnint' }, [h('span', { class: 'cnintt' }, it.text), seg, rm]);
+    });
+    var inp = h('input', { class: 'inp', type: 'text', id: 'cn-int', autocomplete: 'off', maxlength: '80', value: CN.intText, placeholder: 'e.g. drone rules in Canada' });
+    on(inp, 'input', function () { CN.intText = inp.value; });
+    var addB = h('button', { type: 'submit', class: 'btn', 'data-fk': 'cn-int-add', disabled: ints.length >= (v.max_interests || 20) }, 'Add');
+    return h('div', { class: 'cnints' }, [h('h3', { class: 'cnsub', id: 'cn-int-h' }, 'What to watch for'),
+      h('p', { class: 'note' }, 'Topics for the coming rundown, so it knows what to mention. Nothing uses this list yet.'),
+      rows.length ? h('ul', { class: 'cnintl', 'aria-labelledby': 'cn-int-h' }, rows) : null,
+      on(h('form', { class: 'cnform', novalidate: '', 'aria-label': 'Add something to watch for' }, [
+        h('label', { class: 'label', for: 'cn-int' }, 'Something to watch for'),
+        h('div', { class: 'cnfld' }, [inp, addB]), err]), 'submit', function (e) {
+        e.preventDefault();
+        if (!inp.value.trim()) { err.textContent = 'Write a topic first.'; inp.focus(); return; }
+        run([addB], err, function () { return api('POST', 'api/connectors/interests', { text: inp.value.trim(), level: 'always' }); },
+          function () { CN.intText = ''; return cnAgain('#cn-int'); });
+      })]);
+  }
+
+  /* Places Callsheet contacts for connectors, each with the date the owner added it */
+  function cnPlaces(v) {
+    var hs = v.hosts || [];
+    if (!hs.length) return null;
+    return h('div', { class: 'cnplaces' }, [h('h3', { class: 'cnsub', id: 'cn-places-h' }, 'Places Callsheet contacts'),
+      h('p', { class: 'note' }, 'Besides your own accounts, Callsheet contacts only these sites, for your connectors.'),
+      h('ul', { class: 'cnhosts', 'aria-labelledby': 'cn-places-h' }, hs.map(function (x) {
+        var key = 'cn-host:' + x.host;
+        var acts = ui.confirm === key ? confirmRow('Stop contacting ' + x.host + '? This removes ' + plural(x.n, 'connector', 'connectors') + ' (' + x.connectors + ') and what was read from ' + (x.n === 1 ? 'it' : 'them') + '.', 'Remove', function (yesB, noB, e2) {
+          run([yesB, noB], e2, function () { return api('DELETE', 'api/connectors/hosts/' + encodeURIComponent(x.host)); }, function (r) {
+            ui.confirm = null; CN.v = r || CN.v; CN.msg = x.host + ' is no longer contacted.'; renderSetup('[data-fk="cn-add-yt"]');
+          });
+        }) : btn('tbtn', 'Remove', { 'data-fk': 'ask:' + key, 'aria-label': 'Stop contacting ' + x.host }, function () { ui.confirm = key; renderSetup('[data-fk="cancel"]'); });
+        return h('li', { class: 'cnhost' }, [h('span', null, [h('b', null, x.host), h('span', { class: 'muted' }, ' · added ' + cnDay(x.added) + ' · ' + x.connectors)]), acts]);
+      }))]);
+  }
+
+  /* the Briefing: From your channels and feeds (B.feeds, only when the owner has connectors and something is new) */
+  function feedsSection() {
+    var f = B && B.feeds && typeof B.feeds === 'object' ? B.feeds : null;
+    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title; }) : [];
+    if (!items.length) return null;
+    return h('section', { class: 's8 fd10', 'aria-labelledby': 'fd10-h' }, [
+      h('h2', { class: 'sub-h', id: 'fd10-h' }, ['From your channels and feeds ', h('span', { class: 'n' }, 'last ' + (parseInt(f.hours, 10) || 48) + ' hours')]),
+      h('ul', { class: 'fd10l' }, items.map(function (x) {
+        var u = x.flagged ? null : cnLink(x.url);
+        var marks = (Array.isArray(x.marks) ? x.marks : []).filter(function (m) { return Array.isArray(m) && m[1]; });
+        return h('li', { class: 'fd10r' + (x.flagged ? ' flagged' : '') }, [
+          u ? extA('fd10t', u, x.title, x.title + ' (opens ' + (x.noun === 'YouTube channel' ? 'YouTube' : 'the site') + ')') : h('span', { class: 'fd10t' }, x.title),
+          h('span', { class: 'fd10m' }, [h('span', { class: 'muted' }, [x.label || '', x.when ? ' · ' + fmtWhen(x.when, true) : ''].join('')),
+            marks.length ? h('span', { class: 'mks' }, marks.map(cnFlag)) : null])]);
+      })),
+      f.more ? h('p', { class: 'muted fd10more' }, 'and ' + f.more + ' more. Ask Chat to find them.') : null]);
+  }
+  /* ---------- end 0.10.0 connectors ---------- */
 
   /* ---------- 0.9.0: Start your day (top of Briefing) ----------
      Replies, clashes, the next event and invites to answer, with Start (One at a time) and Not now. It shows on the
