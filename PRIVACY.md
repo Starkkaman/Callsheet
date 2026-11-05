@@ -66,6 +66,9 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   Items are kept for 30 days in the local index. For a YouTube channel the feed is the channel's feed or, when that
   one doesn't answer, its uploads feed on the same site. A story site you allow with **Show links** is only used to
   show links; Callsheet never contacts it.
+  Callsheet runs on Home Assistant's internal bridge network, not your home network directly, and it refuses
+  to read any address on your home network, Home Assistant's own network or a cloud metadata address, even when a
+  feed's name points there.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

@@ -15,7 +15,8 @@ Every request goes through `Net.get`, which checks the request before any networ
   an HTML page read with `truncate=True` (YouTube's channel page is ~2.7 MB, its canonical link sits near 0.8 MB), cut
   at the cap. gzip is the only content coding asked for and is decompressed with the same cap.
 - Time: CONNECT_S to connect, TOTAL_S for the whole request (a watchdog shuts the socket at the deadline, so a server
-  trickling bytes can't hold it open); at most CONCURRENT requests at once.
+  trickling bytes can't hold it open; when the deadline falls during the TCP connect or the TLS handshake it shuts the
+  socket being set up and keeps watching until the request ends); at most CONCURRENT requests at once.
 - Rate: a poll of a host waits HOST_GAP_S (15 min) after the last poll of that host; the owner's Check presses are
   limited to CHECKS_PER_WINDOW per host per HOST_GAP_S.
 - Sent: `User-Agent: Callsheet/<version> (feed reader)`, `Accept`, `Accept-Encoding: gzip`, `Connection: close` and
@@ -23,7 +24,9 @@ Every request goes through `Net.get`, which checks the request before any networ
 - Content types: feeds, XML, HTML and plain text only; images, video, audio and everything else are refused (no
   thumbnails or media are ever fetched).
 Errors are plain sentences (`NetError` and subclasses). Logs are the caller's (host, status, bytes, counts).
-Tests inject `resolver` and `connect`; nothing here reads environment variables.
+Tests inject `resolver` and `connect`; nothing here reads environment variables: http.client (not urllib.request) is
+used, so HTTP(S)_PROXY, ALL_PROXY and NO_PROXY are never consulted, and the TLS context drops an SSLKEYLOGFILE the
+environment may set. The certificate and the host name are always checked (CERT_REQUIRED, check_hostname).
 """
 import http.client
 import ipaddress
@@ -205,7 +208,9 @@ def split_url(url, allow_test_names=False):
     path = p.path or "/"
     if not path.startswith("/"):
         path = "/" + path
-    return host, path + ("?" + p.query if p.query else "")
+    target = path + ("?" + p.query if p.query else "")
+    # non-ASCII (bidi, zero-width, letters) in the path or query is sent percent-encoded, never raw on the wire
+    return host, re.sub(r"[^\x21-\x7e]+", lambda m: urllib.parse.quote(m.group(0), safe=""), target)
 
 
 def host_of(url, allow_test_names=False):
@@ -232,9 +237,12 @@ class _Pinned(http.client.HTTPSConnection):
     def __init__(self, host, ip, timeout, context):
         super().__init__(host, PORT, timeout=timeout, context=context)
         self._ip = ip
+        self._raw = None        # the TCP socket during the TLS handshake (the watchdog can shut it)
 
     def connect(self):
+        # an address, not a name: create_connection's getaddrinfo is a numeric parse, never a second DNS lookup
         sock = socket.create_connection((self._ip, PORT), self.timeout)
+        self._raw = sock
         try:
             self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
         except BaseException:
@@ -250,6 +258,10 @@ def _context():
     if _CONTEXT is None:
         ctx = ssl.create_default_context()
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.verify_mode = ssl.CERT_REQUIRED     # create_default_context's defaults, stated so they can't drift
+        ctx.check_hostname = True
+        if hasattr(ctx, "keylog_filename"):
+            ctx.keylog_filename = None          # never write TLS secrets where SSLKEYLOGFILE points
         _CONTEXT = ctx
     return _CONTEXT
 
@@ -365,9 +377,7 @@ class Net:
         if left <= 0:
             raise Timeout(f"{host} took too long to answer.")
         conn = self.connect(host, ip, min(self.connect_s, left))
-        timer = threading.Timer(left, _kill, (conn,))
-        timer.daemon = True
-        timer.start()
+        timer = _Watchdog(conn, left)
         try:
             conn.putrequest("GET", target, skip_accept_encoding=True)
             for k, v in (("User-Agent", user_agent()), ("Accept", ACCEPT), ("Accept-Encoding", "gzip"),
@@ -452,14 +462,39 @@ class Net:
         return bytes(out), False
 
 
+class _Watchdog:
+    """The deadline: at `left` seconds it shuts the connection's socket so a blocked read returns. A server that
+    stalls the TCP connect or the TLS handshake past the deadline would otherwise leave no socket to shut (http.client
+    sets conn.sock only after the handshake) and then trickle the answer forever: so the socket being set up is shut
+    too, and the watchdog keeps checking until there is a socket to shut or the request has ended."""
+
+    def __init__(self, conn, left):
+        self.conn, self.done = conn, threading.Event()
+        t = threading.Thread(target=self._run, args=(max(0.0, left),), name="callsheet-net-deadline", daemon=True)
+        t.start()
+
+    def _run(self, left):
+        if self.done.wait(left):
+            return
+        while not _kill(self.conn):
+            if self.done.wait(0.05):
+                return
+
+    def cancel(self):
+        self.done.set()
+
+
 def _kill(conn):
-    """The deadline watchdog: shut the socket so a blocked read returns."""
+    """Shut the connection's socket (and the one in its TLS handshake). True once the connection's socket was shut."""
+    raw = getattr(conn, "_raw", None)
     sock = getattr(conn, "sock", None)
-    if sock is not None:
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+    for s in (raw, sock):
+        if s is not None:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+    return sock is not None
 
 
 def _retry_after(value, now, longest=24 * 3600):

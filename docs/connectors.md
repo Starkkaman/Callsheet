@@ -108,6 +108,35 @@ date in the future becomes "now". `inject.item_instructions` flags items that re
 mark "Reads like instructions · shown as text" and get no link. The page renders everything with textContent and
 checks each link again (`cnLink`). The connector's name is the owner's label.
 
+## Security notes
+
+Reviewed 2026-11-05, item by item in `tests/test_net_security_0100.py` (with `test_connectors_0100.py`):
+- **Add-on network.** `config.yaml` has no `host_network` (and no `ports`: Ingress only), so Callsheet runs on Home
+  Assistant's internal bridge network (`hassio`, 172.30.32.0/23) and reaches the internet through the host's NAT,
+  which also routes to the owner's LAN. The private-range blocking below is what keeps a feed name off the Supervisor
+  (172.30.32.2), the other add-ons, the Docker bridges (172.16/12) and the LAN (10/8, 172.16/12, 192.168/16, ULA,
+  link-local). If `host_network: true` is ever set, the same blocking also guards the host's own loopback services:
+  keep it, and keep this note true (a test reads `config.yaml`).
+- **Addresses** (checked after DNS, every answer, every hop): loopback, unspecified, RFC 1918, CGNAT, link-local
+  (incl. 169.254.169.254 and fd00:ec2::254), ULA, multicast, broadcast, reserved and documentation ranges, and the
+  IPv4-mapped, IPv4-compatible, 6to4 and NAT64 (64:ff9b::/96, 64:ff9b:1::/48) forms of those, plus Teredo. Number
+  hosts (decimal, octal, hex, short forms, bracketed IPv6) are refused before DNS.
+- **Names** are compared as lowercase IDNA A-labels without the trailing dot, so a homograph is another host. User
+  names, backslashes, percent-encoded or full-width dots, ports other than 443, `http:`, whitespace and control
+  characters are refused; the fragment is never sent; non-ASCII in the path or query is sent percent-encoded.
+- **Transport**: `http.client` only, never a urllib opener, so `HTTP(S)_PROXY`, `ALL_PROXY` and `NO_PROXY` are not
+  read; TLS 1.2+, `CERT_REQUIRED` and `check_hostname`; `SSLKEYLOGFILE` ignored; the socket is dialled to the checked
+  address (no second lookup) with SNI and Host set to the name; no cookie jar, no Referer, a fixed User-Agent.
+- **Time**: the 15 s deadline holds even when a server stalls the TCP connect or the TLS handshake (the watchdog
+  shuts the socket being set up and keeps watching until the request ends; fixed in this review, before it a
+  deadline that fell inside the handshake left nothing to shut and a header drip could run on).
+- **Payloads**: only gzip is asked for and accepted (any other `Content-Encoding` is refused) and it is inflated in
+  bounded steps up to the cap; DOCTYPE/ENTITY refused (billion laughs, XXE). Feed text that reaches Chat goes through
+  `chat.data_block` (`<` and `>` escaped), so a CDATA `</data>` stays text and can't close the block.
+- **Left as is**: Python's IDNA codec is IDNA 2003 (a few characters such as `ß` map differently from browsers);
+  the host contacted is always the one listed under Places Callsheet contacts. `SSL_CERT_FILE`/`SSL_CERT_DIR` in
+  the image's environment would change the trust store; the Dockerfile sets neither.
+
 ## What to watch for
 
 `interests` (text up to 80 characters, level `always`, `big` or `never`, up to 20). Links are dropped from a topic and
