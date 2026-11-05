@@ -536,6 +536,14 @@ class Index:
                                    f"({', '.join('?' * len(self.TRIAGE_SOURCES))}) AND ts>=?",
                                    list(self.TRIAGE_SOURCES) + [float(min_ts or 0)]).fetchone()[0]
 
+    def body_of(self, source, account, source_id):
+        """0.9.1: one item's stored body (quotes, signatures and hidden HTML text already removed), or None when it
+        isn't indexed (AI sorting's cards read it before asking Gmail)."""
+        with self.lock:
+            r = self.db.execute("SELECT body FROM items WHERE source=? AND account=? AND source_id=?",
+                                (str(source), str(account or ""), str(source_id or ""))).fetchone()
+        return (r["body"] or None) if r else None
+
     def get(self, item_id):
         """One full item (with body and source_id), or None."""
         try:
