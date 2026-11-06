@@ -234,6 +234,16 @@ _STEER_T = (
     r"(?:at|on)\s+(?:the\s+)?top\b",
     r"\b(?:note|message|instruction)\s+(?:from|by)\s+(?:the\s+owner|" + _N + r")\b",
     r"\b(?:the\s+owner|" + _N + r")['\u2019]s\s+(?:own\s+)?(?:note|notes|instructions?)\s*:",
+    # 0.13.0 (coordinator): the list's position or an assistant, in ordinary words ("top of your list" is a person's)
+    r"\btop\s+of\s+the\s+(?:list|brief|digest|feed|picks|summary|results|rundown|page|news)\b",
+    r"\bmake\s+sure\s+(?:the\s+owner|you|he|she|they|" + _N + r")\s+(?:sees?|reads?|gets?)\s+(?:this|it)\s+(?:first|"
+    r"before\s+(?:anything|everything|the\s+others))",
+    r"\bpin\s+(?:this|it)(?:\s+(?:item|story|post|one))?\s*(?:[.!?]|$|to\s+the\s+top|on\s+top|first)",
+    r"\b(?:move|bump|push|boost)\s+(?:this|it)(?:\s+(?:item|story|post|one))?\s+up\b(?!\s+(?:to|by|a)\b)",
+    r"\b(?:top|highest|high)\s+priority\s+for\s+(?:your|the)\s+(?:assistant|ai|bot|sorter|filters?|model|reader)\b",
+    r"\b(?:assistants?|ai|bots?|models?)\s+reading\s+this\b",
+    r"\b(?:ai(?:\s+assistant)?|assistant|bot|sorter|model)\s*[:,]\s*(?:this|it|show|list|rank|pick|put|feature|pin|"
+    r"move)\b",
     r"\b(?:the\s+owner|" + _N + r")\s+told\s+(?:you|us|me)\b[^.!?]{0,40}\b(?:first|on\s+top|at\s+the\s+top|"
     r"interests?)\b",
 )

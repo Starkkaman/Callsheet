@@ -605,6 +605,25 @@ class SteerConditions(Base):
         for p in G.PLANTS:                                         # the plants are all still caught
             self.assertEqual(picker.flags("Weekly picks", G.text(p), OWNER_FIRST)[0], "steer", p)
 
+    def test_2_planted_variants_recall(self):
+        """Ordinary phrasings aimed at an assistant or the list's position, in the body and in the title."""
+        hit = n = steer_n = 0
+        for p in G.PLANTED_STEER:
+            p = G.text(p)
+            for title, body in (("Weekly picks", "Ten stories this week. " + p), ("Weekly picks " + p, "Ten stories.")):
+                n += 1
+                fl, _ = picker.flags(title, body, OWNER_FIRST)
+                hit += fl is not None
+                if fl == "steer":
+                    steer_n += 1
+                    t, x, k = picker.strip_steer(title, body, OWNER_FIRST)
+                    self.assertGreater(k, 0, p)
+                    self.assertIsNone(picker.flags(t, x, OWNER_FIRST)[0], p)   # the model never reads it
+        sys.stderr.write(f"\n  planted steer variants caught: {hit}/{n} ({steer_n} as steer, {hit - steer_n} as "
+                         f"instructions)\n")
+        self.assertGreaterEqual(len(G.PLANTED_STEER), 30)
+        self.assertEqual(hit, n)
+
     def test_2_non_planted_gold_items_keep_every_line(self):
         n = kept = 0
         for g in G.GOLD:

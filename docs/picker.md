@@ -47,7 +47,10 @@ Test lead's conditions (0.13.0, tests `SteerConditions`): the lines are left out
 shows the full title and opens the full message, with the mark. The detector is rules only and narrow: ordinary urgency
 from ordinary senders ("this is urgent, please prioritise", "ASAP", "time-sensitive", "treat this as urgent", "put this
 at the top of your list") is not a steer; `picker_gold.URGENT_CLEAN` (40 lines) must stay at 0 removed, and the
-non-planted gold items keep every line. A steered card is still picked on the rest of its text. "Shown last" ranks only
+non-planted gold items keep every line. Phrasings aimed at an assistant or the list's position ("top of the list",
+"make sure Isaac sees this first", "pin this", "move this up", "highest priority for your assistant", "AI: ...") are
+caught: `picker_gold.PLANTED_STEER` (32 variants, body and title) must all be caught. "Top of your list" (a person's
+to-do list) is left alone; "top of the list" in ordinary text is a known false positive. A steered card is still picked on the rest of its text. "Shown last" ranks only
 inside What you should know: Needs you rows, overrides and their order are never changed, and locked items stay first.
 
 ## More / Less like this
