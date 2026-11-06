@@ -129,10 +129,10 @@ class PayloadTest(unittest.TestCase):
     def test_deep_link_for_both_apps(self):
         self.assertEqual(push.app_slug(), "a1b2c3d4_callsheet")
         p = push.test_payload()
-        self.assertEqual(p["data"]["url"], "/hassio/ingress/a1b2c3d4_callsheet")
-        self.assertEqual(p["data"]["clickAction"], "/hassio/ingress/a1b2c3d4_callsheet")
+        self.assertEqual(p["data"]["url"], "/a1b2c3d4_callsheet")
+        self.assertEqual(p["data"]["clickAction"], "/a1b2c3d4_callsheet")
         with mock.patch.dict(os.environ, {"HOSTNAME": "local-callsheet"}):
-            self.assertEqual(push.ingress_path(), "/hassio/ingress/local_callsheet")
+            self.assertEqual(push.ingress_path(), "/local_callsheet")
         with mock.patch.dict(os.environ, {"HOSTNAME": "devbox"}), mock.patch("platform.node", return_value="devbox"):
             self.assertIsNone(push.ingress_path())
             self.assertNotIn("url", push.test_payload()["data"])
@@ -474,7 +474,7 @@ class ApiTest(PushBase):
         r = self.ok("GET", "/api/push")
         self.assertEqual(r["settings"], push.defaults())
         self.assertTrue(r["available"])
-        self.assertEqual(r["link"], "/hassio/ingress/a1b2c3d4_callsheet")
+        self.assertEqual(r["link"], "/a1b2c3d4_callsheet")
         r = self.enable(max_per_hour=2)
         self.assertEqual(r["settings"]["max_per_hour"], 2)
         self.assertEqual(self.ok("GET", "/api/state")["push"]["targets"], ["mobile_app_iphone"])
@@ -512,8 +512,8 @@ class ApiTest(PushBase):
         self.assertEqual(r["message"], "Sent to 2 phones. Check them.")
         self.assertEqual([s[0] for s in self.ha.sent], ["mobile_app_iphone", "mobile_app_pixel_9a"])
         body = self.ha.sent[0][1]
-        self.assertEqual(body["data"]["url"], "/hassio/ingress/a1b2c3d4_callsheet")
-        self.assertEqual(body["data"]["clickAction"], "/hassio/ingress/a1b2c3d4_callsheet")
+        self.assertEqual(body["data"]["url"], "/a1b2c3d4_callsheet")
+        self.assertEqual(body["data"]["clickAction"], "/a1b2c3d4_callsheet")
         self.assertEqual(r["last_sent"]["kind"], "test")
         self.assertIsNone(r["last_error"])
         self.assertEqual(self.call("GET", "/api/push/test")[0], 405)

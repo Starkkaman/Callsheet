@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.3 (Notifications open Callsheet again)
+
+- Tapping a Callsheet notification opened an error page ("Unable to connect to Home Assistant") since Home Assistant
+  2026.11 moved app pages. Notifications now open Callsheet's page in the sidebar, which works on old and new versions.
+
 ## 0.12.2 (How often the reader shows each part)
 
 Nothing changes on the page. This release helps check the reader on real mail.

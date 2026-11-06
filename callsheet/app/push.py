@@ -14,7 +14,8 @@ most `max_per_hour` alerts in any hour, extras grouped into one "N more urgent m
 
 Notification text is the sender's name and the subject (clipped), never body text; with "Show the subject"
 off (`show_subject`), the sender's name only. Slack alerts say only who wrote. Tapping opens Callsheet's Ingress
-page in the Home Assistant app (`data.url` on iOS, `data.clickAction` on Android, both "/hassio/ingress/<app slug>").
+page in the Home Assistant app (`data.url` on iOS, `data.clickAction` on Android, both "/<app slug>": the app's sidebar panel. 0.12.3: Home Assistant
+2026.11 removed the old "/hassio/ingress/<slug>" page (404), while "/<slug>" opens the app on old and new versions).
 
 Logs counts only. Settings live in the meta key "push", state in "push_state" (store.py).
 """
@@ -119,8 +120,9 @@ def app_slug():
 
 
 def ingress_path():
+    """The app's page in the Home Assistant frontend: its sidebar panel "/<slug>" (works before and after 2026.11)."""
     slug = app_slug()
-    return f"/hassio/ingress/{slug}" if slug else None
+    return f"/{slug}" if slug else None
 
 
 def _clip(text, n):
