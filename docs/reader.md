@@ -52,7 +52,8 @@ item's ids, the sentence enums this item's sentences).
 
 Before anything is sent (`item_of`): `inject.rules_hit` (except the link rule), the sorter's `steer` and the reader's own
 `aimed` rule (sentences addressed to an assistant, AI, bot or Callsheet; "summarise this as", "mark this as paid", "tell
-the owner", "if you are an AI", "new instructions:") run over the subject, attachment names, the whole body including
+the owner", "if you are an AI", "new instructions:"; "tell/let <owner's name> know" only when what is to be told settles
+something: paid, approved, agreed, safe, no action needed; "can you let <owner> know the venue changed?" is read) run over the subject, attachment names, the whole body including
 the signature and quotes, and the earlier messages. A hit means **flagged**: no request; the page shows the subject and
 "Not read: instructions". A link lure alone is read with the `lure` mark; links never reach the model.
 
@@ -101,6 +102,11 @@ After the answer (`parse`, then `check`):
 - meta `reader` (on/off, windows) and `reader_day` (counts, drops, latencies: numbers only).
 
 Logs are counts only.
+
+## The setting
+
+Setup › AI › Read each message: On (the default) or Off (`PATCH api/reading/settings` `{"on": bool}`, meta `reader`).
+Off sends no reader requests and the rows keep the sorting's reason. Reading also needs sorting to be on.
 
 ## The page
 

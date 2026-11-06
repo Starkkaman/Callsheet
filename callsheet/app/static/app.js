@@ -3443,6 +3443,7 @@
     ['ai', null, 'People', '[data-fk="pp-open"]', 'same person merge', ['people']],
     ['ai', null, 'Writing style', '[data-fk="ai-style"]', 'profile tone', ['active_profile']],
     ['ai', null, 'AI sorting', '#sr-st', 'sorting sort labels shadow week on off promos updates needs you', ['sorting.mode']],
+    ['ai', null, 'Read each message', '#rd-st', 'reader reading what this is why you summary gist', []],
     ['ai', null, 'Sorting model, items a day and night reading', '[data-fk="sr-adv"]', 'sorting gemma model limit backfill night days back', ['sorting.model', 'sorting.day_cards', 'sorting.backfill']],
     ['ai', null, 'Local model health', '#sr-st', 'unhealthy check again server broken garbage', []],
     ['ai', null, 'Check the sorting', '[data-fk="sr-check-open"]', 'sorting right wrong labels numbers copy', []],
@@ -4787,7 +4788,26 @@
     var check = off ? null : h('div', { class: 'lrow srcheck-l' }, [
       h('span', null, [h('b', null, 'Check the sorting'), h('span', { class: 'muted' }, ' · ' + (c.done || 0) + ' of ' + (c.per_day || 10) + ' today')]),
       btn('btn sm', 'Open', { 'data-fk': 'sr-check-open', 'aria-label': 'Open Check the sorting' }, function () { location.hash = 'sorting'; })]);
-    return h('div', { class: 'where aisort' }, [lmHealth(v), sortSettings(v), check, off ? null : srLearned(v)]);
+    return h('div', { class: 'where aisort' }, [lmHealth(v), sortSettings(v), off ? null : rdSettings(v), check, off ? null : srLearned(v)]);
+  }
+  /* 0.12.0: Setup › AI › Read each message (On by default). Off: no reader requests; rows keep the sorting's reason. */
+  var RD_NOTE = { on: 'Your local model reads each message Callsheet shows you and says what it is and why it’s for you.',
+    off: 'Rows show the sorting’s reason instead.' };
+  function rdSettings(v) {
+    var rd = v.reading || {}, on = rd.setting !== false, t = rd.today || {}, err = errBox();
+    var seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': 'rd-st' }, [[true, 'On'], [false, 'Off']].map(function (m) {
+      var k = m[0] ? 'on' : 'off';
+      return btn('', m[1], { role: 'radio', 'aria-checked': String(on === m[0]), 'data-fk': 'rd-' + k }, function () {
+        if (on === m[0]) return;
+        run([].slice.call(seg.querySelectorAll('button')), err, function () { return api('PATCH', 'api/reading/settings', { on: m[0] }); },
+          function (r) { srAfter(r, '[data-fk="rd-' + k + '"]'); });
+      });
+    }));
+    var line = !on ? null : v.settings.mode !== 'on' ? 'Starts when sorting is on.'
+      : plural(t.read || 0, 'message', 'messages') + ' read today · ' + (rd.waiting || 0) + ' waiting';
+    return h('section', { class: 'srsec rdset', 'aria-labelledby': 'rd-st' }, [
+      h('h2', { class: 'h3', id: 'rd-st', tabindex: '-1' }, 'Read each message'), seg, h('p', { class: 'muted rdhow' }, RD_NOTE[on ? 'on' : 'off']) /* one sentence: not folded under Sorting's "?" */, err,
+      line ? h('p', { class: 'muted srstat' }, line) : null]);
   }
   /* the brief (only when sorting is on: B.sorting is absent otherwise) */
   function srRow(r) { return B && B.sorting && B.sorting.on && B.sorting.rows ? B.sorting.rows[r.id] || null : null; }

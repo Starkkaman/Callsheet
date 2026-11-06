@@ -21,6 +21,8 @@ sorting, and never sends anything.
   dropped, and links never reach the model.
 - **Not read yet** shows until the reader gets to a message. It reads within the sorting's limits, waits while you
   use Chat, stays off the shared server at the times other work runs there, and backs off when the server is full.
+- **On or off.** Setup › AI › Read each message. It is on; turn it off and the rows show the sorting's reason as
+  before. A message asking you to pass something on ("can you let … know the venue changed?") is read as usual.
 - **Your data stays here.** The results are kept 7 days in Callsheet's own database; the waiting list keeps only
   references; logs keep counts only.
 

@@ -304,7 +304,8 @@ class App:
                 # 0.8.5 server faults: "Check again" runs the local model's health probe now
                 ("POST", r"sorting/model-check", self.sorting_model_check),
                 # 0.9.1: the one-time "Callsheet now sorts with AI" notice, dismissed
-                ("POST", r"sorting/notice", self.sorting_notice)]
+                ("POST", r"sorting/notice", self.sorting_notice),
+                ("PATCH", r"reading/settings", self.reading_settings)]
 
     @staticmethod
     def _srt(fn, *args):
@@ -324,6 +325,13 @@ class App:
 
     def sorting_settings(self, body):
         return self._srt(self.sorter.update_settings, body)
+
+    def reading_settings(self, body):
+        """0.12.0: Setup › AI › Read each message (On/Off). Off: no reader requests; rows keep the rules' reason."""
+        if not isinstance(body, dict) or not isinstance(body.get("on"), bool) or set(body) != {"on"}:
+            raise InputError("Send {\"on\": true} or {\"on\": false}.")
+        self.reader.set_on(body["on"])
+        return self.sorting_view()
 
     def sorting_check(self, body):
         body = body if isinstance(body, dict) else {}
