@@ -483,6 +483,15 @@ class Folder:
         finally:
             os.close(fd)
 
+    @staticmethod
+    def digest(raw):
+        return _sha(raw)
+
+    @staticmethod
+    def same(old, f):
+        """Already seen: the same size and file time as the row Callsheet kept."""
+        return old is not None and old["size"] == f["size"] and old["mtime_ns"] == f["mtime_ns"]
+
 
 def _sha(b):
     return hashlib.sha256(b).hexdigest()
@@ -498,8 +507,20 @@ class Reports:
     tells = TELLS
     schema = _SCHEMA
 
-    def __init__(self, wall=time.time):
+    def __init__(self, wall=time.time, access=None):
         self.wall = wall    # file times are real times (tests move them, not this)
+        # 0.11.2 Drive folders (conn_reports_drive.py): the owner's Google accounts (tests pass a fake), and what the
+        # previous look at each Drive source saw (a young file is read once it looked the same twice)
+        self.access = access
+        self.drive_seen = {}
+
+    def _access(self, conns):
+        import conn_reports_drive as D
+        return self.access(conns) if self.access else D.access(conns)
+
+    @staticmethod
+    def is_drive(cfg):
+        return cfg.get("where") == "drive"
 
     # Setup -----------------------------------------------------------------------------------------------------
     @staticmethod
@@ -507,14 +528,22 @@ class Reports:
         return cfg.get("folder", "")
 
     def key(self, cfg):
+        if self.is_drive(cfg):      # 0.11.2: a Drive source is the account and the folder id
+            return "drive:" + str(cfg.get("account")) + ":" + str(cfg.get("folder_id"))
         return cfg.get("folder")
 
     def hostline(self, folder, every_s):
         return (f"Callsheet will read the report files in {folder} {C.every_label(every_s)}. "
                 "It never changes or deletes them.")
 
-    def check(self, ctx, address, via=None):
-        """The owner's Check: the folder's report files as they are now (nothing is recorded)."""
+    def check(self, ctx, address, via=None, where=None, account=None):
+        """The owner's Check: the folder's report files as they are now (nothing is recorded). 0.11.2: where="drive"
+        with the account id and the Drive folder id as the address (conn_reports_drive.py)."""
+        if where == "drive":
+            import conn_reports_drive as D
+            return D.check_draft(ctx.c, self._access(ctx.c), account, address, ctx.c.clock(), self.wall())
+        if where not in (None, "", "folder"):
+            raise InputError("Choose a folder on this box or a Google Drive folder.")
         real = check_folder(address)
         shown = os.path.normpath(address.strip())
         now = ctx.c.clock()
@@ -565,13 +594,21 @@ class Reports:
                  json.dumps(meta or {}, ensure_ascii=False)))
 
     def forget(self, store, cid):
+        self.drive_seen.pop(cid, None)
         with store.lock:
             store.db.execute("DELETE FROM report_files WHERE connector=?", (cid,))
 
     def read(self, conns, r):
         """One look at the folder: new and edited report files into the index. Returns (new, state changes)."""
-        store, index, now = conns.store, conns.index, conns.clock()
         cid, cfg = r["id"], conns._cfg(r)
+        if self.is_drive(cfg):      # 0.11.2: a Drive folder, read through google.py's allowlist
+            import conn_reports_drive as D
+            try:
+                fo = D.DriveFolder(self._access(conns), cfg.get("account"), str(cfg.get("folder_id") or ""),
+                                   self.drive_seen.setdefault(cid, {}))
+            except D.Trouble as e:
+                return 0, {"error": str(e)}
+            return self._look(conns, r, fo, D.Trouble)
         try:
             real = check_folder(cfg.get("shown") or cfg.get("folder") or "")
         except InputError as e:
@@ -582,6 +619,14 @@ class Reports:
             fo = Folder(real)
         except OSError:
             return 0, {"error": "Callsheet can't read the folder."}
+        return self._look(conns, r, fo, ())
+
+    def _look(self, conns, r, fo, trouble):
+        """The reading both folder kinds share: `fo` lists (entries), reads one file (read: bytes, None = later, or
+        Bad), says whether a file was seen already (same) and fingerprints it (digest). `trouble`: the exception that
+        stops a look (Google can't be asked now; () for a local folder); what was read before it is kept."""
+        store, index, now = conns.store, conns.index, conns.clock()
+        cid = r["id"]
         rows = self._rows(store, cid)
         have = set()
         if index is not None:
@@ -592,12 +637,13 @@ class Reports:
         day = sum(1 for x in rows.values() if x["status"] == "ok" and x["seen"] >= now - 86400)
         new = restored = later = 0
         out = []
+        files, skipped, stop = [], [], None
         try:
             files, skipped = fo.entries(self.wall())
             todo = []
             for f in files:
                 old = rows.get(f["name"])
-                same = old is not None and old["size"] == f["size"] and old["mtime_ns"] == f["mtime_ns"]
+                same = fo.same(old, f)
                 if same and (old["status"] != "ok" or old["item"] in have or old["seen"] < keep_since):
                     continue
                 if f["young"]:
@@ -606,16 +652,20 @@ class Reports:
                 todo.append((f, old, same))
             todo.sort(key=lambda x: x[0]["mtime_ns"])
             later += max(0, len(todo) - MAX_NEW)
-            for f, old, same in todo[:MAX_NEW]:
+            for n, (f, old, same) in enumerate(todo[:MAX_NEW]):
                 try:
                     raw = fo.read(f)
                 except Bad as e:
                     self._put(store, cid, f, "", now, "bad", str(e))
                     continue
+                except trouble as e:
+                    stop = str(e)
+                    later += len(todo[:MAX_NEW]) - n
+                    break
                 if raw is None:
                     later += 1
                     continue
-                h = _sha(raw)
+                h = fo.digest(raw)
                 if old is not None and old["hash"] == h and old["status"] == "ok" and old["item"] in have:
                     self._put(store, cid, f, h, old["seen"], "ok", "", old["item"], json.loads(old["meta"] or "{}"))
                     continue
@@ -654,6 +704,8 @@ class Reports:
                 else:
                     new += 1
                     day += 1
+        except trouble as e:            # the listing itself failed: nothing was read
+            stop = str(e)
         finally:
             fo.close()
         for name, why in skipped:
@@ -669,8 +721,8 @@ class Reports:
             conns._prune(self.kind, cid)
         self._trim(store, cid)
         conns.log(f"Callsheet reports: {cid} {len(files)} files, {new} new, {restored} restored, {later} later, "
-                  f"{len(skipped)} skipped")
-        return new, {"error": None, "later": later}
+                  f"{len(skipped)} skipped" + (", stopped" if stop else ""))
+        return new, {"error": stop, "later": later}
 
     def _trim(self, store, cid):
         with store.lock:
@@ -687,9 +739,17 @@ class Reports:
                 "LIMIT ?", (r["id"], SHOW_MAX)).fetchall()
         shown = cfg.get("shown") or cfg.get("folder") or ""
         tell = cfg.get("tell") if cfg.get("tell") in dict(TELLS) else "important"
-        out.update(folder=shown, tell=tell, tell_label=dict(TELLS)[tell], tells=[list(x) for x in TELLS],
+        if self.is_drive(cfg):      # 0.11.2
+            import conn_reports_drive as D
+            email = str(cfg.get("email") or "")
+            ins, where = D.instruction(shown, email, r["label"]), D.shown(shown, email)
+            out.update(where="drive", email=email)
+        else:
+            ins, where = instruction(shown, r["label"]), shown
+            out.update(where="folder")
+        out.update(folder=where, tell=tell, tell_label=dict(TELLS)[tell], tells=[list(x) for x in TELLS],
                    unreadable=[{"name": shown_name(x["name"]), "why": x["why"]} for x in bad],
-                   instruction=instruction(shown, r["label"]), host="", hosts=[], every="every 15 minutes")
+                   instruction=ins, host="", hosts=[], every="every 15 minutes")
         return out
 
     # the Briefing ----------------------------------------------------------------------------------------------

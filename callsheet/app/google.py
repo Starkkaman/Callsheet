@@ -4,7 +4,8 @@ Read-only by construction: every request goes through `request()`, which checks 
 explicit allowlist of (method, URL prefix) pairs. Gmail and Calendar are GET only; the only POSTs
 go to the OAuth token and revoke endpoints. 0.6.0 (Know me index): GET only to Drive's files.list
 (`/drive/v3/files`), files.get (`/drive/v3/files/<id>`, metadata or alt=media for plain text) and
-files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately. Anything else raises NotAllowed before any network I/O.
+files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately (0.11.2: the
+Reports Drive folders read through the same three). Anything else raises NotAllowed before any network I/O.
 Redirects are not followed.
 
 Base URLs can be overridden by env for tests only: CALLSHEET_GOOGLE_AUTH_BASE,
@@ -333,8 +334,8 @@ def calendar_events_page(token, calendar_id, time_min, time_max, page_token=None
                    params=params)
 
 
-def drive_files(token, q, page_token=None, page_size=100, fields=None):
-    params = {"q": q, "pageSize": page_size, "orderBy": "modifiedTime desc", "spaces": "drive",
+def drive_files(token, q, page_token=None, page_size=100, fields=None, order_by="modifiedTime desc"):
+    params = {"q": q, "pageSize": page_size, "orderBy": order_by, "spaces": "drive",
               "includeItemsFromAllDrives": "true", "supportsAllDrives": "true", "corpora": "allDrives",
               "fields": fields or "nextPageToken,files(id,name,mimeType,modifiedTime,owners(displayName,emailAddress),"
                                   "webViewLink,size)"}
@@ -349,6 +350,19 @@ def drive_export(token, file_id, mime):
                         params={"mimeType": mime})
 
 
+def drive_file(token, file_id, fields):
+    """0.11.2 Reports from Drive: one file's or folder's metadata (files.get, JSON). A GET under /drive/v3/files/."""
+    return request("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
+                   params={"fields": fields, "supportsAllDrives": "true"})
+
+
+def drive_media_bytes(token, file_id, limit):
+    """0.11.2 Reports from Drive: a file's bytes (files.get alt=media), at most limit + 1 read (the caller refuses a
+    longer one). The same endpoint and allowlist as drive_media; bytes so the caller decides what is text."""
+    return _request_body("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
+                         params={"alt": "media", "supportsAllDrives": "true"}, limit=limit + 1)
+
+
 def drive_media(token, file_id):
     """Content of a small plain-text file (files.get alt=media). Returns str."""
     return request_text("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
@@ -361,6 +375,11 @@ MAX_TEXT_BYTES = 2_000_000
 def request_text(method, url, params=None, token=None):
     """Like request() for a text body (Drive export/media): the same allowlist and errors; at most MAX_TEXT_BYTES
     are read."""
+    return _request_body(method, url, params, token).decode("utf-8", "replace")
+
+
+def _request_body(method, url, params=None, token=None, limit=MAX_TEXT_BYTES):
+    """The raw body of one allowlisted request (at most `limit` bytes are read)."""
     if params:
         url = url + "?" + urllib.parse.urlencode(params, doseq=True)
     check_allowed(method, url)
@@ -369,7 +388,7 @@ def request_text(method, url, params=None, token=None):
         req.add_header("Authorization", "Bearer " + token)
     try:
         with _opener.open(req, timeout=TIMEOUT) as resp:
-            body = resp.read(MAX_TEXT_BYTES)
+            body = resp.read(limit)
     except urllib.error.HTTPError as e:
         try:
             payload = json.loads(e.read() or b"{}")
@@ -389,4 +408,4 @@ def request_text(method, url, params=None, token=None):
         if isinstance(reason, TimeoutError) or "timed out" in str(reason):
             raise GoogleError("Google didn't answer in time.") from None
         raise GoogleError("Couldn't reach Google. Check the internet connection.") from None
-    return body.decode("utf-8", "replace")
+    return body
