@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.14.0 (Chat can search the web)
+
+- **Web search in Chat.** When a question needs the web, Chat searches it by itself through your own SearXNG on
+  your home network, reads up to two of the pages it finds, and answers with the sites as sources (title and site
+  name). A quiet line under the answer says what it searched for. There is no button to press.
+- **Only your words go out.** Chat searches straight away only when every word of the search is a word you wrote in
+  that chat. When a search would include anything else (words from your mail, a feed or a web page, an email
+  address, a phone number, an amount, an order or account number, a long number, a web address or the name of
+  someone you know), Chat asks first: "Search the web for '…'?" with exactly the words it would send. Reply yes to
+  search those words, or write other words.
+- **Set it up** in Setup › AI › Web search: paste your SearXNG address (like http://192.168.10.157:30053), press
+  Check, and turn it on. Off means Chat doesn't search at all.
+- **Limits.** At most 3 searches and 2 pages per question, and a daily limit. When SearXNG is busy (too many
+  searches, or its search engines ask for a CAPTCHA), Chat says "Web search is busy, try again in a few minutes"
+  and waits before searching again.
+- **Safe with web pages.** Search results and pages are treated as untrusted text: pages are read as plain text,
+  instructions planted in them are marked and never followed, Chat never opens an address the model writes or one
+  from your mail, and a page that moved to another site isn't followed. Sites Chat opens see your Home Assistant
+  box's internet address, nothing else (see PRIVACY.md).
+
 ## 0.12.3 (Notifications open Callsheet again)
 
 - Tapping a Callsheet notification opened an error page ("Unable to connect to Home Assistant") since Home Assistant

@@ -3317,7 +3317,7 @@
   }
 
   /* ----- AI: who writes, Careful or Fast in plain words, chat, memory and people, writing style (and Sorting) ----- */
-  function placeAI() { return [writerBlock('ai'), aiChat(), memoryBlock('ai'), aiStyle(), sortingSlot()]; }
+  function placeAI() { return [writerBlock('ai'), aiChat(), aiWeb(), memoryBlock('ai'), aiStyle(), sortingSlot()]; }
   /* AI › Sorting: the 0.8.4 sorting settings, the 0.8.5 health line and What it learned, and the Check the sorting link
      (sortingBlock, in the 0.8.4 AI sorting block) */
   function sortingSlot() { return sortingBlock(); }
@@ -3329,6 +3329,57 @@
     return h('section', { class: 'where', 'aria-labelledby': 'ai-chat-h' }, [h('h2', { class: 'h3', id: 'ai-chat-h' }, 'Chat'),
       h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, 'Chat tab on this device')]),
       h('p', { class: 'note' }, 'Ask about your own mail, calendar and notes. It reads only; its engine is in Advanced.')]);
+  }
+  /* ---------- 0.14.0 Setup › AI › Web search: the owner's SearXNG (GET/PATCH api/web-search, POST api/web-search/check).
+     Check saves a new address (with today's date, the approval record) and asks SearXNG once for "test". ---------- */
+  var WS = { v: null, at: 0, loading: false, err: null, res: null, draft: null };
+  var WS_EG = 'http://192.168.10.157:30053';
+  function wsLoad() {
+    WS.loading = true;
+    api('GET', 'api/web-search').then(function (v) { WS.v = v; WS.err = null; }, function (e) { WS.err = e.message; })
+      .then(function () {
+        WS.loading = false; WS.at = Date.now();
+        if (!inPlace('ai')) return;
+        var ae = document.activeElement, fk = ae && ae.getAttribute && ae.getAttribute('data-fk');
+        renderSetup(fk ? '[data-fk="' + cssq(fk) + '"]' : null);
+      });
+  }
+  function fmtDay(d) {
+    if (!d) return '';
+    var x = new Date(d + 'T12:00:00Z');
+    return isNaN(x.getTime()) ? d : x.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  }
+  function aiWeb() {
+    if (!WS.loading && (!WS.at || Date.now() - WS.at > 60000)) wsLoad();
+    var v = WS.v, head = h('h2', { class: 'h3', id: 'ai-web-h', tabindex: '-1' }, 'Web search');
+    if (!v) return h('section', { class: 'where aiweb', 'aria-labelledby': 'ai-web-h' }, [head,
+      WS.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load web search (' + WS.err + ').') : h('p', { class: 'muted' }, 'Loading…')]);
+    var err = errBox();
+    var url = h('input', { class: 'inp', type: 'url', id: 'ws-url', value: WS.draft != null ? WS.draft : (v.base_url || ''), placeholder: WS_EG,
+      autocomplete: 'off', spellcheck: 'false', 'data-fk': 'ws-url' });
+    on(url, 'input', function () { WS.draft = url.value; });
+    var check = btn('btn sm', 'Check', { 'data-fk': 'ws-check' }, function () {
+      var val = url.value.trim();
+      run([check, s], err, function () {
+        var first = val !== (v.base_url || '') ? api('PATCH', 'api/web-search', val ? { base_url: val, on: true } : { base_url: '' }) : Promise.resolve(null);
+        return first.then(function () { return val ? api('POST', 'api/web-search/check') : api('GET', 'api/web-search'); });
+      }, function (r) { WS.v = r; WS.res = r.result || null; WS.draft = null; renderSetup('[data-fk="ws-check"]'); });
+    });
+    var s = sw(v.on, 'Web search', function () {
+      run([check, s], err, function () { return api('PATCH', 'api/web-search', { on: !v.on }); },
+        function (r) { WS.v = r; renderSetup('[data-fk="ws-on"]'); });
+    });
+    s.setAttribute('data-fk', 'ws-on');
+    if (!v.base_url) s.disabled = true;
+    var res = WS.res, meta = [];
+    if (v.added) meta.push('Added ' + fmtDay(v.added));
+    if (res) meta.push(res.text);
+    else if (v.checked) meta.push(v.check_ok ? 'Checked ' + fmtDay(v.checked) : 'The last Check didn’t work');
+    return h('section', { class: 'where aiweb', 'aria-labelledby': 'ai-web-h' }, [head,
+      h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, v.on ? 'Chat can search the web' : 'Off')]),
+      h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ws-url' }, 'Your SearXNG address'), h('div', { class: 'inrow wsrow' }, [url, check])]),
+      meta.length ? h('p', { class: 'muted wsmeta' + (res && !res.ok ? ' bad' : ''), role: 'status' }, meta.join(' · ')) : null, err,
+      h('p', { class: 'note' }, 'Chat searches only with words you wrote, and asks first when a search would include anything else.')]);
   }
   function aiStyle() {
     var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
@@ -3438,6 +3489,7 @@
     ['ai', null, 'Check-ins: Careful or Fast', '[data-fk="wp-c:fast"]', 'preset check-ins refresh', ['call_presets']],
     ['ai', null, 'Suggest replies', '[data-fk="w-sug"]', 'drafts', ['suggest_replies']],
     ['ai', null, 'Chat', '[data-fk="ai-chat"]', 'chat tab ask', []],
+    ['ai', null, 'Web search', '#ai-web-h', 'web search searxng internet online look up', []],
     ['ai', null, 'Memory', '#mem-h', 'notes remember', ['memory']],
     ['ai', null, 'Get to know me', '[data-fk="kn-open"]', 'know me profile scan index', []],
     ['ai', null, 'People', '[data-fk="pp-open"]', 'same person merge', ['people']],
@@ -5750,6 +5802,14 @@
       /* 0.8.4: the mail's HTML had text a reader wouldn't see (dropped before indexing) */
       s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
   }
+  /* 0.14.0: a web source: its title and host as text (never a link: Callsheet doesn't open sites for you) */
+  function webChip(s) {
+    var instr = s.instructions === true;
+    return h('span', { class: 'schip wchip' + (instr ? ' instr' : ''), title: (s.title || '') + ' · ' + (s.host || ''),
+      'aria-label': 'Web page: ' + (s.title || '') + ', ' + (s.host || '') + (instr ? ', contains instructions' : '') }, [
+      h('span', { class: 'wt' }, s.title || s.host || 'Web page'), h('small', { class: 'wh' }, s.host || ''),
+      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null]);
+  }
   function chatAnswer(m, i) {
     var kids = [wlLabel('idle', m.by)];   /* 0.11.1: Wheatley, with the Lens */
     if (m.error) {
@@ -5764,7 +5824,12 @@
       if (m.warning) kids.push(h('p', { class: 'err sugwarn' }, m.warning));
       if (m.instr_warning) kids.push(h('p', { class: 'err sugwarn instrwarn' }, m.instr_warning));  /* 0.6.0: repeats a planted instruction */
       String(m.text || '').split(/\n{2,}/).forEach(function (p) { if (p.trim()) kids.push(h('p', null, p.trim())); });
+      /* 0.14.0: the ask-first question is a plain message; the reason is one quiet line (the owner just replies) */
+      if (m.web_ask && m.web_ask.why) kids.push(h('p', { class: 'cwhy' }, m.web_ask.why + ' Reply yes to search, or write other words.'));
       if (m.sources && m.sources.length) kids.push(h('div', { class: 'from' }, [h('span', { class: 'label' }, 'From'), m.sources.map(chatChip)]));
+      var wq = (m.web && m.web.queries) || [];
+      if (wq.length) kids.push(h('p', { class: 'cweb' }, [ico('search'), h('span', null, 'Searched the web for ' + wq.map(function (q) { return '‘' + q + '’'; }).join(', '))]));
+      if (m.web_sources && m.web_sources.length) kids.push(h('div', { class: 'from wfrom' }, [h('span', { class: 'label' }, 'Web'), m.web_sources.map(webChip)]));
     }
     if (m.proposal) kids.push(chatCard(m, i));  /* 0.8.1 Remember: the Save card (also after a failed answer) */
     if (m.setup) kids.push(scCard(m, i));       /* 0.11.1: the setup card */

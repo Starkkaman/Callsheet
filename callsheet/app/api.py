@@ -37,6 +37,7 @@ import triage                        # 0.8.4 AI sorting
 import reader as reader_mod          # 0.12.0 reader
 import connectors as connectors_mod  # 0.10.0 connectors
 import net                           # 0.10.0 connectors
+import websearch                     # 0.14.0 web search (the owner's SearXNG)
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -45,7 +46,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.12.3"
+APP_VERSION = "0.14.0"
 
 
 class MethodNotAllowed(Exception):
@@ -185,6 +186,9 @@ class App:
         self.routes += self._people_routes()  # 0.8.2 people
         self.routes += self._sorting_routes()  # 0.8.4 AI sorting
         self.routes += self._connector_routes()  # 0.10.0 connectors (0.11.1: Chat's setup cards use the same endpoints)
+        self.routes += [("GET", r"web-search", self.web_search),            # 0.14.0 Setup → AI → Web search
+                        ("PATCH", r"web-search", self.patch_web_search),
+                        ("POST", r"web-search/check", self.web_search_check)]
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -273,6 +277,21 @@ class App:
         net.set_version(APP_VERSION)
         self.connectors = connectors_mod.Connectors(self.store, self.index, clock=self.clock)
         self.chat.connectors = self.connectors  # 0.11.1: setup cards (allowed hosts for the "new site" note)
+        # 0.14.0 web search (owner approved 2026-11-06): Chat only; result pages go through the connectors' Net
+        self.web = websearch.Web(self.store, net_=self.connectors.net, clock=self.clock)
+        self.chat.web = self.web
+
+    # --- 0.14.0 web search: Setup → AI → Web search (the SearXNG address, On, the owner's Check) -----------------
+    def web_search(self, _body=None):
+        return websearch.public(self.store, self.web.today())
+
+    def patch_web_search(self, body):
+        return websearch.update(self.store, _obj(body), self.web.today())
+
+    def web_search_check(self, _body=None):
+        """The owner's Check: one GET <address>/search?q=test&format=json, then the settings with the outcome."""
+        out = websearch.run_check(self.store, self.web.searx, self.web.today())
+        return dict(websearch.public(self.store, self.web.today()), result=out)
 
     def _connector_routes(self):
         """Setup's connector endpoints. 0.11.1: Check, Add and Remove also serve Chat's setup cards: a body with

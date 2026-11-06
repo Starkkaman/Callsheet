@@ -69,6 +69,19 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   Callsheet runs on Home Assistant's internal bridge network, not your home network directly, and it refuses
   to read any address on your home network, Home Assistant's own network or a cloud metadata address, even when a
   feed's name points there.
+- Web search in Chat (0.14.0, optional, off until you add your SearXNG in Setup → AI → Web search): Chat can
+  search the web through your own SearXNG on your home network (Callsheet asks it only for a search, nothing
+  else on it). The words searched are only words you wrote in that chat; when a
+  search would include anything else (words from your mail or a web page, an email address, a phone number, an
+  amount, an order or account number, a long number, a web address, or a contact's name), Chat first asks "Search
+  the web for '…'?" with the exact words, and searches only after your yes. SearXNG sends those words on to the
+  search engines it uses (for example Brave or Wikipedia).
+  Chat may also open up to two result pages per question (only pages from its search results, never an address
+  from your mail or the model). **This is a new kind of contact: any public website in the results, not only sites
+  you added. Each site Chat opens sees your Home Assistant box's public internet address** and Callsheet's fixed
+  user agent, and nothing else: no cookies, no sign-in, no referrer. Pages are read as text (no images or
+  scripts), at most 1 MB, and are not kept beyond the chat. At most 3 searches and 2 pages per question, and a daily
+  cap; the log keeps counts only, never the words searched. Turn it off in Setup, or remove the address, to stop it.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the
