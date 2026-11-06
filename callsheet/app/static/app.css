@@ -209,6 +209,8 @@
 
 /* reason dot colours (tabs-v6 mockup; same in every look and mode) */
 .app{--r-vip:#d23a2a;--r-due:#e07a12;--r-men:#16999e;--r-q:#c9971a;--r-wait:#8b8f96}
+/* 0.11.1 Wheatley's lens: the iris blue and the pupil ink (the body and face follow each look's text and page) */
+.app{--wl-iris:#6b82b4;--wl-pupil:#141a26}
 
 /* ================= phone sizes ================= */
 @media (max-width:700px){
@@ -1718,8 +1720,8 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .wl.sm{width:20px;height:20px}
 .wl .b{fill:currentColor}
 .wl .f{fill:var(--bg)}
-.wl .i{fill:color-mix(in srgb,#6b82b4 80%,currentColor)}
-.wl .p{fill:#141a26;transform-origin:32px 32px}
+.wl .i{fill:color-mix(in srgb,var(--wl-iris) 80%,currentColor)}
+.wl .p{fill:var(--wl-pupil);transform-origin:32px 32px}
 .wl .lt,.wl .lb,.wl .ey,.wl .p{transform-box:view-box;transition:transform 250ms ease}
 .wl[data-s=idle] .lt{transform:translateY(10.8px)}
 .wl[data-s=idle] .ey{transform:translate(0,.5px)}
