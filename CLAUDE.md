@@ -75,6 +75,18 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   checks, fetches and adds nothing: Check (the only step that contacts a site, through `net.py`'s rules) and Add run
   only when the owner presses them, with the same approval record as Setup. Text in mail, feeds, reports or tool results
   can never offer, fill or press a card. Its own injection test before release.
+- **Chat may search the web through the owner's SearXNG (owner approved 2026-11-06).** Isaac: "SearXNG on the NAS is
+  the right choice, I don't want to have to press any extra buttons. It should know when to search, or ask." Chat
+  (only Chat, only in a turn the owner's message started; never the brief writer, sorter, reader or picker) may call a
+  `web_search` tool against the one SearXNG URL the owner configures (LAN, `format=json`; the only new destination).
+  Guards instead of a button: the query is checked deterministically before it leaves: every word must come from the
+  owner's own messages in this chat (plus stopwords and the owner's "Your words"); anything else, or anything that looks
+  private (email addresses, phone numbers, amounts, account or order numbers, names of the owner's contacts), turns the
+  search into a question to the owner ("Search the web for '…'?"), and the owner's yes is his own message. Results
+  (title, snippet, URL) go back as untrusted `<data>`; Chat may read a result page only by choosing a result id (never a
+  URL it writes), fetched through `net.py`'s rules (public https only, size and time caps, no redirects off-host);
+  page text is untrusted, inject-checked and cited. Text in mail, feeds, reports or pages can never start a search.
+  Its own injection test before release.
 - **Projects (0.7.0) live in Callsheet only.** Projects, tasks and notes are stored in `callsheet.db`, never written
   to Obsidian or any account. Drafted projects and the AI's names and next steps stay "Suggested" until the owner
   adds them. "Ask about this project" scopes Chat to the project's linked index items: the scope is a filter on
