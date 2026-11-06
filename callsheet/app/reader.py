@@ -380,14 +380,25 @@ _AIMED = re.compile(
     r",?\s+you\s+(?:must|should|will)\b", re.I)
 
 
+# what a planted "tell <owner> ..." wants the owner to believe: a status or a decision that settles something
+_TOLD_STATUS = re.compile(
+    r"\b(?:paid|approved|agreed|accepted|signed|authori[sz]ed|handled|resolved|safe|legit(?:imate)?|verified|trusted|"
+    r"cleared|settled|no\s+action|nothing\s+to\s+do|no\s+need|(?:doesn't|does\s+not|don't|do\s+not)\s+need|ignore|"
+    r"disregard)\b", re.I)
+
+
 def aimed(sentence, owner_first=()):
-    """A sentence aimed at the reader of the item rather than its human recipient (the reader's own rule)."""
+    """A sentence aimed at the reader of the item rather than its human recipient (the reader's own rule).
+    "Tell/let <owner> know ..." counts only when what is to be told settles something (paid, approved, agreed, safe,
+    no action needed...): "Can you let Isaac know the venue changed?" is a person's request, not an instruction."""
     s = str(sentence or "")
     if _AIMED.search(s):
         return True
     for n in owner_first or ():
         n = re.escape(str(n))
-        if n and re.search(r"\b(?:tell|inform|notify|remind|let)\s+" + n + r"\b(?:\s+know)?\s+(?:that\s+)?\w", s, re.I):
+        m = re.search(r"\b(?:tell|inform|notify|remind|let)\s+" + n + r"\b(?:\s+know)?\s+(?:that\s+)?(\w.*)", s,
+                      re.I) if n else None
+        if m and _TOLD_STATUS.search(m.group(1)):
             return True
     return False
 
@@ -892,7 +903,7 @@ class Reader:
         def pct(p):
             return round(lat[min(len(lat) - 1, int(round(p * (len(lat) - 1))))], 1) if lat else None
         att = d["valid"] + d["invalid"]
-        return {"on": self.enabled(), "waiting": self.pending(), "today": {k: d[k] for k in (
+        return {"on": self.enabled(), "setting": self.settings()["on"], "waiting": self.pending(), "today": {k: d[k] for k in (
             "items", "read", "flagged", "failed", "invalid", "valid", "context_full")}, "drops": dict(d["drops"]),
             "gpu_s": d["gpu_s"], "p50_s": pct(0.5), "p95_s": pct(0.95),
             "schema_valid": round(d["valid"] / att, 3) if att else None, "last_run": self.last_run}
