@@ -583,6 +583,17 @@ class Load(Base):
         self.assertEqual(lost, 0)
         BARS["context_full_lost"] = lost
 
+    def test_local_timeout_keeps_the_item_queued_and_retries_it(self):
+        """A LocalTimeout (the server didn't answer in time) is never a loss: the item stays queued for the next run."""
+        items = [item(str(i)) for i in range(3)]
+        for s in items:
+            self.reader.enqueue(s, "needs_you")
+        self.rpost.raises = [None, writer.LocalTimeout("slow")]
+        self.assertEqual(self.reader.run_pass(), "server")
+        self.assertEqual(self.reader.pending(), 2)
+        self.assertEqual(self.reader.run_pass(), "done")
+        self.assertEqual(sum(self.reader.get(s["key"]) is None for s in items), 0)
+
     def test_chat_first(self):
         s = item("1")
         self.reader.enqueue(s, "needs_you")
