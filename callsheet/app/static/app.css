@@ -2667,3 +2667,30 @@ html.fa-lock{overflow:hidden}
 .app[data-base=panel] .seg button[aria-checked=true]{background:var(--inset);color:var(--text);box-shadow:inset 0 0 0 1.5px var(--text)}
 .app[data-base=panel] .tb.off .disp{text-decoration-thickness:2px}
 .app[data-base=panel] .act:disabled,.app[data-base=panel] .act[disabled]{background:transparent;color:var(--muted);box-shadow:inset 0 0 0 1px var(--rule)}
+
+/* 0.12.0 reader: "What this is" / "Why you", the labels and the cards from Callsheet's own data. Calm: no new colour,
+   the theme's text, muted and surface tokens only; one line per row in Compact, the why line in Comfortable. */
+.bv .rmain .rdy{display:none}
+.app[data-density=comfortable] .bv .rmain .rdy{display:block;flex:0 0 100%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:var(--fs-sm)}
+.app[data-density=comfortable] .bv .row.sel .rmain .rdy{color:inherit}
+.bv .rmain .mk8.rdflag{flex:none;max-width:none}
+@media (max-width:700px){.bv .rmain .mk8.rdflag{display:inline-flex}}
+.bv .rdwhy{font-size:var(--fs-md)}
+.bv .rdmark{margin:8px 0 0;font-size:var(--fs-sm);font-weight:700;max-width:640px}
+.bv .rdnote{margin:8px 0 0;color:var(--muted);font-size:var(--fs-sm)}
+.bv .rdfacts{margin-top:12px}
+.bv .fact.rdfact{box-shadow:inset 0 0 0 var(--rule-w) var(--rule)}
+.bv .rdcards{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.bv .rdcard{display:grid;gap:2px;min-width:0;padding:8px 12px;border-radius:var(--radius);background:var(--surface-2);overflow-wrap:anywhere}
+.bv .rdk{font-size:var(--fs-xs);font-weight:var(--label-weight);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
+.bv .rdt{font-weight:700;font-size:var(--fs-md)}
+.bv .rds{font-size:var(--fs-sm);color:var(--muted)}
+.bv .rdcards.cmp{display:flex;flex-wrap:wrap;margin:0 0 16px}
+.bv .rdcards.cmp .rdcard{display:flex;align-items:baseline;gap:6px;padding:4px 10px;border-radius:var(--chip-radius)}
+.bv .oatwhy{margin:-8px 0 16px;max-width:60ch;font-size:var(--fs-md)}
+.bv .oatwhy .rdk{display:block;margin-bottom:2px}
+.bv .oatcard .rdmark{margin:0 0 12px}
+.bv .oatcard .rdfacts{margin:0 0 8px}
+.bv .oatcard .fhint{margin:0 0 12px}
+.bv .oatrd{margin:-8px 0 16px}
+.bv .rdoflag{margin:0 0 16px}
