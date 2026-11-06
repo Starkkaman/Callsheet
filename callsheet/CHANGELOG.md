@@ -20,6 +20,33 @@ show up.
   "this is urgent, please prioritise" lines are not touched, and nothing in Needs you moves.
 - It runs after the reader, one request at a time, and waits for Chat. It keeps each answer for 7 days.
 
+## 0.12.3 (Notifications open Callsheet again)
+
+- Tapping a Callsheet notification opened an error page ("Unable to connect to Home Assistant") since Home Assistant
+  2026.11 moved app pages. Notifications now open Callsheet's page in the sidebar, which works on old and new versions.
+
+## 0.12.2 (How often the reader shows each part)
+
+Nothing changes on the page. This release helps check the reader on real mail.
+
+- **Counts per day.** For each part the reader can show (what this is, why you, the due date, the amount, the cards
+  from Callsheet), Callsheet now counts every day how often it was shown, and when not, why: a name or date it
+  couldn't find in the message, two amounts in one sentence, no amount in the sentence, a message not read because it
+  holds instructions, an answer it couldn't use, and so on. Only numbers are kept, never text, for 30 days.
+- **Copy the numbers** (Setup › AI) now includes these counts as `reader_counts`, and the log gets one line with the
+  counts when a day is over.
+- **A bigger test set.** The tests now check the reader's rules on 107 made-up messages with hard cases: amounts in
+  several currencies, ranges, "by EOW" and "end of month", invites in another time zone, cancelled and moved dates,
+  older amounts in quoted mail, signatures, two amounts in a sentence, and totals next to line items.
+- **Fewer wrong dates.** A cancelled date is never shown as due; when something is moved, only the new date is
+  shown. "Tue 10 Nov" must really be a Tuesday, else no date is shown. "By Monday" written on a Monday means the
+  next Monday, unless it says "today". "EOW", "end of the month", "by the 15th" and "30/11" are worked out from the
+  message's date; a date like 03/04 that could be March or April shows nothing. An invite's time in another time
+  zone is turned into your own date first, so a call late in your evening shows the right day.
+- **Fewer wrong amounts.** When a message has a total, only the total is shown, not a line item or a subtotal.
+  Prices "each" or "per" something, ranges like "2-3k", savings, and amounts in a signature (even without "--") are
+  never shown as the amount.
+
 ## 0.12.1 (Reports from Google Drive)
 
 Agents that run in the cloud can now hand reports to Callsheet through a Google Drive folder. Callsheet reads it with

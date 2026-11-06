@@ -22,8 +22,10 @@ Callsheet sends short notifications to the owner's own phones through Home Assis
 
 ## Deep link
 Both companion apps open a relative path inside the app when the notification is tapped: iOS reads
-`data.url`, Android reads `data.clickAction`. Callsheet sets both to `/hassio/ingress/<app slug>`, the Home
-Assistant frontend's page for an app's Ingress UI (it works whether or not the sidebar entry is shown). The slug
+`data.url`, Android reads `data.clickAction`. Callsheet sets both to `/<app slug>`, the Home
+Assistant frontend's sidebar panel for the app (0.12.3: Home Assistant 2026.11 removed `/hassio/ingress/<slug>`,
+which now returns 404; `/<slug>` works before and after; it needs the app's "Show in sidebar", which the Supervisor
+turns on by default for Ingress apps). The slug
 (`<repository hash>_callsheet`, or `local_callsheet`) is not in the environment, but the Supervisor names the
 container's host after it with `_` written as `-`, so `push.app_slug()` reads `HOSTNAME` (`a1b2c3d4-callsheet` →
 `a1b2c3d4_callsheet`). `CALLSHEET_APP_SLUG` overrides it. When neither fits, the link is left out and a tap opens

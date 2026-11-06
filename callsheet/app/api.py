@@ -447,7 +447,12 @@ class App:
         return self._srt(self.sorter.answer_check, body.get("key"), body.get("right"), body.get("label"))
 
     def sorting_numbers(self, _body=None):
-        return self.sorter.numbers()
+        out = self.sorter.numbers()
+        try:   # 0.12.2: the reader's per-day field counts, shown or why not (numbers only, 30 days)
+            out["reader_counts"] = self.reader.counts()
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Callsheet reader counts failed: {type(e).__name__}\n")
+        return out
 
     def sorting_fix(self, body):
         body = body if isinstance(body, dict) else {}
