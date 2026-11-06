@@ -454,10 +454,12 @@ GOLD = [
     ("Your plan renews tomorrow for EUR 12.", MON, "2026-11-03", "EUR 12", ("2026-11-04", "s1", "s1")),
     ("Thanks for the update.", MON, None, None, ("2026-11-06", "s1", "s1")),
     ("The deposit of ¥30,000 is due 20 Nov.", MON, "2026-11-20", "¥30,000", ("2026-11-20", "s1", "s1")),
-    ("We owe them CHF 2'500 by Monday.", MON, "2026-11-02", "CHF 2'500", ("2026-11-09", "s1", "s1")),
+    # 0.12.2: "by Monday" said on a Monday is the next Monday (was: the same day)
+    ("We owe them CHF 2'500 by Monday.", MON, "2026-11-09", "CHF 2'500", ("2026-11-09", "s1", "s1")),
     ("The fee is 300 USD, payable by 1 Dec.", MON, "2026-12-01", "300 USD", ("2026-12-01", "s1", "s1")),
     ("Call me at 5pm about the 2 contracts.", MON, None, None, (None, None, "s1")),
-    ("Price: $80 per seat, 12 seats. Due Nov 9.", MON, "2026-11-09", "$80", ("2026-11-09", "s2", "s1")),
+    # 0.12.2: a per-seat price is a line item, not the amount due (was: "$80")
+    ("Price: $80 per seat, 12 seats. Due Nov 9.", MON, "2026-11-09", None, ("2026-11-09", "s2", "s1")),
     ("Kickoff is Wed 11 Nov at 10:00.", MON, "2026-11-11", None, ("2026-11-11", "s1", None)),
 ]
 

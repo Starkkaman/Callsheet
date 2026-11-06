@@ -277,6 +277,15 @@ class GoldV2(unittest.TestCase):
         m = metrics(self.items, outs)
         self.assertGreaterEqual(m["date"]["precision"], 0.95, m)
         self.assertGreaterEqual(m["amount"]["precision"], 0.95, m)
+        self.assertGreaterEqual(m["date"]["recall"], 0.9, m)
+        self.assertGreaterEqual(m["amount"]["recall"], 0.8, m)
+
+    def test_bars_with_the_trap_fake(self):
+        # 0.12.2: the post-checks catch the wrong picks: what the trap fake gets shown is right
+        outs = [run_item(g, "trap", i) for i, g in enumerate(self.items)]
+        m = metrics(self.items, outs)
+        self.assertGreaterEqual(m["date"]["precision"], 0.95, m)
+        self.assertGreaterEqual(m["amount"]["precision"], 0.95, m)
 
     def test_wilson(self):
         self.assertIsNone(wilson(0, 0))
@@ -284,6 +293,152 @@ class GoldV2(unittest.TestCase):
         self.assertEqual(wilson(0, 10), (0.0, 0.278))
         lo, hi = wilson(95, 100)
         self.assertTrue(0.88 < lo < 0.9 and 0.97 < hi < 0.99)
+
+
+# --- 0.12.2 fixes: the gaps the gold set v2 measured ---------------------------------------------------------------------
+MON = dt.date(2026, 11, 2)
+LA = zoneinfo.ZoneInfo("America/Los_Angeles")
+LON = zoneinfo.ZoneInfo("Europe/London")
+
+
+def due_of(body, date, date_s=None, sent=MON, tz=LON, order=None):
+    info = _info(body, sent)
+    info.update(tz=tz, date_order=order)
+    a = t120.ans(gist="", why="", date=date, date_s=date_s)
+    res, _ = reader.check(a, info, [], sent)
+    return res["due_date"], res["fields"]["due"]
+
+
+def amount_of(body, frag):
+    sents = {f"s{i + 1}": x for i, x in enumerate(reader.inject.sentences(body))}
+    sid = next((k for k, v in sents.items() if frag in v), None)
+    return reader.pick_amount(sents, sid)
+
+
+class Fixes0122(unittest.TestCase):
+    def test_1_cancelled_and_moved_dates(self):
+        self.assertEqual(due_of("The 12 Nov review is cancelled.", "2026-11-12"), (None, "date_cancelled"))
+        self.assertEqual(due_of("Thursday's call is cancelled; no need to dial in.", "2026-11-05")[0], None)
+        self.assertEqual(due_of("The dinner on Saturday is off. Let's find another date.", "2026-11-07")[0], None)
+        self.assertEqual(due_of("The renewal on 1 Dec won't happen: we cancelled the plan.", "2026-12-01")[0], None)
+        body = "The review on 12 Nov is moved to 19 Nov."
+        self.assertEqual(due_of(body, "2026-11-12"), (None, "date_cancelled"))
+        self.assertEqual(due_of(body, "2026-11-19")[0], "2026-11-19")
+        self.assertEqual(due_of("We've rescheduled the shoot from Friday to Monday 16 Nov.", "2026-11-06")[0], None)
+        self.assertEqual(due_of("Update: the deadline is now 20 Nov (was 13 Nov).", "2026-11-13")[0], None)
+        self.assertEqual(due_of("Update: the deadline is now 20 Nov (was 13 Nov).", "2026-11-20")[0], "2026-11-20")
+        # another sentence of the newest message cancels it: never due anywhere in the item
+        body = "Lunch is on 12 Nov at noon. Sorry, the 12 Nov lunch is cancelled."
+        self.assertEqual(due_of(body, "2026-11-12", "s1"), (None, "date_cancelled"))
+        # a void invoice in one clause doesn't cancel the corrected one's date; "from 1 Dec" alone isn't old
+        self.assertEqual(due_of("Invoice 2207 is void; a corrected invoice is due 25 Nov.", "2026-11-25")[0], "2026-11-25")
+        self.assertEqual(due_of("The price goes up to $99 a year from 1 Dec.", "2026-12-01")[0], "2026-12-01")
+        self.assertEqual(due_of("Let's meet Friday instead.", "2026-11-06")[0], "2026-11-06")
+
+    def test_2_weekday_and_date_must_agree(self):
+        self.assertEqual(due_of("Kickoff is Tue 10 Nov.", "2026-11-10")[0], "2026-11-10")
+        self.assertEqual(due_of("Kickoff is Tue 10 Nov.", "2026-11-03")[0], None)       # not the weekday alone
+        self.assertEqual(due_of("Kickoff is Wed 10 Nov.", "2026-11-10")[0], None)       # disagree: nothing
+        self.assertEqual(due_of("Kickoff is Wed 10 Nov.", "2026-11-04")[0], None)
+        self.assertEqual(due_of("Due Friday, 6 Nov.", "2026-11-06")[0], "2026-11-06")
+
+    def test_3_weekday_said_on_that_day(self):
+        self.assertEqual(due_of("Please pay by Monday.", "2026-11-09")[0], "2026-11-09")
+        self.assertEqual(due_of("Please pay by Monday.", "2026-11-02")[0], None)
+        self.assertEqual(due_of("It's Monday today, so please pay by Monday.", "2026-11-02")[0], "2026-11-02")
+        self.assertEqual(due_of("Can you send the notes by Friday?", "2026-11-06")[0], "2026-11-06")
+
+    def test_4_line_items_subtotals_and_totals(self):
+        body = "Design: $1,800\nHosting: $200\nTotal due: $2,000 by 30 Nov"
+        self.assertEqual(amount_of(body, "Design"), (None, "amount_not_total"))
+        self.assertEqual(amount_of(body, "Total"), ("$2,000", "shown"))
+        self.assertEqual(amount_of("Subtotal: £850.00", "Subtotal"), (None, "amount_line_item"))
+        for line in ("Hours: 12 x $85", "Cleaning x2 at €75", "Tickets are $45 each.", "Per-seat price $80, 12 seats.",
+                     "Item 1: Venue hire 2,000 EUR", "Line item: design $1,800"):
+            self.assertEqual(amount_of(line, line[:5]), (None, "amount_line_item"), line)
+        self.assertEqual(amount_of("You saved €12!", "saved"), (None, "amount_not_due"))
+        self.assertEqual(amount_of("The total is $2,000. The deposit of $500 is due Friday.", "total"),
+                         (None, "amount_ambiguous"))
+        self.assertEqual(amount_of("Total including VAT: £1,020.", "Total"), ("£1,020", "shown"))
+        self.assertEqual(amount_of("The invoice for $1,200 is due Friday.", "invoice"), ("$1,200", "shown"))
+
+    def test_5_signatures_without_the_dashes(self):
+        sig = reader.strip_signature
+        self.assertEqual(sig("Can you pay by Friday?\n\nBest,\nMarcus Webb\nFinance Lead\nTel +1 555 0100\n"
+                             "Invoices over $5,000 need a PO."), "Can you pay by Friday?")
+        self.assertEqual(sig("Your order ships Friday.\n\nAcme Ltd · 12 Mill Road · Free delivery over £40"),
+                         "Your order ships Friday.")
+        self.assertEqual(sig("Paid, thanks.\n\nAccounts Team\nLumen Ltd\nVAT No. GB123456789"), "Paid, thanks.")
+        self.assertEqual(sig("Please review it.\n\n--\nDana\nPS: our day rate is $200."), "Please review it.")
+        self.assertEqual(sig("New quote: CA$1,800.\n\nFrom: Dana <d@x.example>\nSent: Monday\nSubject: Re\n\nOld CA$2,100."),
+                         "New quote: CA$1,800.")
+        for keep in ("Hi,\nThanks.\nThe invoice is attached and due Friday.", "Please pay Lumen Ltd £400 by Friday.",
+                     "Thanks! Paid.", "The fee is $300.\n\nCall me on 020 7946 0000 if that's a problem."):
+            self.assertEqual(sig(keep), keep)
+
+    def test_5_signature_amounts_and_names_never_used(self):
+        g = {"from": "Marcus Webb <marcus@co.example>", "subject": "Invoice", "tz": "Europe/London",
+             "sent": "2026-11-02T09:00:00+00:00",
+             "body": "Can you pay the invoice by Friday?\n\nBest,\nMarcus Webb\nFinance Lead\nInvoices over $5,000 need a PO."}
+        ctx = _ctx("Europe/London")
+        s = gold_source(g)
+        _card, meta = triage.build(s, ctx)
+        _data, info = reader.item_of(s, meta, ctx.tz, ctx.owner_first)
+        self.assertNotIn("5,000", json.dumps(info["sents"]))
+        self.assertNotIn("Finance", info["new"])
+
+    def test_6_ranges_show_nothing(self):
+        for body in ("The budget is $1–2k for the edit.", "Somewhere around 2-3k for the venue, budget wise.",
+                     "The quote is 5–7k EUR for the week.", "We can pay between 500 and 800 dollars.",
+                     "Expect between $500 and $800 for the repair.", "The fee is $1,000-$1,500.", "Costs run £40 to £60."):
+            self.assertEqual(amount_of(body, body[:6]), (None, "amount_range"), body)
+        self.assertEqual(amount_of("The budget is up to $2,000.", "budget"), ("$2,000", "shown"))
+        self.assertFalse(reader.money_range("Open Mon–Fri 9–5"))
+        self.assertFalse(reader.money_range("Call 555-0100 about the 10-12 Nov trip."))
+
+    def test_7_eow_end_of_month_nth_and_numeric(self):
+        self.assertEqual(due_of("Can you send the deck by EOW?", "2026-11-06")[0], "2026-11-06")
+        self.assertEqual(due_of("Can you send it by end of the week?", "2026-11-06")[0], "2026-11-06")
+        self.assertEqual(due_of("Can you send the deck by EOW?", "2026-11-13")[0], None)
+        self.assertEqual(due_of("Due EOW.", "2026-11-13", sent=dt.date(2026, 11, 7))[0], "2026-11-13")   # a Saturday
+        self.assertEqual(due_of("The report is due end of month.", "2026-11-30")[0], "2026-11-30")
+        self.assertEqual(due_of("Due by the end of the month.", "2026-12-31", sent=dt.date(2026, 12, 3))[0], "2026-12-31")
+        self.assertEqual(due_of("Please pay by the 15th.", "2026-11-15")[0], "2026-11-15")
+        self.assertEqual(due_of("Please pay by the 1st.", "2026-12-01")[0], "2026-12-01")
+        self.assertEqual(due_of("Applications close on 30/11.", "2026-11-30")[0], "2026-11-30")
+        self.assertEqual(due_of("Applications close on 11/30.", "2026-11-30")[0], "2026-11-30")
+        self.assertEqual(due_of("Due on 03/04/2027.", "2027-04-03")[0], None)            # no date order: nothing
+        self.assertEqual(due_of("Due on 03/04/2027.", "2027-03-04")[0], None)
+        self.assertEqual(due_of("Due on 03/04/2027.", "2027-04-03", order="dmy")[0], "2027-04-03")
+        self.assertEqual(due_of("Due on 03/04/2027.", "2027-03-04", order="mdy")[0], "2027-03-04")
+        self.assertEqual(due_of("Half the team, 1/2 of us, will come.", "2027-02-01", order="dmy")[0], None)
+        self.assertEqual(due_of("The forms are due in two weeks.", "2026-11-16")[0], None)   # not made deterministic
+
+    def test_8_invite_times_across_midnight(self):
+        self.assertEqual(due_of("Call on Wed 11 Nov at 07:00 CET.", "2026-11-10", tz=LA)[0], "2026-11-10")
+        self.assertEqual(due_of("Call on Wed 11 Nov at 07:00 CET.", "2026-11-11", tz=LA)[0], None)
+        self.assertEqual(due_of("Call on Wed 11 Nov at 07:00 CET.", "2026-11-11", tz=LON)[0], "2026-11-11")
+        self.assertEqual(due_of("Budget review @ Tue 10 Nov 2026 9am - 10am (ET).", "2026-11-10", tz=LA)[0], "2026-11-10")
+        self.assertEqual(due_of("Join us Friday 13 Nov at 00:30 EST.", "2026-11-12", tz=LA)[0], "2026-11-12")
+        self.assertEqual(due_of("Our sync is Monday 9 Nov at 4pm PT.", "2026-11-10", tz=LON)[0], "2026-11-10")
+        self.assertEqual(due_of("The deadline is 23:59 AoE on 20 Nov.", "2026-11-21", tz=LON)[0], "2026-11-21")
+        self.assertEqual(due_of("Interview: Tue 17 Nov, 2:00 PM Eastern (11:00 AM Pacific).", "2026-11-17", tz=LA)[0],
+                         "2026-11-17")
+        self.assertEqual(reader.date_phrase("Call on Wed 11 Nov at 07:00 CET.", dt.date(2026, 11, 10), MON, LA), "Wed 11 Nov")
+
+    def test_date_order_setting(self):
+        b = t120.Base("run")
+        b.setUp()
+        try:
+            self.assertIsNone(b.reader.settings()["date_order"])
+            b.reader.set_date_order("dmy")
+            self.assertEqual(b.reader.settings()["date_order"], "dmy")
+            b.reader.set_on(False)
+            self.assertEqual(b.reader.settings()["date_order"], "dmy")
+            b.reader.set_date_order("x")
+            self.assertIsNone(b.reader.settings()["date_order"])
+        finally:
+            b.doCleanups()
 
 
 if __name__ == "__main__":

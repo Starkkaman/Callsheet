@@ -70,12 +70,32 @@ After the answer (`parse`, then `check`):
   appear in the item or a **cited** context entry; an amount of money must appear in the new message itself (not a
   quoted earlier one); relative day words only for a message sent today. An ungrounded text is dropped and counted
   (`ground_number`, `ground_money`, `ground_date`, `ground_name`);
-- the due date counts only when an item sentence says that date, read from the message's own date ("Friday" in a
-  Thursday message is the next day; "next Friday" may be either of the next two Fridays); the words that say it are
-  kept as the phrase;
-- the amount is copied by Callsheet from the cited sentence, as written, only when that sentence holds exactly one
-  amount (currency symbols or codes on either side, any separators, "5k" only in a sentence about money); two amounts
-  in one sentence show none.
+- the due date counts only when an item sentence says that date (`date_reading`, read from the message's own date in
+  the owner's time zone); the words that say it are kept as the phrase. Rules (0.12.2):
+  - a weekday alone is the next one after the message date ("Friday" in a Thursday message is the next day); said on
+    that weekday it is a week on ("by Monday" on a Monday), unless the sentence says "today"; "next Friday" may be
+    either of the next two Fridays;
+  - a weekday written with a date ("Tue 10 Nov") must be that date's weekday; when they disagree, nothing is shown;
+  - "EOW"/"end of (the) week": that week's Friday; "EOM"/"end of (the) month": the month's last day; "the 15th": the
+    next 15th; "30/11": by the owner's date order (`date_order`, "dmy" or "mdy", meta `reader`, no control on the page
+    yet), or when only one reading is a date; "03/04" with no date order shows nothing; a numeric date counts only
+    after "on", "by", "due" and the like. "In two weeks" and other spans show nothing;
+  - a time with a zone next to the date ("07:00 CET", "4pm PT", "23:59 AoE") moves the date into the owner's zone, so
+    an invite across midnight shows the owner's date;
+  - cancelled, called off, off, won't happen, void: the clause's dates are never due; moved, rescheduled, postponed,
+    "now": the dates before the move word and after "was", "instead of" (and "from" when something moved) are old, the
+    new date is shown only when a sentence says it. An old or cancelled date is never due anywhere in the item
+    (`date_cancelled`);
+- the amount is copied by Callsheet from the cited sentence, as written (`pick_amount`), only when that sentence holds
+  exactly one amount (currency symbols or codes on either side, any separators, "5k" only in a sentence about money).
+  Nothing is shown for: two amounts in one sentence or two different totals or a deposit next to a total
+  (`amount_ambiguous`); a range, never one end of it ("$1–2k", "5–7k EUR", "between 500 and 800",
+  `amount_range`); a line item or subtotal ("subtotal", "line", "item 2", "x2", "each", "per", VAT, quantity,
+  `amount_line_item`); any other sentence when the message states a total (`amount_not_total`); savings and discounts
+  (`amount_not_due`);
+- signatures (`strip_signature`, 0.12.2): besides "-- ", a closing word (Thanks, Best, Regards, Cheers...) followed by
+  a name and a few short lines, a last paragraph of short lines with a phone, email, address or company line, and a
+  forwarded header are cut from the new message before anything is read, so no amount, date or name comes from them.
 
 ## Load rules
 
@@ -115,8 +135,10 @@ Each answer gives one outcome per field; a flagged item gives `flagged` for ever
 - every field: `shown`, `flagged`, `schema_invalid`;
 - `gist`, `why_you`: `empty` (nothing left after cleaning), `instructions`, `repeated` (repeats a flagged sentence),
   `actions` (says Callsheet did something), `claim`, `ground_number`, `ground_money`, `ground_date`, `ground_name`;
-- `due`: `not_given` (the model gave none), `ground_date` (no item sentence says that date);
-- `amount`: `not_given`, `amount_none` (the cited sentence holds no amount), `amount_ambiguous` (more than one);
+- `due`: `not_given` (the model gave none), `ground_date` (no item sentence says that date), `date_cancelled` (the
+  date is cancelled or moved away from);
+- `amount`: `not_given`, `amount_none` (the cited sentence holds no amount), `amount_ambiguous` (more than one),
+  `amount_range`, `amount_line_item`, `amount_not_total`, `amount_not_due`;
 - `ctx`: `not_given` (entries offered, none cited), `no_context` (none offered). A cited card can still be left out
   at view time (`_cards`) when its record is gone.
 
@@ -177,13 +199,12 @@ output for both answers) and an optional `note`.
 | control | 13 | no date or amount, "5k" run vs budget, room numbers, times |
 
 `test_reader_0122.GoldV2` runs every item through `item_of`, `parse` and `check` with both fakes and pins the output
-item by item; the careful fake must keep precision >= 0.95. What the fake run shows (dates / amounts):
+item by item; both fakes must keep precision >= 0.95. What the fake run shows (dates / amounts, 95% Wilson CI):
 
-- careful fake: precision 56/56 and 36/36; recall 56/68 (0.82, 95% CI 0.72–0.90) and 36/42 (0.86, 0.72–0.93). Lost
-  by the checks: dates no sentence names ("EOW", "end of month", "in two weeks", "30/11"), owner-local dates of
-  invites across midnight, "by Monday" said on a Monday (read as that same day), amounts only in quoted mail, and a
-  clear total in a sentence with more amounts.
-- trap fake: precision 28/44 (0.64, 0.49–0.76) and 22/33 (0.67, 0.50–0.80). What the checks can't catch: a cancelled
-  or moved date the sentence still names, a weekday read alone ("Tue 10 Nov" also gives this Tuesday), a line item or
-  subtotal in its own sentence, an amount in a signature without "-- " or under a forwarded header, and the bare end
-  of a range ("2-3k", "5–7k EUR"). Older amounts in quoted mail never reach the model.
+- careful fake: precision 66/66 (1.00, 0.95–1.00) and 34/34 (1.00, 0.90–1.00); recall 66/68 (0.97, 0.90–0.99) and
+  34/41 (0.83, 0.69–0.92).
+- trap fake (the tempting wrong pick): precision 24/24 (1.00, 0.86–1.00) and 21/21 (1.00, 0.85–1.00); recall 23/68
+  and 21/41. Before the 0.12.2 rules it was 28/44 (0.64) and 22/33 (0.67).
+- shown as nothing on purpose (lost recall): "in two weeks", a numeric date with no date order when both readings
+  are dates, a weekday that disagrees with its date, ranges, two or more amounts in a sentence, a deposit next to a
+  total, and amounts only in quoted mail.

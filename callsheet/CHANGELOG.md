@@ -13,6 +13,14 @@ Nothing changes on the page. This release helps check the reader on real mail.
 - **A bigger test set.** The tests now check the reader's rules on 107 made-up messages with hard cases: amounts in
   several currencies, ranges, "by EOW" and "end of month", invites in another time zone, cancelled and moved dates,
   older amounts in quoted mail, signatures, two amounts in a sentence, and totals next to line items.
+- **Fewer wrong dates.** A cancelled date is never shown as due; when something is moved, only the new date is
+  shown. "Tue 10 Nov" must really be a Tuesday, else no date is shown. "By Monday" written on a Monday means the
+  next Monday, unless it says "today". "EOW", "end of the month", "by the 15th" and "30/11" are worked out from the
+  message's date; a date like 03/04 that could be March or April shows nothing. An invite's time in another time
+  zone is turned into your own date first, so a call late in your evening shows the right day.
+- **Fewer wrong amounts.** When a message has a total, only the total is shown, not a line item or a subtotal.
+  Prices "each" or "per" something, ranges like "2-3k", savings, and amounts in a signature (even without "--") are
+  never shown as the amount.
 
 ## 0.12.1 (Reports from Google Drive)
 

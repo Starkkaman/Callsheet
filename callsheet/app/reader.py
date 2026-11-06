@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 import unicodedata
+import zoneinfo
 
 import facts
 import ics
@@ -97,8 +98,8 @@ DROPS = ("url", "instructions", "repeated", "actions", "claim", "ground_number",
 # One outcome per field for each answer (an unusable answer counts once per try) and for each flagged item.
 FIELDS = ("gist", "why_you", "due", "amount", "ctx")
 OUTCOMES = ("shown", "not_given", "empty", "flagged", "schema_invalid", "instructions", "repeated", "actions",
-            "claim", "ground_number", "ground_money", "ground_date", "ground_name", "amount_none", "amount_ambiguous",
-            "no_context")
+            "claim", "ground_number", "ground_money", "ground_date", "ground_name", "date_cancelled", "amount_none",
+            "amount_ambiguous", "amount_range", "amount_line_item", "amount_not_total", "amount_not_due", "no_context")
 KEY = triage.KEY
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 SID = re.compile(r"s[1-9][0-9]?")
@@ -246,6 +247,105 @@ _MONEY_CUE = re.compile(r"\b(?:budget|cost|costs|price|priced|pay|paid|payment|i
                         r"deposit|balance|owe|owed|amount|charge|charged|refund|bill|billed|rate|salary)\b", re.I)
 
 
+# 0.12.2 amounts: a range is shown whole or not at all (here: not at all), never one end; line items, subtotals and
+# savings are not the amount due; when the message states a total, only the total is shown.
+_RV = r"(?:" + _CUR + r"\s?)?\d+(?:[.,' ]\d+)*(?:\s?(?:k|K|m|M|bn)\b)?(?:\s?" + _CUR + r")?"
+_RANGE = re.compile(r"(?<![\w.,])(?P<a>" + _RV + r")\s*(?:-|–|—|to)\s*(?P<b>" + _RV + r")(?:\s*(?:dollars|euros|pounds|bucks))?"
+                    r"|\bbetween\s+(?P<c>" + _RV + r")\s+and\s+(?P<d>" + _RV + r")(?:\s*(?P<w>dollars|euros|pounds|bucks))?",
+                    re.I)
+_MONEYISH = re.compile(_CUR + r"|\d\s?(?:k|K|m|M|bn)\b|\b(?:dollars|euros|pounds|bucks)\b")
+_LINE = re.compile(r"\b(?:sub-?\s?total|line\s+items?|item\s+\d+|each|per|apiece|VAT|unit\s+price|qty|quantity)\b|"
+                   r"\b\d+\s?[x×]\s|\b[x×]\s?\d+\b|\d\s?×", re.I)
+_TOTAL_W = re.compile(r"(?<!sub-)(?<!sub )\b(?:total|amount\s+due|balance\s+due|to\s+pay)\b", re.I)
+_PART = re.compile(r"\b(?:deposit|instal+ments?|down\s+payment|first\s+payment)\b", re.I)
+_NOT_DUE = re.compile(r"\b(?:save[ds]?|saving|discount(?:ed)?|off\s+(?:the|your)|\d\s?%\s+off)\b", re.I)
+
+
+def money_range(sentence):
+    """A range of money in the sentence ("$1–2k", "2-3k" about money, "5–7k EUR", "between 500 and 800 dollars")."""
+    s = str(sentence or "")
+    for m in _RANGE.finditer(s):
+        span = m.group(0)
+        if _MONEYISH.search(span) or (_MONEY_CUE.search(s) and re.search(r"\d\s?[kKmM]\b", span)):
+            return True
+    return False
+
+
+def amount_kind(sentence):
+    """"total", "line" (line item or subtotal), "not_due" (a saving or discount) or "" for a sentence with money."""
+    s = str(sentence or "")
+    if _TOTAL_W.search(s):
+        return "total"
+    if _LINE.search(s):
+        return "line"
+    if _NOT_DUE.search(s):
+        return "not_due"
+    return ""
+
+
+def pick_amount(sents, sid):
+    """(amount or None, outcome) for the cited sentence among the item's sentences ({sid: text})."""
+    if sid not in sents:
+        return None, "not_given"
+    s = sents[sid]
+    if money_range(s):
+        return None, "amount_range"
+    found = amounts(s)
+    if not found:
+        return None, "amount_none"
+    if len(found) > 1:
+        return None, "amount_ambiguous"
+    kind = amount_kind(s)
+    if kind == "line":
+        return None, "amount_line_item"
+    if kind == "not_due":
+        return None, "amount_not_due"
+    totals = {k: amounts(v)[0] for k, v in sents.items() if amount_kind(v) == "total" and len(amounts(v)) == 1
+              and not money_range(v)}
+    if totals:
+        if sid not in totals:
+            return None, "amount_not_total"
+        if len({_digits(a) for a in totals.values()}) > 1 or any(_PART.search(v) and amounts(v) for v in sents.values()):
+            return None, "amount_ambiguous"          # two totals, or a deposit next to the total
+    return found[0][:40], "shown"
+
+
+# 0.12.2 signatures without "-- " and forwarded headers the quote cut leaves: never a source of amounts or names.
+_CLOSING = re.compile(r"^\s*(?:thanks|thank\s+you|many\s+thanks|thx|best|best\s+wishes|all\s+the\s+best|regards|"
+                      r"kind\s+regards|best\s+regards|warm\s+regards|warmly|cheers|sincerely|yours(?:\s+sincerely|"
+                      r"\s+truly)?|take\s+care)\s*[,.!]?\s*$", re.I)
+_CONTACT = re.compile(r"\+?\d[\d ()-]{7,}\d|\b(?:tel|phone|mobile|mob|fax|vat\s+no|reg(?:istered)?\.?\s+no|company\s+no|"
+                      r"ltd|llc|inc|gmbh|plc|limited)\b|\s[|·]\s|[\w.+-]+@[\w-]+\.[\w.]+|\bwww\.", re.I)
+_NAME_LINE = re.compile(r"^\s*[^\W\d_][\w'’.-]*(?:\s+[^\W\d_][\w'’.-]*){0,3}\s*$")   # "Dana", "Marcus Webb"
+_FWD = re.compile(r"^\s*From:\s.+\n(?:.*\n){0,2}?\s*(?:Sent|Date):\s", re.M)
+
+
+def strip_signature(text):
+    """The text without a signature block written without "-- ": from a closing line ("Thanks,", "Best,") with at most
+    8 short lines after it, the first a name, or a last paragraph of short contact lines (phone, company, "|" or "·" separators) with
+    no sentence ending; also a lone "--" line and below, and a forwarded "From: … Sent:" header and below."""
+    t = str(text or "")
+    m = _FWD.search(t)
+    if m and m.start() > 0:
+        t = t[:m.start()]
+    m = re.search(r"(?m)^--\s*$", t)
+    if m and m.start() > 0:
+        t = t[:m.start()]
+    lines = t.rstrip().split("\n")
+    for i, ln in enumerate(lines):
+        after = [x for x in lines[i + 1:] if x.strip()]
+        if i and _CLOSING.match(ln) and after and len(after) <= 8 and all(len(x) <= 80 for x in after) and \
+                _NAME_LINE.match(after[0]) and any(x.strip() for x in lines[:i]):
+            return "\n".join(lines[:i]).rstrip()
+    paras = re.split(r"\n[ \t]*\n", t.rstrip())
+    if len(paras) > 1:
+        last = [x for x in paras[-1].split("\n") if x.strip()]
+        if last and len(last) <= 6 and all(len(x) <= 90 and not re.search(r"[.?!]\s*$", x) for x in last) and \
+                any(_CONTACT.search(x) for x in last):
+            return "\n\n".join(paras[:-1]).rstrip()
+    return t.rstrip()
+
+
 def amounts(sentence):
     """The amounts of money in one sentence, as written (trimmed)."""
     s = str(sentence or "")
@@ -258,41 +358,242 @@ def amounts(sentence):
     return out
 
 
-def sentence_dates(sentence, sent):
-    """The dates a sentence names, read from the message's own date (sent): facts' date pieces; "next Friday" is
-    this coming Friday or the one after (people differ), so both."""
-    out = set()
-    for m in facts._PIECE.finditer(str(sentence or "")):  # noqa: SLF001
-        g = m.groupdict()
-        if g["wd"] and g["wd_next"]:
-            ahead = (facts._DAYNAMES[g["wd_n"].lower()] - sent.weekday()) % 7 or 7  # noqa: SLF001
-            base = sent + dt.timedelta(days=ahead)
-            out |= {base, base + dt.timedelta(days=7)}
-            continue
-        d = facts._date_of(m, sent)  # noqa: SLF001
-        if d is not None:
-            out.add(d)
+# --- 0.12.2 dates: what a sentence says is due, deterministically --------------------------------------------------------
+# A date is read as a "mention": the date pieces written next to each other ("Tue 10 Nov 2026", "Friday, 6 Nov",
+# "close of business Thursday"). Rules (the test lead's follow-ups, docs/reader.md "Dates"):
+# - a weekday written with a date must be that date's weekday, else the mention says nothing;
+# - a weekday alone is the next one after the message date; said on that weekday it is a week on, unless the sentence
+#   says "today"; "next Friday" is either of the next two (people differ);
+# - "EOW"/"end of (the) week": that week's Friday; "EOM"/"end of (the) month": the month's last day; "the 15th": the
+#   next 15th on or after the message date; "30/11": by the owner's date order (d/m or m/d), or when only one reading
+#   is a date; "03/04" without a date order says nothing; numeric dates count only after "on", "by", "due" and the like;
+# - a time with a time zone next to the date ("09:00 ET", "4pm PT", "23:59 AoE") moves the date into the owner's zone;
+# - cancelled, called off, gone, won't happen: the clause's dates are never due; moved, rescheduled, postponed: the
+#   dates before the move word, after "was", "instead of", and after "from" in a move, are old, the ones after it are the new ones. An
+#   old or cancelled date is never due anywhere in the item.
+_EXTRA = re.compile(
+    r"(?P<eow>\b(?:EOW|end\s+of\s+(?:the\s+)?week)\b)"
+    r"|(?P<eom>\b(?:EOM|end\s+of\s+(?:the\s+)?month|month[- ]end)\b)"
+    r"|(?P<num>(?<![\d/.,:])(?P<n1>\d{1,2})(?P<nsep>[/.])(?P<n2>\d{1,2})(?:(?P=nsep)(?P<n3>\d{4}|\d{2}))?(?![\d/]|\.\d))",
+    re.I)
+_NUM_CUE = re.compile(r"\b(?:on|by|due|until|till|before|after|from|close[sd]?|deadline|date|dated|expires?|ends?)\s*:?\s*$",
+                      re.I)
+_DATE_KINDS = ("iso", "md", "dm", "wd", "rel", "nth", "eow", "eom", "num")
+_TIME = r"(?:\d{1,2}(?::[0-5]\d)?\s*[aApP]\.?[mM]\.?|\b(?:[01]?\d|2[0-3]):[0-5]\d)"
+_TZ_NAMES = {"ET": "America/New_York", "EST": "America/New_York", "EDT": "America/New_York", "Eastern": "America/New_York",
+             "CT": "America/Chicago", "CST": "America/Chicago", "CDT": "America/Chicago", "Central": "America/Chicago",
+             "MT": "America/Denver", "MST": "America/Denver", "MDT": "America/Denver", "Mountain": "America/Denver",
+             "PT": "America/Los_Angeles", "PST": "America/Los_Angeles", "PDT": "America/Los_Angeles",
+             "Pacific": "America/Los_Angeles", "GMT": "UTC", "UTC": "UTC", "BST": "Europe/London",
+             "CET": "Europe/Paris", "CEST": "Europe/Paris", "AoE": "-12"}
+_TZ_AT = re.compile(r"(?P<t>" + _TIME + r")(?:\s*(?:-|–|—|to)\s*" + _TIME + r")?\s*\(?\s*(?P<z>" +
+                    "|".join(sorted(_TZ_NAMES, key=len, reverse=True)) + r")\b")
+_JOIN_GAP = re.compile(r"[\s,]*(?:\d{4}\b)?[\s,]*(?:(?:at|on|by|@|the)[\s,]+)?", re.I)
+_CANCEL = re.compile(r"\b(?:cancel+(?:ed|ing|ation)?|called\s+off|call(?:ing)?\s+off|(?:is|are|'s|’s)\s+off\b|"
+                     r"won['’]t\s+happen|will\s+not\s+happen|(?:is|are)\s+gone|no\s+longer|void(?:ed)?|scrapped|"
+                     r"not\s+going\s+ahead)\b", re.I)
+_MOVE = re.compile(r"\b(?:moved?|moves|moving|reschedul\w*|postpon\w*|pushed|push(?:ing)?\s+back|brought\s+forward|"
+                   r"changed|new\s+(?:time|date|deadline)|(?:is|are|'s|’s)\s+now|now\s+(?:on|at|due)|delayed)\b|"
+                   r"(?:^|[,:]\s*)now\b", re.I)
+_OLD_BEFORE = re.compile(r"\b(?:was|were|originally|previously|instead\s+of|rather\s+than)\s*(?:on\s+|the\s+)?$", re.I)
+_FROM_BEFORE = re.compile(r"\bfrom\s*(?:on\s+|the\s+)?$", re.I)     # "from Friday to Monday": old only in a move
+_CLAUSE = re.compile(r";|\bbut\b|\(", re.I)
+
+
+def _zone(name):
+    if name == "-12":
+        return dt.timezone(dt.timedelta(hours=-12))
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        return None
+
+
+def _pieces(s):
+    """Date and time pieces (facts' pieces plus EOW, EOM and numeric dates), in order, not overlapping."""
+    ps = []
+    for m in facts._PIECE.finditer(s):  # noqa: SLF001
+        kind = next(k for k in ("iso", "md", "dm", "wd", "rel", "nth", "hm", "h24", "noon") if m.group(k))
+        ps.append((m.start(), m.end(), kind, m))
+    for m in _EXTRA.finditer(s):
+        kind = next(k for k in ("eow", "eom", "num") if m.group(k))
+        ps.append((m.start(), m.end(), kind, m))
+    ps.sort(key=lambda p: (p[0], -(p[1] - p[0])))
+    out, end = [], -1
+    for p in ps:
+        if p[0] >= end:
+            out.append(p)
+            end = p[1]
     return out
 
 
-_DAYPART = ("iso", "md", "dm", "nth", "wd")
-
-
-def date_phrase(sentence, want, sent):
-    """The words that say the date, as written ("Friday 6 Nov", "next Friday", "the 15th"): the first date piece
-    that means it, with the date pieces right next to it ("Friday, 6 Nov")."""
-    ps = [m for m in facts._PIECE.finditer(sentence) if any(m.group(k) for k in _DAYPART)]  # noqa: SLF001
-    for i, m in enumerate(ps):
-        if want not in sentence_dates(m.group(0), sent):
+def _num_date(m, sent, order):
+    """A numeric date ("30/11", "11/30/2026") by the owner's date order ("dmy", "mdy" or None)."""
+    a, b = int(m.group("n1")), int(m.group("n2"))
+    y = m.group("n3")
+    reads = []
+    for d, mo, o in ((a, b, "dmy"), (b, a, "mdy")):
+        if order and o != order:
             continue
-        a, b = m.start(), m.end()
-        j = i - 1
-        while j >= 0 and re.fullmatch(r"[\s,]*", sentence[ps[j].end():a]):
-            a, j = ps[j].start(), j - 1
-        j = i + 1
-        while j < len(ps) and re.fullmatch(r"[\s,]*", sentence[b:ps[j].start()]):
-            b, j = ps[j].end(), j + 1
-        return " ".join(sentence[a:b].split())[:40]
+        try:
+            x = dt.date(int(y) + (2000 if len(y) == 2 else 0) if y else sent.year, mo, d)
+        except ValueError:
+            continue
+        if not y and x < sent - dt.timedelta(days=60):
+            x = dt.date(x.year + 1, mo, d)
+        reads.append(x)
+    reads = set(reads)
+    return reads.pop() if len(reads) == 1 else None
+
+
+def _mentions(s, sent, order=None):
+    """[(start, end, dates set)] for each run of date pieces; times stay out of mentions."""
+    groups, cur = [], []
+    for p in _pieces(s):
+        if p[2] not in _DATE_KINDS:
+            if cur:
+                groups.append(cur)
+                cur = []
+            continue
+        if cur and not _JOIN_GAP.fullmatch(s[cur[-1][1]:p[0]]):
+            groups.append(cur)
+            cur = []
+        cur.append(p)
+    if cur:
+        groups.append(cur)
+    out = []
+    for g in groups:
+        dates = _resolve(g, s, sent, order)
+        out.append((g[0][0], g[-1][1], dates))
+    return out
+
+
+def _resolve(g, s, sent, order):
+    explicit, wds, rel = set(), [], []
+    for a, b, kind, m in g:
+        if kind == "num":
+            if not _NUM_CUE.search(s[:a]) and len(g) == 1:
+                return set()
+            d = _num_date(m, sent, order)
+            if d is None:
+                return set()
+            explicit.add(d)
+        elif kind in ("iso", "md", "dm", "nth"):
+            d = facts._date_of(m, sent)  # noqa: SLF001
+            if d is None:
+                return set()
+            explicit.add(d)
+        elif kind == "wd":
+            wds.append((facts._DAYNAMES[m.group("wd_n").lower()], bool(m.group("wd_next"))))  # noqa: SLF001
+        elif kind == "rel":
+            rel.append(" ".join(m.group(0).lower().split()))
+        elif kind == "eow":
+            explicit.add(sent + dt.timedelta(days=(4 - sent.weekday()) % 7))
+        elif kind == "eom":
+            nxt = dt.date(sent.year + (sent.month == 12), sent.month % 12 + 1, 1)
+            explicit.add(nxt - dt.timedelta(days=1))
+    rel_d = {"today": sent, "tomorrow": sent + dt.timedelta(days=1)}
+    fixed = {rel_d[r] for r in rel if r in rel_d}           # "tonight", "EOD", "end of day": a time, not a date
+    if len(explicit) > 1 or len(fixed) > 1 or len({w for w, _ in wds}) > 1:
+        return set()
+    if explicit:
+        d = next(iter(explicit))
+        if any(w != d.weekday() for w, _ in wds) or (fixed and fixed != {d}):
+            return set()                                    # "Tue 10 Nov" when 10 Nov is a Wednesday: nothing
+        return {d}
+    if wds:
+        w, nxt = wds[0]
+        ahead = (w - sent.weekday()) % 7
+        if nxt:
+            base = sent + dt.timedelta(days=ahead or 7)
+            out = {base, base + dt.timedelta(days=7)}
+        else:
+            if ahead == 0 and not re.search(r"\btoday\b", s, re.I):
+                ahead = 7                                   # "by Monday" said on a Monday: next Monday
+            out = {sent + dt.timedelta(days=ahead)}
+        if fixed and not fixed <= out:
+            return set()
+        return out if not fixed else fixed
+    if rel and not fixed:
+        return {sent} if any(r in ("tonight", "eod") or r.startswith("end of") for r in rel) else set()
+    return fixed
+
+
+def _shift(s, start, end, prev_end, next_start, dates, tz):
+    """A time with a zone next to the mention ("at 07:00 CET", "23:59 AoE on"): the date in the owner's zone."""
+    if tz is None or len(dates) != 1:
+        return dates
+    d = next(iter(dates))
+    m = None
+    for lo, hi in ((end, next_start), (prev_end, start)):
+        for x in _TZ_AT.finditer(s, lo, hi):
+            m = x
+            break
+        if m:
+            break
+    if not m:
+        return dates
+    src = _zone(_TZ_NAMES[m.group("z")])
+    t = m.group("t").lower().replace(".", "").replace(" ", "")
+    try:
+        if t.endswith(("am", "pm")):
+            hm = t[:-2].split(":")
+            h, mi = int(hm[0]) % 12 + (12 if t.endswith("pm") else 0), int(hm[1]) if len(hm) > 1 else 0
+        else:
+            h, mi = (int(x) for x in t.split(":"))
+        when = dt.datetime(d.year, d.month, d.day, h, mi, tzinfo=src)
+    except (ValueError, TypeError):
+        return set()
+    return {when.astimezone(tz).date()} if src is not None else dates
+
+
+def _read(sentence, sent, tz=None, order=None):
+    """[(start, end, dates, "new"|"old")] for each mention that says a date."""
+    s = str(sentence or "")
+    ms = _mentions(s, sent, order)
+    out = []
+    bounds = [0] + [m.end() for m in _CLAUSE.finditer(s)] + [len(s) + 1]
+    for i, (a, b, dates) in enumerate(ms):
+        dates = _shift(s, a, b, ms[i - 1][1] if i else 0, ms[i + 1][0] if i + 1 < len(ms) else len(s), dates, tz)
+        if not dates:
+            continue
+        lo = max(x for x in bounds if x <= a)
+        hi = min(x for x in bounds if x > a)
+        clause = s[lo:hi]
+        mv = _MOVE.search(clause)
+        before = s[max(lo, a - 24):a]
+        if _OLD_BEFORE.search(before) or (mv and _FROM_BEFORE.search(before)):
+            st = "old"
+        elif mv:
+            st = "old" if a - lo < mv.start() else "new"
+        elif _CANCEL.search(clause) or (s[lo - 1:lo] == "(" and _CANCEL.search(s[:lo]) and not _MOVE.search(s)):
+            st = "old"
+        else:
+            st = "new"
+        out.append((a, b, dates, st))
+    return out
+
+
+def date_reading(sentence, sent, tz=None, order=None):
+    """(due dates the sentence says, old or cancelled dates it names), read from the message's own date (sent) in the
+    owner's zone (tz) and date order."""
+    new, old = set(), set()
+    for _a, _b, dates, st in _read(sentence, sent, tz, order):
+        (new if st == "new" else old).update(dates)
+    return new, old
+
+
+def sentence_dates(sentence, sent, tz=None, order=None):
+    """The due dates a sentence says (date_reading's first part)."""
+    return date_reading(sentence, sent, tz, order)[0]
+
+
+def date_phrase(sentence, want, sent, tz=None, order=None):
+    """The words that say the date, as written ("Friday 6 Nov", "next Friday", "the 15th")."""
+    s = str(sentence or "")
+    for a, b, dates, st in _read(s, sent, tz, order):
+        if st == "new" and want in dates:
+            return " ".join(s[a:b].split())[:40]
     return None
 
 
@@ -480,11 +781,14 @@ def _when(ts, tz):
     return f"{d:%a} {d:%Y-%m-%d %H:%M}" if d else ""
 
 
-def item_of(src, meta, tz, owner_first=()):
-    """(data for the prompt, info for the checks). Deterministic; nothing here is sent anywhere."""
+def item_of(src, meta, tz, owner_first=(), date_order=None):
+    """(data for the prompt, info for the checks). Deterministic; nothing here is sent anywhere. date_order: "dmy",
+    "mdy" or None (numeric dates like 30/11; an ambiguous one is read only with it)."""
     subject = clean(meta.get("subject") or src.get("subject") or "").replace("\n", " ")
     raw = clean(src.get("body") or src.get("text") or "")
     new = clean(writer.strip_quoted(raw, subject) if src.get("ch") == "mail" else raw)
+    if src.get("ch") == "mail":   # 0.12.2: signatures without "-- " and forwarded headers out (flags still see them)
+        new = strip_signature(new) or new
     files = [clean(f).replace("\n", " ")[:120] for f in (src.get("files") or [])[:FILES_MAX] if f]
     prev = []
     for p in (src.get("prev") or [])[-PREV_MAX:]:
@@ -522,7 +826,8 @@ def item_of(src, meta, tz, owner_first=()):
     sent_d = _local(src.get("ts"), tz)
     info = {"who": triage._name_part(who.split(" via ")[0], 60), "subject": subject, "new": new,  # noqa: SLF001
             "sents": dict(zip(sids, sents)), "sids": sids, "files": files, "prev": prev, "flag": flag, "lure": lure,
-            "flagged": flagged_sents, "sent": sent_d.date() if sent_d else None,
+            "flagged": flagged_sents, "sent": sent_d.date() if sent_d else None, "tz": tz,
+            "date_order": date_order if date_order in ("dmy", "mdy") else None,
             "hidden": "hidden_text" in (meta.get("marks") or [])}
     return data, info
 
@@ -601,31 +906,30 @@ def check(ans, info, entries, today, owner_first=()):
     # the due date: only when an item sentence says it (against the message's own date)
     due, phrase, date_sid = None, None, None
     d = ans["due"]
+    fields["due"] = "ground_date" if d.get("date") else "not_given"
     if d.get("date") and info["sent"] is not None:
         try:
             want = dt.date.fromisoformat(d["date"])
         except ValueError:
             want = None
+        tz, dorder = info.get("tz"), info.get("date_order")
+        reads = {sid: date_reading(info["sents"][sid], info["sent"], tz, dorder) for sid in info["sids"]} if want else {}
+        old = set().union(*(r[1] for r in reads.values())) if reads else set()   # cancelled or moved from: never due
         order = ([d["date_s"]] if d.get("date_s") in info["sents"] else []) + \
             [s for s in info["sids"] if s != d.get("date_s")]
         for sid in order if want else ():
-            if want in sentence_dates(info["sents"][sid], info["sent"]):
+            if want in reads[sid][0] - old:
                 due, date_sid = want, sid
-                phrase = date_phrase(info["sents"][sid], want, info["sent"])
+                phrase = date_phrase(info["sents"][sid], want, info["sent"], tz, dorder)
                 break
         if due is None:
-            drops["ground_date"] += 1
-    fields["due"] = "shown" if due else "ground_date" if d.get("date") else "not_given"
-    amount = None
-    fields["amount"] = "not_given"
-    if d.get("amount_s") in info["sents"]:
-        found = amounts(info["sents"][d["amount_s"]])
-        if len(found) == 1:
-            amount = found[0][:40]
-            fields["amount"] = "shown"
+            fields["due"] = "date_cancelled" if want in old else "ground_date"
+            drops[fields["due"]] += 1
         else:
-            fields["amount"] = "amount_none" if not found else "amount_ambiguous"
-            drops[fields["amount"]] += 1
+            fields["due"] = "shown"
+    amount, fields["amount"] = pick_amount(info["sents"], d.get("amount_s"))
+    if fields["amount"] not in ("shown", "not_given"):
+        drops[fields["amount"]] += 1
     refs = [e["ref"] for e in cited][:MAX_CTX]
     fields["ctx"] = "shown" if refs else "not_given" if entries else "no_context"
     res = {"state": "read", "gist": out["gist"], "why_you": out["why_you"], "kind": ans["kind"],
@@ -729,11 +1033,13 @@ class Reader:
 
     # settings ------------------------------------------------------------------------------------------------------
     def settings(self):
-        s = {"on": True, "blocked": [list(w) for w in BLOCKED], "audit": [list(w) for w in AUDIT]}
+        s = {"on": True, "blocked": [list(w) for w in BLOCKED], "audit": [list(w) for w in AUDIT], "date_order": None}
         saved = self.store._get_meta("reader", None)  # noqa: SLF001
         if isinstance(saved, dict):
             if isinstance(saved.get("on"), bool):
                 s["on"] = saved["on"]
+            if saved.get("date_order") in ("dmy", "mdy"):   # 0.12.2: how the owner writes 30/11 (no UI yet)
+                s["date_order"] = saved["date_order"]
             for k in ("blocked", "audit"):
                 if k in saved and (saved[k] == [] or triage._windows(saved[k])):  # noqa: SLF001
                     s[k] = triage._windows(saved[k]) or []  # noqa: SLF001
@@ -742,6 +1048,13 @@ class Reader:
     def set_on(self, on):
         s = self.settings()
         s["on"] = bool(on)
+        self.store._set_meta("reader", s)  # noqa: SLF001
+        return s
+
+    def set_date_order(self, order):
+        """0.12.2: "dmy", "mdy" or None (numeric dates are then read only when one reading is a date)."""
+        s = self.settings()
+        s["date_order"] = order if order in ("dmy", "mdy") else None
         self.store._set_meta("reader", s)  # noqa: SLF001
         return s
 
@@ -1130,7 +1443,7 @@ class Reader:
         except Exception:  # noqa: BLE001
             pass
         card, meta = triage.build(src, tctx)
-        data, info = item_of(src, meta, tctx.tz, tctx.owner_first)
+        data, info = item_of(src, meta, tctx.tz, tctx.owner_first, self.settings()["date_order"])
         now_ts, day = self.clock(), self.sorter._today().isoformat()  # noqa: SLF001
         if info["flag"]:   # never sent: the subject and the rules' reason, with the label
             self._put(store_row(src["key"], row["hash"], day, now_ts, {"state": "flagged", "flag": info["flag"],
