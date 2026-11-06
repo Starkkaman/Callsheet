@@ -5929,7 +5929,7 @@
         h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Back to the chat'));
     } else if (st.stage === 'other') {
       kids.push(h('p', null, ['This site’s feed is on another site, ', h('b', { class: 'schost' }, st.other.host), '. Check it there?']));
-      acts.push(h('button', { type: 'button', class: 'act', 'data-scother': ix }, 'Check ' + st.other.host),
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-scother': ix }, 'Check ' + st.other.host),
         h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
     } else if (st.stage === 'found') {
       var d = st.draft || {}, latest = Array.isArray(d.latest) ? d.latest.slice(0, 3) : [];
@@ -5946,7 +5946,7 @@
         rpTells(d.tells || SC_TELLS, st.tell, 'When to tell you', 'sc-tell-' + ix, function (t) { st.tell = t; chatRender('[data-fk="' + cssq('sc-tell-' + ix + ':' + t) + '"]'); }),
         c.kind === 'reports' ? h('p', { class: 'scnote' }, d.hostline || '') : scSite(d.host, d.host_unicode, d.idn, d.new_site),
         c.kind === 'reports' ? null : h('p', { class: 'fine' }, 'Callsheet will read it ' + (d.every || '') + '. Nothing about you is sent.'));
-      acts.push(h('button', { type: 'button', class: 'act', 'data-scadd': ix }, c.kind === 'youtube' ? 'Add channel' : c.kind === 'reports' ? 'Add folder' : 'Add feed'),
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-scadd': ix }, c.kind === 'youtube' ? 'Add channel' : c.kind === 'reports' ? 'Add folder' : 'Add feed'),
         h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
     } else {
       var inp = h('input', { class: 'inp', id: id + '-a', type: 'text', maxlength: '2000', autocomplete: 'off', spellcheck: 'false',
@@ -5959,7 +5959,7 @@
       if (c.kind === 'reports') kids.push(scFolders(ix, st),
         h('p', { class: 'fine' }, 'Agent in the cloud? Have it write to a folder that syncs to /share. Google Drive folders come later.'));
       else if (st.addr === c.address) kids.push(scSite(c.host, c.host_unicode, c.idn, c.new_site));
-      acts.push(h('button', { type: 'button', class: 'act', 'data-sccheck': ix }, 'Check'),
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-sccheck': ix }, 'Check'),
         h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Dismiss'));
       kids.push(h('p', { class: 'fine' }, c.kind === 'reports' ? 'Nothing is read until you press Check.' : 'Nothing is contacted until you press Check.'));
     }
