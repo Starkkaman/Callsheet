@@ -256,6 +256,32 @@ replaced by a trap (0 fetches).
 `interests` (text up to 80 characters, level `always`, `big` or `never`, up to 20). Links are dropped from a topic and
 a topic that reads like an instruction is refused. 0.10.0 only stores the list (the rundown uses it from 0.10.2).
 
+## From Chat (0.11.1)
+
+Owner decisions 2026-11-06 (CLAUDE.md, "Chat may help set up connectors"). `chat.connect_intent` is a fixed gate on the
+owner's own message ("add / follow / subscribe / hook up / connect / track / set up …" with a channel, feed, site,
+reports folder or an address; a bare address right after such a message continues it). Text in quotes or after a `>`
+line is someone else's and doesn't count. Only in those turns is `propose_connector {kind, address?, name?, tell?}`
+offered to the model; anywhere else a call is ignored and counted in the log.
+
+The card is built by Callsheet (`chat.build_card`), never from the model's text: the address is one the owner wrote
+(the model only picks among them), a name only when all its words are the owner's, `tell` only from the fixed list.
+`chat.card_address` applies the rules before anything is read (parsing only): https only, no user@host, port 443 only,
+no number addresses, no home-network names, no hidden or bidi characters, no link shorteners (refused, never
+followed), YouTube cards take only YouTube addresses, reports folders only under /share or /media. The host is shown
+as its IDNA A-label (the form Check contacts) plus the Unicode form when they differ, and "new site" when it isn't in
+`outbound_hosts`. At most one card per turn.
+
+Check and Add are the endpoints below with `chat: {chat, turn, token}`: a one-time token bound to the chat and turn,
+held in memory (never in the chat file), 30 minutes. Check checks the token, refuses the card's address rules again,
+then runs Setup's check (`net.py` after DNS: a private address answers `stage: "refused", why: "home"`). Add accepts
+only a draft that came from that card's own Check and uses the token up; the approval record is the same
+`outbound_hosts` row as Setup. Remove (Undo) marks the card undone. Memory-note tokens and card tokens can't stand in
+for each other. `chat.py` fetches nothing; the glue lives in `api.py`. Tests: `tests/test_chat_setup_0111.py`.
+
+When to tell you (`always | important | list`, default `important`) is stored in each connector's config for every
+kind; today only the Briefing list uses it (Always tell me first).
+
 ## API
 
 `GET api/connectors` (connectors, hosts with dates, interests, choices) · `POST api/connectors/check` ·
@@ -266,7 +292,8 @@ a topic that reads like an instruction is refused. 0.10.0 only stores the list (
 `POST api/connectors/interests` · `PATCH|DELETE api/connectors/interests/<id>` ·
 0.10.2a: `POST api/connectors/reports/folders {path}` (the folder picker: subfolder names, no file opened),
 `POST api/connectors/check {kind: "reports", address: <folder>}`, `POST api/connectors {token, label?, tell}`,
-`PATCH api/connectors/<id> {tell}`.
+`PATCH api/connectors/<id> {tell}`. 0.11.1: `tell` for every kind; `chat: {chat, turn, token}` on check and add from a
+Chat card.
 
 ## Storage
 
