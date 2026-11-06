@@ -45,6 +45,11 @@ KIND_IDS = ("youtube", "news", "reports")
 EVERY_CHOICES = ((3600, "every hour"), (7200, "every 2 hours"), (21600, "every 6 hours"), (86400, "once a day"))
 DEFAULT_EVERY = 7200
 LEVELS = (("always", "Always tell me"), ("big", "If it’s big"), ("never", "Never"))
+# 0.11.1: "When to tell you" for every kind (reports had it since 0.10.2a; owner's decision 2026-11-06), stored per
+# connector in its config for the rundown; today "always" only lists a channel's or feed's items first on Today
+TELLS = (("always", "Always tell me"), ("important", "If it’s important"), ("list", "Only in the list"))
+TELL_DEFAULT = "important"
+TELL_WORDS = "Choose Always tell me, If it’s important or Only in the list."
 MAX_CONNECTORS = 40
 MAX_INTERESTS = 20
 INTEREST_MAX = 80
@@ -388,6 +393,8 @@ class Connectors:
                "link_offer": [h for h in (st.get("link_offer") or []) if isinstance(h, str)][:LINK_OFFERS]}
         if r["kind"] == "youtube":
             out["skip_shorts"] = bool(cfg.get("skip_shorts"))
+        tell = cfg.get("tell") if cfg.get("tell") in dict(k_tells(k)) else TELL_DEFAULT   # 0.11.1: every kind
+        out.update(tell=tell, tell_label=dict(k_tells(k))[tell], tells=[list(x) for x in k_tells(k)])
         if is_local(k):
             out = k.public(self, r, out)
         return out
@@ -473,7 +480,7 @@ class Connectors:
                "host": draft["host"], "link_hosts": draft.get("link_hosts") or [], "every_s": k.every_s,
                "every": every_label(k.every_s), "note": draft.get("note") or None,
                "hostline": self.hostline(k, draft["host"], k.every_s, draft.get("link_hosts")),
-               "duplicate": dup, "link_offer": draft.get("link_offer") or []}
+               "duplicate": dup, "link_offer": draft.get("link_offer") or [], "tells": [list(x) for x in k_tells(k)]}
         if kind == "youtube":
             out["shorts_seen"] = draft.get("shorts_seen", 0)
         return out
@@ -502,13 +509,16 @@ class Connectors:
             return self._add_local(k, d, body)
         label = clean(body.get("label") if body.get("label") is not None else d["title"], single_line=True)
         label = clip(label, LABEL_MAX) if label else clip(clean(d["title"], True), LABEL_MAX) or k.noun
+        tell = body.get("tell", TELL_DEFAULT)   # 0.11.1: When to tell you, for channels and feeds too
+        if tell not in [x[0] for x in k_tells(k)]:
+            raise InputError(TELL_WORDS)
         if self._duplicate(d["kind"], d["config"].get("feed_url")):
             raise Conflict("You've already added this " + ("channel." if d["kind"] == "youtube" else "feed."))
         if len(self._rows()) >= MAX_CONNECTORS:
             raise Conflict(f"Callsheet reads at most {MAX_CONNECTORS} connectors. Remove one first.")
         now = self.clock()
         cid = "c" + secrets.token_hex(4)
-        cfg = dict(d["config"])
+        cfg = dict(d["config"], tell=tell)
         cfg["link_hosts"] = d.get("link_hosts") or []
         st = {"last_read": d["fetched_at"] if d.get("items") is not None else None, "last_new": 0,
               "next_at": self._next(now, k.every_s), "feed_i": int(d.get("feed_i") or 0),
@@ -591,9 +601,9 @@ class Connectors:
                 st["next_at"] = min(st.get("next_at") or self.clock(), self.clock() + int(val))
                 sets.append("state=?")
                 args.append(json.dumps(st))
-            elif key == "tell" and is_local(self.kinds.get(r["kind"])):
+            elif key == "tell" and r["kind"] in self.kinds:   # 0.11.1: every kind
                 if val not in [x[0] for x in k_tells(self.kinds[r["kind"]])]:
-                    raise InputError("Choose Always tell me, If it’s important or Only in the list.")
+                    raise InputError(TELL_WORDS)
                 cfg["tell"] = val
                 sets.append("config=?")
                 args.append(json.dumps(cfg))
@@ -906,7 +916,8 @@ class Connectors:
                 if skip and x["kind"] == "short":
                     continue
                 found.append((r, x))
-        found.sort(key=lambda p: (-p[1]["ts"], p[1]["id"]))
+        # 0.11.1: a connector set to Always tell me lists first; otherwise newest first (the rest is for the rundown)
+        found.sort(key=lambda p: (self._cfg(p[0]).get("tell") != "always", -p[1]["ts"], p[1]["id"]))
         out = []
         for r, x in found[:limit]:
             flag = bool(x["instr"]) if x["instr_v"] == inject.VERSION else flagged(x["title"], x["body"])
@@ -1023,8 +1034,9 @@ class Connectors:
 
 
 def k_tells(k):
-    """A local kind's per-source choices (reports: Always tell me, If it's important, Only in the list)."""
-    return getattr(k, "tells", ())
+    """A kind's per-source choices: Always tell me, If it's important, Only in the list (reports since 0.10.2a, every
+    kind since 0.11.1)."""
+    return getattr(k, "tells", None) or TELLS
 
 
 def _shown_link(url, r, cfg):

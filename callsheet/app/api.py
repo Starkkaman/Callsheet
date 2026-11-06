@@ -180,7 +180,7 @@ class App:
         self.routes += [("POST", r"horizon", self.horizon_mark)]  # 0.8.0 Coming up
         self.routes += self._people_routes()  # 0.8.2 people
         self.routes += self._sorting_routes()  # 0.8.4 AI sorting
-        self.routes += connectors_mod.ConnectorsApi(self.connectors).routes()  # 0.10.0 connectors
+        self.routes += self._connector_routes()  # 0.10.0 connectors (0.11.1: Chat's setup cards use the same endpoints)
 
     def _apply_options(self, data_dir):
         """Home Assistant writes the app options to <data>/options.json. writer_local_url and
@@ -267,6 +267,71 @@ class App:
         """Read-only public feeds the owner adds (owner approved 2026-11-04). The poller starts in server.py."""
         net.set_version(APP_VERSION)
         self.connectors = connectors_mod.Connectors(self.store, self.index, clock=self.clock)
+        self.chat.connectors = self.connectors  # 0.11.1: setup cards (allowed hosts for the "new site" note)
+
+    def _connector_routes(self):
+        """Setup's connector endpoints. 0.11.1: Check, Add and Remove also serve Chat's setup cards: a body with
+        `chat` ({chat, turn, token}: the card's one-time token, bound to the chat and the turn) must carry a valid
+        token, and the card's address rules run first (chat.card_address); Add then uses the token once and folds the
+        card; Remove (Undo) marks the card. The checks, reads and the approval record are Setup's own."""
+        out = []
+        for method, pat, fn in connectors_mod.ConnectorsApi(self.connectors).routes():
+            if (method, pat) == ("POST", r"connectors/check"):
+                fn = self.connectors_check
+            elif (method, pat) == ("POST", r"connectors"):
+                fn = self.connectors_add
+            elif method == "DELETE" and pat == rf"connectors/{connectors_mod.CID}":
+                fn = self.connectors_remove
+            out.append((method, pat, fn))
+        return out
+
+    def connectors_check(self, body):
+        if not (isinstance(body, dict) and "chat" in body):
+            return self.connectors.check(body)
+        bad = [k for k in body if k not in ("kind", "address", "via", "chat")]
+        if bad:
+            raise InputError(f"A card's Check doesn't take {str(bad[0])[:30]}.")
+        kind, via = body.get("kind"), body.get("via") or None
+        pid = self.chat.card_claim(body.get("chat"), kind, via)
+        a = chat.card_address(kind, body.get("address"), bool(getattr(self.connectors.net, "allow_test_names", False)))
+        if not a["ok"]:   # refused before anything is read
+            return {"stage": "refused", "why": a["why"], "word": a["word"], "text": a["text"]}
+        if not a["address"]:
+            raise InputError("Pick a folder first." if kind == "reports" else "Paste an address first.")
+        try:
+            r = self.connectors.check({"kind": kind, "address": a["address"], **({"via": via} if via else {})})
+        except InputError as e:
+            if "private network" in str(e):   # net.py, after DNS: the name points into the home network
+                word, text = chat.REFUSALS["home"]
+                return {"stage": "refused", "why": "home", "word": word, "text": text}
+            raise
+        self.chat.card_draft(pid, r.get("token"))
+        host = r.get("host") or ""
+        if host:
+            known = {h["host"] for h in self.connectors.hosts()}
+            _h, uni = chat.host_names(host)
+            r.update(host_unicode=uni, idn=bool(uni), new_site=host not in known)
+        return r
+
+    def connectors_add(self, body):
+        if not (isinstance(body, dict) and "chat" in body):
+            return self.connectors.add(body)
+        bad = [k for k in body if k not in ("token", "label", "tell", "chat")]
+        if bad:
+            raise InputError(f"A card's Add doesn't take {str(bad[0])[:30]}.")
+        pid = self.chat.card_use(body.get("chat"), body.get("token"))
+        try:
+            r = self.connectors.add({k: body[k] for k in ("token", "label", "tell") if k in body})
+        except Exception:
+            self.chat.card_release(pid)   # nothing was written: the card can still be used
+            raise
+        self.chat.card_added(pid, r)
+        return r
+
+    def connectors_remove(self, _body, cid):
+        r = self.connectors.remove(cid)
+        self.chat.connector_removed(cid)  # 0.11.1: Undo on a card's "Added" line
+        return r
 
     def _brief_0100(self, brief):
         try:
