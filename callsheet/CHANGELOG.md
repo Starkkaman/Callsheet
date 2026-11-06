@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.0 (A new look: Jam)
+
+Callsheet gets the calm look shared across the Jam apps. Nothing about what Callsheet reads, writes or sends has
+changed.
+
+- **Jam is the new look**, in Auto, Light and Dark. Each group of things sits in its own quiet panel with a thin edge;
+  small labels, times and numbers are in a typewriter-style face; buttons are outlined, and the one thing to do now is
+  the only orange button on the screen. Warnings show a ▲ with an amber word; an alert is a red button with dark text.
+  Coloured dots that only decorated are gone; the reason a reply waits is now a word (VIP, Mentioned, Question,
+  Deadline, Waiting).
+- **Look** (top right) now offers **Jam** and **Easy read**. Bold, Clean and the nine Jam Dash looks are switched off
+  for now, not deleted. If you used one of them, you see Jam and a one-time note: "Callsheet has a new look. Easy read
+  is still in Setup." Your old choice is kept, so it comes back if those looks are switched on again.
+- **Briefing is now called Today.** Chat keeps its name. Old links to the Briefing still open it.
+
 ## 0.10.1 (Reports from your other agents)
 
 The planned "0.10.2a" step, numbered 0.10.1 so Home Assistant accepts the version. Other agents, services and

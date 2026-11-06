@@ -80,10 +80,14 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   Callsheet never reads it at runtime). The brief view's layout still follows `mockups/daily-brief-v3.html`:
   desktop = v3 frame A, phone (<=700px) = frame B's order.
 - Looks (ids in brackets), modes Auto/Light/Dark:
-  - Callsheet: Bold (`bold`), Clean (`clean`), Easy read (`easy`).
-  - Jam looks, JamDash's ids: Depth (`depth`), Braun (`braun`), NERV (`nerv`), LCARS (`lcars`), Olympia (`olympia`),
-    Transit (`transit`), Grid (`grid`), New Wave (`newwave`), Pulsar (`pulsar`). NERV and LCARS are dark only.
-  - Components use only the theme tokens at the top of `app.css`; structure keys on `data-base` (bold|clean|easy).
+  - Jam (`jam`, structure `panel`): the default since 0.11.0, the shared "calm instruments" look
+    (`~/project/jam-design` HANDOFF.md and `mockups/pass6/callsheet.html`; read-only).
+  - Easy read (`easy`): selectable (the accessibility look).
+  - Disabled (owner, 2026-11-06; kept in code and CSS, hidden from the picker by `ENABLED_LOOKS` in `app.js`; a saved
+    one shows Jam with a one-time notice): Bold (`bold`), Clean (`clean`) and the Jam Dash looks Depth (`depth`), Braun
+    (`braun`), NERV (`nerv`), LCARS (`lcars`), Olympia (`olympia`), Transit (`transit`), Grid (`grid`), New Wave
+    (`newwave`), Pulsar (`pulsar`). NERV and LCARS are dark only.
+  - Components use only the theme tokens at the top of `app.css`; structure keys on `data-base` (bold|clean|easy|panel).
 - Contrast (the deeper-step rule): text and text-bearing fills meet WCAG AA (4.5:1, 3:1 for large text); where a
   look's colour falls short, use a deeper step of it for text-bearing fills and keep the original colour for dots,
   bars, marks and focus wherever it reaches 3:1. Phone targets are at least 44 x 44 px in every look.
