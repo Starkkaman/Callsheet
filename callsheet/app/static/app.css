@@ -2771,6 +2771,8 @@ html.fa-lock{overflow:hidden}
 .bv .kw13x{color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0}
 .bv .kw13x[aria-pressed=true]{color:inherit}
 .bv .kw13more{margin:4px 0 0;font-size:var(--fs-sm,0.875rem)}
+.bv .kw13m .mks{min-width:0;max-width:100%}
+.bv .kw13m .mk8{white-space:normal;max-width:100%;overflow-wrap:anywhere}
 @media (max-width:700px){
   .bv .kw13g{grid-template-columns:1fr}
   .bv button.kw13t,.bv .kw13x{min-height:44px}

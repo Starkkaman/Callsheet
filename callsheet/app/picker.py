@@ -209,16 +209,18 @@ def parse(content, card_ids, interest_ids):
 
 # --- cards and flags -----------------------------------------------------------------------------------------------------
 _N = "<<NAMES>>"
+_NOT_LIST = r"(?!\s+(?:of\s+)?(?:your|my|our|his|her|their)\s+(?:to-?do\s+)?(?:list|pile|inbox|queue|agenda|day|week))"
 _STEER_T = (
     r"\b(?:pick|feature|choose|select|show|list|put|rank|place|mention|surface|highlight|pin|keep)\s+(?:this|it|me|us|"
-    r"these|our\s+\w+)\b[^.!?]{0,40}?\b(?:first|on\s+top|at\s+the\s+top|top\s+of|above|before\s+(?:anything|everything|"
-    r"the\s+others)|always)\b",
-    r"\b(?:pick|feature|highlight|prioriti[sz]e|promote|boost|upvote)\s+(?:this|me|us|it)\b",
-    r"\b(?:the\s+)?(?:most|very|really|extremely|super)\s+important\s+(?:item|story|news|email|message|card|thing|"
-    r"update|post|video|report|one)\b",
-    r"\bthis\s+(?:item\s+|story\s+|card\s+|email\s+|message\s+|post\s+|report\s+|video\s+)?is\s+(?:the\s+)?(?:most\s+)?"
-    r"(?:important|urgent|critical|a\s+must|top\s+priority)\b",
-    r"\b(?:at|to)\s+the\s+(?:very\s+)?top\b",
+    r"these|our\s+\w+)\b[^.!?]{0,40}?\b(?:first(?!\s+(?:thing|time))|on\s+top" + _NOT_LIST + r"|at\s+the\s+top" +
+    _NOT_LIST + r"|top\s+of" + _NOT_LIST + r"|above\s+(?:the\s+)?(?:others|everything|anything|the\s+rest)|"
+    r"before\s+(?:anything|everything|the\s+others)|always)\b",
+    r"\b(?:pick|feature|promote|boost|upvote)\s+(?:this|me|us|it)\s*(?:[.!?]|$)",
+    r"\b(?:the\s+)?most\s+important\s+(?:item|story|news|card|update|post|video|report|one)\b",
+    r"\bthis\s+(?:item\s+|story\s+|card\s+|post\s+|report\s+|video\s+|email\s+|message\s+)?is\s+(?:the\s+)?"
+    r"(?:most\s+important|number\s+one|#\s*1|top\s+(?:item|story|pick))\b",
+    r"\b(?:at|to)\s+the\s+(?:very\s+)?top\s+of\s+(?:the|your|today'?s)\s+(?:brief|digest|feed|picks|summary|results|"
+    r"rundown|callsheet|news|list\s+of\s+(?:picks|stories|news))\b",
     r"\b(?:always|first)\s+show\s+(?:me\s+)?(?:this|it)?\b|\bshow\s+(?:me\s+)?(?:this|it)\s+first\b",
     r"\b(?:big|important|interest|strength|kind|pick|priority)\s*[=:]\s*(?:yes|true|strong|high|i?\d+|top|first)\b",
     r"\b(?:matches|fits|is\s+on|is\s+in)\s+(?:your|the\s+owner'?s|his|her|their|the)\s+(?:interests?|watch\s*list|"
@@ -226,9 +228,19 @@ _STEER_T = (
     r"\b(?:add|added|adds|new)\s+(?:an?\s+|to\s+(?:the|your)\s+)?(?:interests?|watch\s*list)\b",
     r"\b(?:interests?|watch\s*list|notes?)\s*:\s*(?:always|never|if\s+it)",
     r"\b(?:the\s+owner|you|" + _N + r")\s+(?:wants?|asked|asks|would\s+(?:want|like)|needs?|told\s+(?:you|us))\s+"
-    r"(?:this|it|to\s+see\s+this|this\s+(?:at|on|first))\b",
+    r"(?:this|it|to\s+see\s+this|this\s+(?:at|on|first))\b(?!\s+(?:done|by|before|today|tomorrow|signed|back|"
+    r"fixed|sorted|asap)\b)",
+    r"\b(?:the\s+owner|" + _N + r")\s+(?:wants?|asked|asks|would\s+(?:want|like)|needs?)\s+(?:this|it)\s+"
+    r"(?:at|on)\s+(?:the\s+)?top\b",
     r"\b(?:note|message|instruction)\s+(?:from|by)\s+(?:the\s+owner|" + _N + r")\b",
+    r"\b(?:the\s+owner|" + _N + r")['\u2019]s\s+(?:own\s+)?(?:note|notes|instructions?)\s*:",
+    r"\b(?:the\s+owner|" + _N + r")\s+told\s+(?:you|us|me)\b[^.!?]{0,40}\b(?:first|on\s+top|at\s+the\s+top|"
+    r"interests?)\b",
 )
+# ordinary urgency (test lead, 0.13.0): "treat / mark / flag this as urgent" asks a person, not the picker; it is not
+# checked against the sorter's labelling patterns here (the sorter keeps its own rule for its own pass)
+_URGENT_OK = re.compile(r"\b(?:treat|mark|flag|tag|label)\s+(?:this|it)\s+as\s+(?:an?\s+)?(?:urgent|(?:high\s+|top\s+)?"
+                        r"priority|important|time[- ]?sensitive)\b", re.I)
 
 
 def _steer_rx(owner_first=()):
@@ -239,7 +251,7 @@ def _steer_rx(owner_first=()):
 def steer(sentence, owner_first=()):
     """Does a sentence try to rank itself or claim the owner's interest? (picker's own patterns + the sorter's)."""
     s = inject._plain(sentence)  # noqa: SLF001
-    return triage.steer(s, owner_first) or any(rx.search(s) for rx in _steer_rx(owner_first))
+    return triage.steer(_URGENT_OK.sub(" ", s), owner_first) or any(rx.search(s) for rx in _steer_rx(owner_first))
 
 
 def flags(title, text, owner_first=()):

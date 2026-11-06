@@ -963,9 +963,9 @@
   }
   function knowItem(x) {
     var marks = (Array.isArray(x.marks) ? x.marks : []).filter(function (m) { return Array.isArray(m) && m[1]; });
-    var u = x.link_kind ? null : cnLink(x.link);
+    var link = x.link_kind ? null : cnLink(x.link);  /* a feed's own link, checked like the feeds list's */
     var title = x.open ? h('button', { type: 'button', class: 'kw13t kw13b', 'data-open': x.open }, x.title)
-      : (u ? extA('kw13t', u, x.title, x.title + ' (opens the site)') : h('span', { class: 'kw13t' }, x.title));
+      : (link ? extA('kw13t', link, x.title, x.title + ' (opens the site)') : h('span', { class: 'kw13t' }, x.title));
     var pref = x.pref && !x.locked ? h('span', { class: 'kw13pf', role: 'group', 'aria-label': 'Show ' + (x.source || 'this source') + ' more or less' },
       ['more', 'less'].map(function (w) {
         return h('button', { type: 'button', class: 'tbtn kw13x', 'data-kpref': x.pref, 'data-kway': w, 'data-kid': x.pref_id || '',
@@ -991,20 +991,40 @@
           g.more ? h('p', { class: 'muted kw13more' }, 'and ' + g.more + ' more in the lists below.') : null]);
       }))]);
   }
+  /* More / Less like this: the toast has Undo (like Done and Hide), back to the choice before (none, more or less) */
+  var KPREF_SAID = { more: 'Shown higher from now on.', less: 'Shown lower from now on.', none: 'Back to normal.' };
+  function kprefSel(target, way) { return '[data-kpref="' + cssq(target) + '"][data-kway="' + way + '"]'; }
+  function kprefSet(target, way, id) {  /* way: more | less | none (forget the choice with id) */
+    return way === 'none' ? api('DELETE', 'api/picker/prefs/' + encodeURIComponent(id)).then(function () { return null; })
+      : api('POST', 'api/picker/prefs', { target: target, way: way }).then(function (r) { return r && r.pref ? r.pref.id : null; });
+  }
+  function kprefUndo(u) {
+    U.toast = null; renderLayer();
+    mutate(function () {
+      return kprefSet(u.target, u.prev, u.pid).then(function () { return refetch(); }).then(function () {
+        showToast('Back as it was.', u.label || '');
+        renderBrief(kprefSel(u.target, u.prev === 'none' ? u.way : u.prev));
+      });
+    }).catch(function (e) { renderBrief(); failToast(e); });
+  }
   document.addEventListener('click', function (e) {
     if (ui.view !== 'brief' || !B) return;
     var t = e.target.closest ? e.target.closest('button[data-kpref]') : null;
     if (!t || t.disabled) return;
     var d = t.dataset, again = t.getAttribute('aria-pressed') === 'true' && d.kid;
+    var on = t.parentNode ? t.parentNode.querySelector('button[aria-pressed="true"]') : null;
+    var prev = on && on.dataset.kid ? on.dataset.kway : 'none', way = again ? 'none' : d.kway;
+    var label = (t.parentNode && t.parentNode.getAttribute('aria-label') || '').replace(/^Show | more or less$/g, '');
     t.disabled = true;
     mutate(function () {
-      return (again ? api('DELETE', 'api/picker/prefs/' + encodeURIComponent(d.kid))
-        : api('POST', 'api/picker/prefs', { target: d.kpref, way: d.kway })).then(function () {
-        showToast(again ? 'Back to normal.' : d.kway === 'more' ? 'Shown higher from now on.' : 'Shown lower from now on.',
-          again ? null : 'Nothing is hidden. Press it again to undo.');
-        return refetch();
+      return kprefSet(d.kpref, way, d.kid).then(function (nid) {
+        /* undo: forget a new choice, or set the one before again */
+        var u = { kind: 'kpref', target: d.kpref, way: d.kway, prev: prev, label: label,
+          pid: prev === 'none' ? nid : null };
+        showToast(KPREF_SAID[way], (label ? label + ' · ' : '') + 'Nothing is hidden.', u);
+        return refetch().then(function () { renderBrief('[data-undo]'); });
       });
-    }).catch(failToast).then(function () { t.disabled = false; });
+    }).catch(function (e) { renderBrief(); failToast(e); }).then(function () { t.disabled = false; });
   });
 
   function sortedSection() {
@@ -1953,6 +1973,7 @@
       else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
       else if (u.kind === 'memory') chatUndoNote(u);  /* 0.8.1: a note saved from a chat Save card */
       else if (u.kind === 'srfix') srUnfix(u);  /* 0.8.4 */
+      else if (u.kind === 'kpref') kprefUndo(u);  /* 0.13.0: More / Less like this */
     }
     else if (d.toastx) { U.toast = null; renderLayer(); }
     /* 0.8.0 */

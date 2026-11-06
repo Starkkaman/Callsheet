@@ -43,10 +43,18 @@ A card that asks to be shown first, says it is the most important item, claims t
 lines (`strip_steer`): the model never reads them, so they can't change the pick. On the page it is marked ("Asks to
 be shown first · shown last") and ranked last in its group.
 
+Test lead's conditions (0.13.0, tests `SteerConditions`): the lines are left out of the model's input only: the page
+shows the full title and opens the full message, with the mark. The detector is rules only and narrow: ordinary urgency
+from ordinary senders ("this is urgent, please prioritise", "ASAP", "time-sensitive", "treat this as urgent", "put this
+at the top of your list") is not a steer; `picker_gold.URGENT_CLEAN` (40 lines) must stay at 0 removed, and the
+non-planted gold items keep every line. A steered card is still picked on the rest of its text. "Shown last" ranks only
+inside What you should know: Needs you rows, overrides and their order are never changed, and locked items stay first.
+
 ## More / Less like this
 Per source: a connector (`c:<id>`), a sender's domain (`d:<domain>`) or, on public mail domains, the address
 (`a:<address>`). `POST api/picker/prefs {target, way}`; `DELETE api/picker/prefs/<id>`; listed in Setup under What to
-watch for with Forget. They only rank within a group; never hide; never apply to security alerts or invites.
+watch for with Forget. They only rank within a group; never hide; never apply to security alerts or invites. Each press shows a toast with
+Undo (the Done / Hide pattern): Undo forgets a new choice, or sets the choice before again (`kprefUndo` in app.js).
 
 ## Load rules
 As the reader: blocked windows 06:16-06:45, 12:16-12:45, 16:46-17:15 and 01:00-04:00 (owner's time zone), the
