@@ -6624,11 +6624,12 @@
     api('POST', 'api/connectors/reports/folders', b).then(function (r) {
       if (seq !== st.seq) return;
       st.loading = false; st.data = r || {}; st.next = st.data.next || null;
-      st.list = (more ? st.list || [] : []).concat(Array.isArray(st.data.folders) ? st.data.folders : []);
-      redraw(focus);
+      var fresh = Array.isArray(st.data.folders) ? st.data.folders : [];
+      st.list = (more ? st.list || [] : []).concat(fresh);
+      redraw(typeof focus === 'function' ? focus(fresh) : focus);
     }, function (e) {
       if (seq !== st.seq) return;
-      st.loading = false; st.err = e.message; redraw(focus);
+      st.loading = false; st.err = e.message; redraw(typeof focus === 'function' ? focus([]) : focus);
     });
   }
   function dpStart(st, redraw, focus) { st.acc = null; st.trail = []; st.q = ''; st.list = []; dpLoad(st, {}, redraw, focus); }
@@ -6658,7 +6659,7 @@
     var trail = st.trail || [], crumbs = [btn('tbtn dpc', st.email || 'Accounts', { 'data-fk': pre + '-crumb:acc', 'aria-label': 'Back to your Google accounts' }, function () { dpStart(st, redraw, '[data-fk^="' + pre + '-acc:"]'); })];
     trail.forEach(function (c, i) {
       crumbs.push(h('span', { class: 'dpsep', 'aria-hidden': 'true' }, '›'));
-      crumbs.push(i === trail.length - 1 ? h('b', { class: 'dpcur', 'aria-current': 'location', 'data-fk': pre + '-crumb:' + i, tabindex: '-1' }, c.name || '')
+      crumbs.push(i === trail.length - 1 ? h('b', { class: 'dpcur', 'aria-current': 'true', 'data-fk': pre + '-crumb:' + i, tabindex: '-1' }, c.name || '')
         : btn('tbtn dpc', c.name || '', { 'data-fk': pre + '-crumb:' + i }, function () { dpGo(st, trail.slice(0, i + 1), redraw, '[data-fk="' + pre + '-crumb:' + i + '"]'); }));
     });
     var q = h('input', { class: 'inp', type: 'search', id: pre + '-q', autocomplete: 'off', maxlength: '100', 'aria-label': 'Search your Drive folders by name', placeholder: 'Search folders' });
@@ -6684,7 +6685,9 @@
     kids.push(list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : h('p', { class: 'muted rpnone' }, st.loading ? 'Loading…' : here.search ? 'No folders with that name.' : 'No folders in here.'));
     if (st.next) kids.push(btn('tbtn', 'More folders', { 'data-fk': pre + '-more', disabled: st.loading }, function () {
       var b = here.search ? { account: st.acc, q: here.search, page: st.next } : { account: st.acc, parent: here.id, page: st.next };
-      dpLoad(st, b, redraw, '[data-fk="' + pre + '-more"]', true);
+      dpLoad(st, b, redraw, function (fresh) {   /* the first folder of the new page, or More again */
+        return fresh.length ? '[data-fk="' + cssq(pre + '-dir:' + fresh[0].id) + '"]' : '[data-fk="' + pre + '-more"]';
+      }, true);
     }));
     if (!d.pickable && !st.loading) kids.push(h('p', { class: 'muted' }, 'Open the folder for this source.'));
     return h('div', { class: 'dpick' }, kids);

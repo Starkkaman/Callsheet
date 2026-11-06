@@ -2591,7 +2591,8 @@ html.fa-lock{overflow:hidden}
 .dpick{display:grid;gap:8px;margin:0 0 12px}
 .dpick .rpdirs{margin:0}
 .dpcrumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
-.dpcrumbs .dpc,.dpcrumbs .dpcur{max-width:100%;overflow-wrap:anywhere;text-align:left}
+.dpick>*{min-width:0}
+.dpcrumbs .dpc,.dpcrumbs .dpcur{max-width:100%;min-width:0;overflow-wrap:anywhere;white-space:normal;text-align:left}
 .dpcrumbs .dpcur{font-weight:600;padding:4px 0}
 .dpcrumbs .dpsep{color:var(--muted)}
 .dpsearch{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
