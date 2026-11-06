@@ -12,7 +12,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 </head>
 <body>
-<div class="app" id="app" data-look="bold" data-base="bold" data-mode="auto">
+<div class="app" id="app" data-look="jam" data-base="panel" data-mode="auto">
 
 <header class="top">
   <div class="topbar">
@@ -29,8 +29,9 @@
     <span class="err" id="refresh-err" role="alert"></span>
   </div>
   <div class="lookpanel" id="look-panel" role="region" aria-label="Look and mode" hidden>
-    <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Callsheet</span>
-      <button type="button" class="chip lchip" data-set-look="bold" aria-pressed="true"><span class="app lsw" data-look="bold" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Bold</button>
+    <div class="grp" role="group" aria-labelledby="lbl-look"><span class="label" id="lbl-look">Look</span>
+      <button type="button" class="chip lchip" data-set-look="jam" aria-pressed="true"><span class="app lsw" data-look="jam" data-base="panel" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Jam</button>
+      <button type="button" class="chip lchip" data-set-look="bold" aria-pressed="false"><span class="app lsw" data-look="bold" data-base="bold" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Bold</button>
       <button type="button" class="chip lchip" data-set-look="clean" aria-pressed="false"><span class="app lsw" data-look="clean" data-base="clean" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Clean</button>
       <button type="button" class="chip lchip" data-set-look="easy" aria-pressed="false"><span class="app lsw" data-look="easy" data-base="easy" data-mode="auto" aria-hidden="true"><i></i><i></i></span>Easy read</button>
     </div>

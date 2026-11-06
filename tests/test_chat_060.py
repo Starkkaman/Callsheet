@@ -814,7 +814,7 @@ class PageTest(unittest.TestCase):
         self.assertIn("areaChips(all),", self.js)
         self.assertIn("'data-afil': a.id, 'aria-pressed': String(U.area === a.id)", self.chat)
         self.assertIn("else if (d.afil) { U.area = d.afil === 'all' ? null : d.afil;", self.js)
-        self.assertIn("Area summaries are at the top of Briefing.", self.chat)
+        self.assertIn("Area summaries are at the top of Today.", self.chat)
         self.assertIn(".bv .afil .chip{", self.css)
 
     def test_chat_ui_is_text_only_and_relative(self):

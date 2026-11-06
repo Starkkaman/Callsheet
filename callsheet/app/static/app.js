@@ -9,29 +9,36 @@
   'use strict';
   var app = document.getElementById('app');
   var main = document.getElementById('main');
-  /* 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids and names; nothing reads JamDash) */
+  /* 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids and names; nothing reads JamDash).
+     0.11.0: Jam (the shared "calm instruments" look, data-base=panel) is the default. */
   var OWN_LOOKS = ['bold', 'clean', 'easy'];
   var JAM_LOOKS = ['depth', 'braun', 'nerv', 'lcars', 'olympia', 'transit', 'grid', 'newwave', 'pulsar'];
-  var LOOKS = OWN_LOOKS.concat(JAM_LOOKS);
+  var LOOKS = ['jam'].concat(OWN_LOOKS, JAM_LOOKS);
+  /* 0.11.0: the looks the picker offers (owner, 2026-11-06: "scrap most of the old looks. Just disable them for now but
+     don't delete them"). The others keep their code and tokens; a saved one shows the default look, with a one-time
+     notice. Add an id here to offer a look again. */
+  var ENABLED_LOOKS = ['jam', 'easy'];
+  var DEFAULT_LOOK = 'jam';
   var MODES = ['auto', 'light', 'dark'];
-  var LOOKNAME = { bold: 'Bold', clean: 'Clean', easy: 'Easy read', depth: 'Depth', braun: 'Braun', nerv: 'NERV', lcars: 'LCARS',
+  var LOOKNAME = { jam: 'Jam', bold: 'Bold', clean: 'Clean', easy: 'Easy read', depth: 'Depth', braun: 'Braun', nerv: 'NERV', lcars: 'LCARS',
     olympia: 'Olympia', transit: 'Transit', grid: 'Grid', newwave: 'New Wave', pulsar: 'Pulsar' }, MODENAME = { auto: 'Auto', light: 'Light', dark: 'Dark' };
-  var LOOKDESC = { bold: 'Flat colour, big type', clean: 'Quiet and professional', easy: 'Larger text, strongest contrast',
+  var LOOKDESC = { jam: 'Calm panels, one orange', bold: 'Flat colour, big type', clean: 'Quiet and professional', easy: 'Larger text, strongest contrast',
     depth: 'Layers and landscape', braun: 'The quiet appliance', nerv: 'The command centre, always dark', lcars: 'The starship console, always dark',
     olympia: 'After Aicher: the Munich games', transit: 'After Vignelli: the subway sign', grid: 'After Crouwel: the New Alphabet',
     newwave: 'After Greiman: a desk of sheets', pulsar: 'After Saville: the pulse line' };
   /* the component family each look borrows (app.css keys its structural overrides on data-base) */
-  var BASE = { bold: 'bold', clean: 'clean', easy: 'easy', depth: 'clean', braun: 'clean', pulsar: 'clean', newwave: 'clean',
+  var BASE = { jam: 'panel', bold: 'bold', clean: 'clean', easy: 'easy', depth: 'clean', braun: 'clean', pulsar: 'clean', newwave: 'clean',
     nerv: 'bold', lcars: 'bold', transit: 'bold', olympia: 'bold', grid: 'bold' };
   var DARK_ONLY = ['nerv', 'lcars'];
   /* each look's font files (static/fonts): preloaded for the active look only, the rest load when a look is chosen */
-  var LOOKFONTS = { bold: ['londrina_black.ttf', 'jost.ttf'], clean: ['ibm-plex-sans-latin-400-600.woff2'],
+  var LOOKFONTS = { jam: ['jost.ttf', 'ibm-plex-mono-400.woff2'], bold: ['londrina_black.ttf', 'jost.ttf'], clean: ['ibm-plex-sans-latin-400-600.woff2'],
     easy: ['atkinson-hyperlegible-latin-400.woff2', 'atkinson-hyperlegible-latin-700.woff2'], depth: ['instrument-sans-wdth.woff2'],
     braun: ['archivo-wdth-wght.woff2'], nerv: ['saira-wght.woff2', 'noto-serif-700-900.woff2', 'share-tech-mono.woff2'],
     lcars: ['antonio-wght.woff2'], olympia: ['albert-sans-wght.woff2'], transit: ['inter-latin.woff2'], grid: ['hanken-grotesk-wght.woff2'],
     newwave: ['bricolage-grotesque-latin.woff2', 'silkscreen-400.woff2'], pulsar: ['archivo-wdth-wght.woff2', 'ibm-plex-mono-400.woff2'] };
   /* per-device prefs, JamDash's shape {look, mode, autoSource} under Callsheet's own key (0.7.1 kept two keys) */
   var KEY_PREFS = 'callsheet.prefs', KEY_LOOK = 'callsheet.look', KEY_MODE = 'callsheet.mode', KEY_SUN = 'callsheet.sunplace';
+  var KEY_LOOKNOTE = 'callsheet.looknote';   /* 0.11.0: the "new look" notice was seen on this device */
   var PLACES = [['connections', 'Connections'], ['day', 'Your day'], ['ai', 'AI'], ['advanced', 'Advanced']];  /* 0.9.0: Setup in four places */
   var DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   var DAYNAME = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
@@ -147,7 +154,7 @@
     var p = null;
     try { p = JSON.parse(load(KEY_PREFS) || 'null'); } catch (e) { p = null; }
     if (!p || typeof p !== 'object') p = { look: load(KEY_LOOK), mode: load(KEY_MODE) };
-    return { look: LOOKS.indexOf(p.look) >= 0 ? p.look : 'bold', mode: MODES.indexOf(p.mode) >= 0 ? p.mode : 'auto',
+    return { look: LOOKS.indexOf(p.look) >= 0 ? p.look : DEFAULT_LOOK, mode: MODES.indexOf(p.mode) >= 0 ? p.mode : 'auto',
       autoSource: p.autoSource === 'sunset' ? 'sunset' : 'device' };
   })();
   function savePrefs() { save(KEY_PREFS, JSON.stringify({ look: PREFS.look, mode: PREFS.mode, autoSource: PREFS.autoSource })); }
@@ -217,8 +224,20 @@
     document.querySelectorAll('.mini,.lsw').forEach(function (m) { m.dataset.mode = PREFS.mode; });
     syncBg(); sunUi();
   }
+  /* 0.11.0: a saved look that isn't offered any more shows the default look; lookFellBack keeps the saved id for the
+     one-time notice (KEY_LOOKNOTE, this device). The server's setting is left as it was. */
+  var lookFellBack = null;
+  function shownLook(v) { return ENABLED_LOOKS.indexOf(v) >= 0 ? v : DEFAULT_LOOK; }
+  function lookNoteDue() { return !!lookFellBack && load(KEY_LOOKNOTE) !== '1'; }
+  function lookNoteSeen() { save(KEY_LOOKNOTE, '1'); }
+  /* the picker offers only ENABLED_LOOKS: the other chips stay in index.html, hidden, and a group with none left hides */
+  document.querySelectorAll('[data-set-look]').forEach(function (b) { b.hidden = ENABLED_LOOKS.indexOf(b.getAttribute('data-set-look')) < 0; });
+  document.querySelectorAll('.lookpanel .grp').forEach(function (g) {
+    if (g.querySelector('[data-set-look]') && !g.querySelector('[data-set-look]:not([hidden])')) g.hidden = true;
+  });
   function setLook(v, persist) {
-    if (LOOKS.indexOf(v) < 0) v = 'bold';
+    if (LOOKS.indexOf(v) < 0) v = DEFAULT_LOOK;
+    if (ENABLED_LOOKS.indexOf(v) < 0) { lookFellBack = v; v = DEFAULT_LOOK; }
     PREFS.look = v; app.dataset.look = v; app.dataset.base = BASE[v];
     loadFonts(v); pressLook(); applyMode();
     document.querySelectorAll('.wi textarea').forEach(fitTa);   /* the look changes the font size */
@@ -268,7 +287,7 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('button') : null;
     if (!t || t.disabled) return;
-    if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', PREFS.look, t); }
+    if (t.dataset.setLook) { setLook(t.dataset.setLook, true); pushLook('look', PREFS.look, t); lookNoteSeen(); }
     else if (t.dataset.setMode) { setMode(t.dataset.setMode, true); pushLook('mode', PREFS.mode, t); }
     else if (t.dataset.setAuto) setAuto(t.dataset.setAuto);
     else if (t.dataset.dens) setDensity(t.dataset.dens);  /* 0.9.0: per device */
@@ -308,8 +327,9 @@
     return s;
   }
   var KEY_TAB = 'callsheet.tab', KEY_DISMISS = 'callsheet.dismissed';
-  /* 0.6.0 chat: Chat takes the place of Areas (area summaries are in Briefing, Replies has area chips) */
-  var TABS = [['briefing', 'Briefing', 'Brief', 'brief'], ['replies', 'Replies', 'Replies', 'mail'], ['agenda', 'Agenda', 'Agenda', 'cal'],
+  /* 0.6.0 chat: Chat takes the place of Areas (area summaries are in Briefing, Replies has area chips).
+     0.11.0: the Briefing tab is shown as "Today" (owner, 2026-11-06); its id, #briefing and saved tab stay "briefing". */
+  var TABS = [['briefing', 'Today', 'Today', 'brief'], ['replies', 'Replies', 'Replies', 'mail'], ['agenda', 'Agenda', 'Agenda', 'cal'],
     ['chat', 'Chat', 'Chat', 'chat'], ['projects', 'Projects', 'Projects', 'tasks']];  /* 0.7.0: Projects replaces Tasks */
   var LIVE_TABS = ['briefing', 'replies', 'agenda', 'chat', 'projects'];
   var OLD_TABS = { areas: 'replies' };  /* 0.6.0 chat: a saved tab or #areas link from before opens Replies */
@@ -1637,6 +1657,10 @@
     var banner = S && !S.setup_done && noAccounts() ? h('div', { class: 'banner', role: 'region', 'aria-label': 'Setup' }, [
       h('p', null, 'This is sample data. Set up Callsheet to see your own day.'),
       btn('btn primary', 'Start setup', null, function () { wizGo(0); })]) : null;
+    /* 0.11.0: the one-time notice when this device's saved look isn't offered any more (dismissed on this device) */
+    if (!banner && lookNoteDue()) banner = h('div', { class: 'banner looknote', role: 'region', 'aria-label': 'New look' }, [
+      h('p', null, 'Callsheet has a new look. Easy read is still in Setup.'),
+      btn('btn', 'Got it', null, function () { lookNoteSeen(); renderBrief('#tab-' + U.tab); })]);
     /* 0.9.1: the one-time notice after the update that turned AI sorting on (dismissed on the server) */
     if (!banner && !B.sample && S && S.sorting && S.sorting.notice) banner = h('div', { class: 'banner srnotice', role: 'region', 'aria-label': 'AI sorting' }, [
       h('p', null, 'Callsheet now sorts with AI. Your notes guide it. Switch off in Setup → AI.'),
@@ -1989,7 +2013,8 @@
     var st = S && S.settings;
     if (!st) return;
     if (lookPending) { st.look = PREFS.look; st.mode = PREFS.mode; return; }
-    if (LOOKS.indexOf(st.look) >= 0 && st.look !== app.dataset.look) setLook(st.look, true);
+    if (LOOKS.indexOf(st.look) >= 0 && ENABLED_LOOKS.indexOf(st.look) < 0) lookFellBack = st.look;   /* 0.11.0 */
+    if (LOOKS.indexOf(st.look) >= 0 && shownLook(st.look) !== app.dataset.look) setLook(st.look, true);
     if (MODES.indexOf(st.mode) >= 0 && st.mode !== PREFS.mode) setMode(st.mode, true);
   }
   /* ---------- version check: this page's version (the meta that server.py fills in) against the server's ---------- */
@@ -2685,7 +2710,7 @@
      and the style examples are fixed in the server (writer.SAFETY, writer.EXAMPLES) and always come last. */
   var WSECT = [
     ['rules', 'Global rules', 'Applies to everything Callsheet writes.'],
-    ['summary', 'Day summary', 'The short paragraph at the top of Briefing.'],
+    ['summary', 'Day summary', 'The short paragraph at the top of Today.'],
     ['areas', 'Area summaries', 'The few sentences for each area.'],
     ['emails', 'Email summaries', 'The one line in each row and “What they want”.'],
     ['drafts', 'Reply drafts', 'Suggested replies you copy and send yourself.']];
@@ -5802,7 +5827,7 @@
       [h('button', { type: 'button', class: 'chip', 'data-afil': 'all', 'aria-pressed': String(!U.area) }, 'All ' + n(null))].concat(areas.map(function (a) {
         return h('button', { type: 'button', class: 'chip a' + clampColour(a.colour), 'data-afil': a.id, 'aria-pressed': String(U.area === a.id) }, a.name + ' ' + n(a.id));
       }))),
-      h('p', { class: 'afnote' }, 'Area summaries are at the top of Briefing.')];
+      h('p', { class: 'afnote' }, 'Area summaries are at the top of Today.')];
   }
 
   /* the side panel for a source chip: like a Replies detail (title, people, date, snippet, Open in …) */
@@ -6238,7 +6263,7 @@
         d.note ? h('p', { class: 'cnnote', role: 'status' }, d.note) : null]),
         d.duplicate ? h('p', { class: 'cnerr' }, 'You’ve already added this as ' + d.duplicate + '.') : null,
         on(h('form', { class: 'cnform', novalidate: '', 'aria-label': yt ? 'Add the channel' : 'Add the feed' }, [
-          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on your Briefing'), lab]),
+          h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on Today'), lab]),
           h('p', { class: 'cnhost' }, ['Callsheet will read ', h('b', null, d.host || ''), ' ' + (d.every || '') + '. ' + (v.nothing_sent || 'Nothing about you is sent.')]),
           h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
           e.preventDefault();
@@ -6420,7 +6445,7 @@
       d.note ? h('p', { class: 'cnnote', role: 'status' }, d.note) : null]),
       d.duplicate ? h('p', { class: 'cnerr' }, 'You’ve already added this folder as ' + d.duplicate + '.') : null,
       on(h('form', { class: 'cnform', novalidate: '', 'aria-label': 'Add the folder' }, [
-        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on your Briefing'), lab]),
+        h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on Today'), lab]),
         rpTells(d.tells, CN.tell, 'When to tell you', 'rp-tell-new', function (t) { CN.tell = t; renderSetup('[data-fk="' + cssq('rp-tell-new:' + t) + '"]'); }),
         h('p', { class: 'cnhost' }, d.hostline || ''),
         h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {

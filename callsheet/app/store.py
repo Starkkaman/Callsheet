@@ -28,8 +28,10 @@ DB_NAME = "callsheet.db"
 
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 READ_KEYS = ("calendar", "mail", "chat", "tasks", "writer")
-# 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids; app.js LOOKS has the same list)
-LOOKS = ("bold", "clean", "easy", "depth", "braun", "nerv", "lcars", "olympia", "transit", "grid", "newwave", "pulsar")
+# 0.7.2: Callsheet's three looks plus the nine JamDash-matched ones (JamDash's ids; app.js LOOKS has the same list).
+# 0.11.0: "jam" (the default). The page offers only Jam and Easy read (app.js ENABLED_LOOKS); the others are still accepted
+# and kept here, so a saved look survives until the owner decides their fate.
+LOOKS = ("jam", "bold", "clean", "easy", "depth", "braun", "nerv", "lcars", "olympia", "transit", "grid", "newwave", "pulsar")
 MODES = ("auto", "light", "dark")
 TIME_FORMATS = ("12h", "24h")
 CALL_LABELS = {"morning": "Morning brief", "midday": "Midday check-in", "afternoon": "Afternoon check-in"}
@@ -120,7 +122,7 @@ def default_settings():
             {"id": "afternoon", "label": CALL_LABELS["afternoon"], "time": "17:00", "enabled": True},
         ],
         "skip_checkins_days_off": True,
-        "look": "bold",
+        "look": "jam",
         "mode": "auto",
         "time_format": "12h",
     }

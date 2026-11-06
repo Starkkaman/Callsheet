@@ -83,7 +83,7 @@ class StateAndSettingsTest(Base):
         self.assertEqual(s["reply_age_days"], 2)
         self.assertEqual([(c["id"], c["time"], c["enabled"]) for c in s["call_times"]],
                          [("morning", "06:30", True), ("midday", "12:30", True), ("afternoon", "17:00", True)])
-        self.assertEqual((s["skip_checkins_days_off"], s["look"], s["mode"]), (True, "bold", "auto"))
+        self.assertEqual((s["skip_checkins_days_off"], s["look"], s["mode"]), (True, "jam", "auto"))
         self.assertEqual(st["last_sync"], {"at": None, "ok": None, "errors": []})
         self.assertIs(st["setup_done"], False)
         self.assertEqual(st["vips"], [])

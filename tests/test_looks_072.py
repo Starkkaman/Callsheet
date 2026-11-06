@@ -54,34 +54,35 @@ class LookList(unittest.TestCase):
     def test_ids_and_order(self):
         self.assertEqual(js_list("OWN_LOOKS"), OWN)
         self.assertEqual(js_list("JAM_LOOKS"), JAM)
-        self.assertEqual(list(store.LOOKS), OWN + JAM)
+        self.assertEqual(list(store.LOOKS), ["jam"] + OWN + JAM)   # 0.11.0: the Jam look first
 
     def test_names_match_jamdash(self):
         names = dict(re.findall(r"([a-z]+): '([^']+)'", re.search(r"var LOOKNAME = \{(.*?)\}", JS, re.S).group(1)))
-        self.assertEqual(names, NAMES)
+        self.assertEqual(names, dict(NAMES, jam="Jam"))
 
     def test_every_look_has_a_family(self):
         base = js_map("BASE")
-        self.assertEqual(set(base), set(OWN + JAM))
+        self.assertEqual(set(base), set(["jam"] + OWN + JAM))
+        self.assertEqual(base["jam"], "panel")
         self.assertTrue(all(base[k] == k for k in OWN))
         self.assertEqual({k for k, v in base.items() if v == "clean"}, {"clean", "depth", "braun", "pulsar", "newwave"})
         self.assertEqual({k for k, v in base.items() if v == "bold"}, {"bold", "nerv", "lcars", "transit", "olympia", "grid"})
 
     def test_header_picker_groups_and_swatches(self):
-        own, jam = HTML.index('id="lbl-look">Callsheet<'), HTML.index('id="lbl-jam">Jam looks<')
+        own, jam = HTML.index('id="lbl-look">Look<'), HTML.index('id="lbl-jam">Jam looks<')
         mode = HTML.index('id="lbl-mode"')
-        for look in OWN:
+        for look in ["jam"] + OWN:
             self.assertTrue(own < HTML.index('data-set-look="%s"' % look) < jam, look)
         for look in JAM:
             self.assertTrue(jam < HTML.index('data-set-look="%s"' % look) < mode, look)
             self.assertIn('class="app lsw" data-look="%s"' % look, HTML)
-        self.assertEqual(len(re.findall(r'data-set-look="', HTML)), 12)
+        self.assertEqual(len(re.findall(r'data-set-look="', HTML)), 13)
 
     def test_server_accepts_every_look_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as d:
             s = store.Store(d)
             try:
-                for look in OWN + JAM:
+                for look in ["jam"] + OWN + JAM:
                     s.update_settings({"look": look})
                     self.assertEqual(s.settings()["look"], look)
                 with self.assertRaises(store.InputError):
@@ -181,7 +182,7 @@ class Fonts(unittest.TestCase):
     def test_preload_map_covers_every_look(self):
         m = re.search(r"var LOOKFONTS = \{(.*?)\};", JS, re.S).group(1)
         fonts = dict((k, re.findall(r"'([^']+)'", v)) for k, v in re.findall(r"(\w+): \[([^\]]*)\]", m))
-        self.assertEqual(set(fonts), set(OWN + JAM))
+        self.assertEqual(set(fonts), set(["jam"] + OWN + JAM))
         for look, fs in fonts.items():
             for f in fs:
                 self.assertTrue((STATIC / "fonts" / f).is_file(), (look, f))
