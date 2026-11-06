@@ -1713,6 +1713,49 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
   .bv .csave .cok{min-height:44px}
 }
 
+/* 0.11.1 Wheatley's mark (the Lens with eyelid shutters): body = text colour, face = page; lids slide on a state change */
+.wl{width:24px;height:24px;flex:none;color:var(--text);overflow:visible}
+.wl.sm{width:20px;height:20px}
+.wl .b{fill:currentColor}
+.wl .f{fill:var(--bg)}
+.wl .i{fill:color-mix(in srgb,#6b82b4 80%,currentColor)}
+.wl .p{fill:#141a26;transform-origin:32px 32px}
+.wl .lt,.wl .lb,.wl .ey,.wl .p{transform-box:view-box;transition:transform 250ms ease}
+.wl[data-s=idle] .lt{transform:translateY(10.8px)}
+.wl[data-s=idle] .ey{transform:translate(0,.5px)}
+.wl[data-s=listening] .ey{transform:translate(.75px,-.75px)}
+.wl[data-s=listening] .p{transform:scale(1.45)}
+.wl[data-s=speaking] .lt{transform:translateY(5.76px)}
+.wl[data-s=speaking] .lb{transform:translateY(-7.2px)}
+.wl[data-s=speaking] .p{transform:scale(.75)}
+@media (prefers-reduced-motion:reduce){.wl .lt,.wl .lb,.wl .ey,.wl .p{transition:none}}
+.bv .ma>.wlab{display:flex;align-items:center;gap:6px}
+/* 0.11.1 the setup card in Chat (Check, then Add; one loud button) */
+.bv .scard .cform{gap:4px}
+.bv .scard .scsite{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px}
+.bv .scard .scsite .label{color:var(--muted)}
+.bv .scard .schost{font-size:var(--fs-md);overflow-wrap:anywhere}
+.bv .scard .scnote{flex-basis:100%;font-size:var(--fs-sm);color:var(--muted)}
+.bv .scard .screfuse{display:grid;gap:2px;padding-left:12px;box-shadow:inset 3px 0 0 var(--alert)}
+.bv .scard .cnfound{display:grid;gap:4px}
+.bv .scard .cnlatest{margin:0;padding-left:20px;font-size:var(--fs-sm)}
+.bv .scard .cnlatest li{overflow-wrap:anywhere}
+.bv .scard .field{display:grid;gap:4px}
+.bv .scard .field>.label{color:var(--muted)}
+.bv .scard .chips{display:flex;flex-wrap:wrap;gap:6px}
+.bv .scard .rpdirs{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.bv .scard .rpdir{min-height:32px;padding:4px 10px;border-radius:var(--chip-radius);background:var(--surface-2);color:var(--text);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);font:inherit;font-size:var(--fs-sm)}
+.bv .scard .rppath{font-size:var(--fs-sm);overflow-wrap:anywhere}
+.bv .scdone{display:grid;gap:8px;width:min(100%,560px)}
+.bv .scdone .scok{color:var(--ok);font-weight:700}
+.bv .scdone .sct{overflow-wrap:anywhere}
+.bv .scdone .rpinsw{display:grid;gap:4px}
+.bv .scdone .rpins{width:100%;font-family:var(--mono,monospace);font-size:var(--fs-xs)}
+@media (max-width:700px){
+  .bv .scard .chip,.bv .scard .rpdir,.bv .scdone .btn,.bv .scard .cform .inp{min-height:44px}
+  .bv .scard .busy+.acts .tbtn{min-height:44px}
+}
+
 /* 0.7.0 projects */
 /* from mockups/planning-v1.html (approved), theme tokens only */
 .hdr .rf{display:inline-flex;align-items:center;gap:6px}
