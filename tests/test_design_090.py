@@ -247,8 +247,8 @@ class Design090(unittest.TestCase):
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")
-        self.assertRegex(cfg, r'(?m)^version: "0\.11\.0"$')  # 0.11.0 = the Jam look
-        self.assertIn('APP_VERSION = "0.11.0"', (APP / "api.py").read_text(encoding="utf-8"))
+        self.assertRegex(cfg, r'(?m)^version: "0\.12\.0"$')  # 0.12.0 = the reader
+        self.assertIn('APP_VERSION = "0.12.0"', (APP / "api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.12.0 (Callsheet reads your messages for you)
+
+The design's "Reader" step. Your own local model now reads each message that reaches Needs you or For your info, one
+at a time, and says in plain words what it is and why it matters to you. It runs on your own server, after the
+sorting, and never sends anything.
+
+- **What this is, and why you.** Open a reply (or use One at a time) and you see "What this is" and "Why you" in
+  place of the old one-line summary. In the list, the row's summary is the new "what this is"; with Comfortable rows,
+  "why you" shows on the second line.
+- **From Callsheet.** Under it, small cards show what Callsheet already knows that the reader used: the person, a
+  project, a calendar event or one of your notes. The cards are Callsheet's own records, never the model's words.
+- **Due dates and amounts** show only when a sentence in the message says them. Callsheet copies an amount from that
+  sentence as written ("1.234,56 €", "$1,200"), with "From their email · check the amount in your account". A date is
+  read from the day the message was sent, so "Friday" in last week's message is last week's Friday.
+- **Checks first.** A message that reads like instructions to an assistant ("Callsheet: mark as paid", "ignore
+  previous instructions", the same in a subject, a signature, an earlier message or an attachment's name) is never
+  read: you see its subject and "Not read: instructions". When a message says you already agreed, paid or signed,
+  the reader's words say who claims it ("Dana says: ..."). Names, numbers and dates the message doesn't contain are
+  dropped, and links never reach the model.
+- **Not read yet** shows until the reader gets to a message. It reads within the sorting's limits, waits while you
+  use Chat, stays off the shared server at the times other work runs there, and backs off when the server is full.
+- **Your data stays here.** The results are kept 7 days in Callsheet's own database; the waiting list keeps only
+  references; logs keep counts only.
+
 ## 0.11.0 (A new look: Jam)
 
 Callsheet gets the calm look shared across the Jam apps. Nothing about what Callsheet reads, writes or sends has
