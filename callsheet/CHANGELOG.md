@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.2 (Reports from Google Drive)
+
+Agents that run in the cloud can now hand reports to Callsheet through a Google Drive folder. Callsheet reads it with
+the read-only Drive access you already gave in Get to know me: no new permission, and nothing new is contacted.
+
+- **Setup › Connectors › Add a reports folder** has a new choice, **Where**: "A folder on this box" or "A Google Drive
+  folder". For Drive, pick one of your Google accounts, then the folder: open folders one by one, use Shared with me,
+  or search by name. One folder per source.
+- **Check** shows the reports already there, like a folder on this box. The text for the other agent now says to
+  upload one file to that Drive folder, as a .md file (not a Google Doc). The other agent uses its own Drive access.
+- **Callsheet only reads.** It never changes, moves or deletes anything in Drive. It reads only report files directly
+  in the folder, waits for files that are still uploading, and checks each file arrived whole.
+- **The same protections as folders**: secrets hidden before anything is kept, instructions and links shown as text,
+  "Says it's from …" when a file claims to be someone else, and a report can never put itself above Needs you.
+- **Google Docs aren't read.** A Doc named like a report is listed under "Couldn't read" with the reason.
+- **In Chat**, asking to hook up an agent in the cloud brings up the card with Where set to Google Drive and the same
+  folder picker. Nothing is read until you press Check, and nothing is added until you press Add.
+
 ## 0.11.1 (Set up from Chat)
 
 You can now ask Chat to add a YouTube channel, a news feed or a reports folder. Callsheet still reads a site only when

@@ -1,4 +1,4 @@
-# Connectors (0.10.0, Reports 0.10.2a)
+# Connectors (0.10.0, Reports 0.10.2a, Reports from Drive 0.11.2)
 
 `callsheet/app/connectors.py`, `conn_youtube.py`, `conn_news.py`, `net.py`, `feedxml.py`. Design:
 `~/project/daily-brief/wheatley/design.md` (connectors, `net.py`, safety 4.1, stage 0.10.0). Owner decisions
@@ -240,8 +240,68 @@ Chat to find them"). **Chat** finds reports in the index (`source` `reports`, `p
 2,000 rows per source; the text lives in index.db (500 per source, 30 days). Remove deletes both, never the files.
 Logs: counts only.
 
-**Not in 0.10.2a**: the Google Drive folder option (design 3.9) and the email fallback. Drive would reuse the
-`drive.readonly` access but needs its own folder picker and per-account token handling; it is left for a later step.
+**Not in 0.10.2a**: the Google Drive folder option (design 3.9, built in 0.11.2, below) and the email fallback.
+
+### From a Google Drive folder (0.11.2)
+
+`callsheet/app/conn_reports_drive.py`. For agents that run in the cloud (owner, 2026-11-06: "google drive, or shared
+folders only for now"). The same Reports kind with **Where: A Google Drive folder**: the owner picks one of the
+connected Google accounts and one folder in it. No new permission and no new host (CLAUDE.md, "Reports"): the
+account's existing read-only Drive access (`drive.readonly`, granted in Get to know me) and only the Drive requests
+`google.py`'s allowlist already permits, all GET:
+- the picker: `GET drive/v3/files` with `q` = `'<id>' in parents and mimeType = 'application/vnd.google-apps.folder'
+  and trashed = false` (My Drive is `root`), `sharedWithMe and mimeType = …` (Shared with me) or `name contains '<text>'
+  and mimeType = …` (the search box; quotes and backslashes escaped), 100 folders a page with Google's page token
+  ("More folders"), and `GET drive/v3/files/<id>?fields=id,name,mimeType,trashed` for the opened folder's name;
+  breadcrumbs (account › My Drive › … ) are kept by the page. My Drive, Shared with me and a search list can't be a
+  source: open the folder itself. An account without Drive access says so and asks nothing of Drive.
+- each look (every 15 minutes): `GET drive/v3/files/<folder id>` (still a folder, not in the bin), `GET drive/v3/files`
+  with `'<folder id>' in parents and trashed = false` (200 a page, at most 2,000 entries, newest first) and
+  `GET drive/v3/files/<file id>?alt=media` only for new or changed report files. Google Docs are never exported.
+- tokens: the account's own (refreshed through Google's token endpoint on expiry or a 401, as the Know me index does);
+  never logged, stored with the connector or shown. A removed account, lost Drive access, a deleted or binned folder,
+  or Google asking to slow down show in Setup in plain words and back off like a folder's errors.
+
+**Identity**: account id + folder id (`drive:<account>:<folder id>`), never anything in a file; the source's name is
+the owner's (default: the folder's name). The same folder through two accounts is two sources.
+
+**What is read**: only files directly in the folder (no subfolders), named `<YYYY-MM-DD>-<topic>.md`, whose Drive type
+is `text/markdown`, `text/x-markdown` or `text/plain`. Skipped like a local folder: names starting with `.`, ending in
+`.tmp`, `~`, `.part` …, anything not ending in `.md`, items in the bin. Listed under "Couldn't read" with the reason:
+Google Docs named like a report (not exported: a Doc has no checksum, so an edit can't be told from a re-save; the agent
+uploads a `.md` file instead), shortcuts (never followed), other file types, odd names. Two files with the same name:
+the newest is read.
+
+**Half-uploaded files**: a file whose Drive time is less than 2 minutes old is read only when its size, time and
+checksum looked the same at two looks in a row (Callsheet looks again a minute later); the downloaded bytes must match
+the `md5Checksum` Google listed (or the size, when there is none), otherwise it changed while read and is tried later.
+
+**Dedupe and caps**: as a local folder (50 reads a look, 256 KB each, also when Google sends more than it listed,
+20 new a day per source, at most 3 per source in the Briefing), with the fingerprint `md5:<hex>`: a re-save with the
+same bytes (a new time, the same checksum) isn't downloaded again; an edit counts once more; the same text under
+another name is a replay (`dup`); deleted and uploaded again unchanged is not new.
+
+Everything after the download is the folder kind's: the hand-read header, secret masking before storage, inject
+flags, defanged links, "Says it's from …", importance as a mark only, expiry, text only on the page.
+
+**The instruction for the other agent** (it uses its own Drive access to the folder):
+```
+After each run, upload one new file to the Google Drive folder "<folder>" (<account>) named <YYYY-MM-DD>-<topic>.md, as a Markdown or plain text file (not a Google Doc), uploaded whole in one go. Start the file with this header:
+---
+from: <name>
+title: <one line>
+importance: normal
+expires: <YYYY-MM-DD, optional, at most 14 days ahead>
+---
+importance is low, normal or urgent. Then, in under about 300 words, plain facts first: the counts and the top items. Don't put passwords, keys, tokens, credentials, IP addresses or exploit details in it. Keep the full report where you keep it now; you may name it as plain text ("Full report: <name>"), not as a link.
+```
+
+**W-RP for Drive** (`tests/test_reports_drive_0112.py`, a fake Google; the network code is a trap): picker paging,
+Shared with me and search (escaping), every request URL asserted against the permitted Drive GETs plus the token
+refresh (0 others, 0 non-GET), dedupe by checksum, mid-upload and changed-while-read files, size/look/day/entry caps,
+the 240-file fuzz set through the Drive path (0 crashes), planted instructions and lures, `from: Isaac` 10/10 never
+trusted, importance 20/20 never above Needs you, 22 secret patterns 0 unmasked (and no token in any store, page or
+log), account and folder trouble, and the chat card's Drive path.
 
 **W-RP** (`tests/test_reports_0102a.py`): planted instructions in the body and the header, link lures, device-name
 injection, a fake `from: Isaac` and other owner claims (10/10 marked, never trusted), urgent-flag abuse (20/20 never
@@ -266,7 +326,10 @@ offered to the model; anywhere else a call is ignored and counted in the log.
 
 The card is built by Callsheet (`chat.build_card`), never from the model's text: the address is one the owner wrote
 (the model only picks among them), a name only when all its words are the owner's, `tell` only from the fixed list.
-`chat.card_address` applies the rules before anything is read (parsing only): https only, no user@host, port 443 only,
+0.11.2: a reports card has **Where** (a folder on this box, or a Google Drive folder with the same picker as Setup);
+the owner's words "cloud", "drive" or "Google Drive" (and no /share path) open it on Drive. A Drive card's Check sends
+`{kind: "reports", where: "drive", account, address: <folder id>}`; `card_address` accepts only a Drive id and an
+account id there. `chat.card_address` applies the rules before anything is read (parsing only): https only, no user@host, port 443 only,
 no number addresses, no home-network names, no hidden or bidi characters, no link shorteners (refused, never
 followed), YouTube cards take only YouTube addresses, reports folders only under /share or /media. The host is shown
 as its IDNA A-label (the form Check contacts) plus the Unicode form when they differ, and "new site" when it isn't in
@@ -293,7 +356,9 @@ kind; today only the Briefing list uses it (Always tell me first).
 0.10.2a: `POST api/connectors/reports/folders {path}` (the folder picker: subfolder names, no file opened),
 `POST api/connectors/check {kind: "reports", address: <folder>}`, `POST api/connectors {token, label?, tell}`,
 `PATCH api/connectors/<id> {tell}`. 0.11.1: `tell` for every kind; `chat: {chat, turn, token}` on check and add from a
-Chat card.
+Chat card. 0.11.2: `POST api/connectors/reports/folders {where: "drive", account?, parent?, q?, page?}` (the owner's
+Google accounts, then Drive folder names), `POST api/connectors/check {kind: "reports", where: "drive", account,
+address: <folder id>}`.
 
 ## Storage
 

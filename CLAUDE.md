@@ -41,7 +41,8 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
 - **Reports (0.10.2a, owner approved 2026-11-05).** Callsheet may read Markdown reports that other agents or services
   write, one file per report, from one folder per Reports connector the owner picks: a folder under Home Assistant's
   `/share` or `/media` (the existing read-only mappings; no new add-on permission), or a Google Drive folder through the
-  existing `drive.readonly` access (no new host). Read-only: files are never moved, changed or deleted. Only regular
+  existing `drive.readonly` access (no new host; built in 0.11.2, `conn_reports_drive.py`, only the Drive GETs already
+  in `google.py`'s allowlist, no new permission). Read-only: files are never moved, changed or deleted. Only regular
   `*.md` files inside the chosen folder (no symlinks or paths out of it), capped in number and size. Callsheet accepts
   no inbound connections for reports (no endpoint, no MQTT). Report text is untrusted `<data>` like mail: inject checks,
   defanged links, instruction marking; a report's `importance` is a hint the owner's per-source choice overrides, so a
