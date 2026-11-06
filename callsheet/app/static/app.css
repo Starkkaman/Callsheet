@@ -2587,6 +2587,18 @@ html.fa-lock{overflow:hidden}
 @media (max-width:700px){
   .cn10 .rpinsw .btn{width:100%}
 }
+/* ===== 0.11.2: Reports from Drive (the Where keys and the Drive folder picker, in Setup and on the chat card) ===== */
+.dpick{display:grid;gap:8px;margin:0 0 12px}
+.dpick .rpdirs{margin:0}
+.dpcrumbs{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;min-width:0}
+.dpcrumbs .dpc,.dpcrumbs .dpcur{max-width:100%;overflow-wrap:anywhere;text-align:left}
+.dpcrumbs .dpcur{font-weight:600;padding:4px 0}
+.dpcrumbs .dpsep{color:var(--muted)}
+.dpsearch{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.dpsearch .inp{flex:1 1 200px;min-width:0}
+@media (max-width:700px){
+  .dpcrumbs .dpc,.dpsearch .btn,.dpsearch .inp,.dpick>.tbtn{min-height:44px}
+}
 
 /* ================= 0.11.0: the Jam look's structure (data-base=panel) =================
    Calm instruments (jam-design HANDOFF.md, pass 6): calm groups in panels with a 1 px hairline and soft corners, no

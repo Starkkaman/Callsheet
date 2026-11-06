@@ -5822,7 +5822,8 @@
     var all = CH.sc || (CH.sc = {}), st = all[c.pid];
     if (!st) st = all[c.pid] = { stage: c.status === 'refused' ? 'refused' : 'address', addr: c.address || '', name: c.name || '',
       tell: c.tell || 'important', refusal: c.status === 'refused' ? { word: c.word, text: c.text } : null, draft: null, other: null,
-      err: '', seq: 0, host: c.host || '', dismissed: false, browse: null };
+      err: '', seq: 0, host: c.host || '', dismissed: false, browse: null,
+      where: c.where === 'drive' ? 'drive' : 'folder', dp: {} };   /* 0.11.2: a reports card's Drive folder */
     return st;
   }
   function scBind(c) { return { chat: CH.conv && CH.conv.id, turn: c.turn, token: c.token }; }
@@ -5839,9 +5840,14 @@
     var m = scMsg(i); if (!m) return;
     var c = m.setup, st = scState(c), addr = String(st.addr || '').trim();
     var body = other ? { kind: c.kind, address: st.other.feed_url, via: st.other.token, chat: scBind(c) } : { kind: c.kind, address: addr, chat: scBind(c) };
+    var dpick = c.kind === 'reports' && st.where === 'drive' ? dpPicked(st.dp) : null;   /* 0.11.2 */
+    if (c.kind === 'reports' && st.where === 'drive') {
+      if (!dpick) { st.err = 'Open the Drive folder for this source first.'; chatRender('[data-sccheck="' + i + '"]'); return; }
+      body = { kind: 'reports', where: 'drive', account: dpick.account, address: dpick.folder, chat: scBind(c) };
+    }
     if (!body.address) { st.err = c.kind === 'reports' ? 'Pick a folder first.' : 'Paste an address first.'; chatRender('#sc' + i + '-a'); return; }
     var seq = ++st.seq;
-    st.stage = 'checking'; st.err = ''; st.reading = other ? st.other.host : (c.kind === 'reports' ? addr : scHostOf(addr));
+    st.stage = 'checking'; st.err = ''; st.reading = other ? st.other.host : dpick ? (st.dp.data && st.dp.data.name) || 'the Drive folder' : (c.kind === 'reports' ? addr : scHostOf(addr));
     chatRender('[data-scstop="' + i + '"]');
     api('POST', 'api/connectors/check', body).then(function (r) {
       if (seq !== st.seq) return;
@@ -5897,6 +5903,13 @@
     return h('div', { class: 'scdirs' }, [h('p', { class: 'rppath' }, d.path ? ['In ', h('b', null, d.path)] : 'Home Assistant’s shared folders'),
       list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : h('p', { class: 'muted' }, 'No folders in here.')]);
   }
+  /* 0.11.2: where a reports card's folder is (this box, or Google Drive for an agent in the cloud) */
+  function scWhere(ix, st) {
+    return rpTells(RP_WHERE, st.where, 'Where', 'sc-where-' + ix, function (w) {
+      st.where = w; st.err = '';
+      chatRender('[data-fk="' + cssq('sc-where-' + ix + ':' + w) + '"]');
+    });
+  }
   function scFolded(c, i) {
     var a = c.added, st = scState(c);
     var when = a.at ? fmtWhen(new Date(a.at * 1000).toISOString()) : '';
@@ -5948,6 +5961,13 @@
         c.kind === 'reports' ? null : h('p', { class: 'fine' }, 'Callsheet will read it ' + (d.every || '') + '. Nothing about you is sent.'));
       acts.push(h('button', { type: 'button', class: 'act go', 'data-scadd': ix }, c.kind === 'youtube' ? 'Add channel' : c.kind === 'reports' ? 'Add folder' : 'Add feed'),
         h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
+    } else if (c.kind === 'reports' && st.where === 'drive') {   /* 0.11.2: a Google Drive folder, picked here */
+      var redraw = function (f) { chatRender(f || '[data-sc="' + ix + '"] [data-fk^="sc-where-"]'); };
+      if (!st.dp.data && !st.dp.loading && !st.dp.err) dpStart(st.dp, redraw);
+      kids.push(scWhere(ix, st), dpView(st.dp, id + '-dp', redraw));
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-sccheck': ix }, 'Check'),
+        h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Dismiss'));
+      kids.push(h('p', { class: 'fine' }, 'Nothing is read until you press Check.'));
     } else {
       var inp = h('input', { class: 'inp', id: id + '-a', type: 'text', maxlength: '2000', autocomplete: 'off', spellcheck: 'false',
         inputmode: c.kind === 'reports' ? null : 'url', 'data-scaddr': ix,
@@ -5956,8 +5976,7 @@
       on(inp, 'keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); scCheck(ix, false); } });
       kids.push(h('div', { class: 'cform' }, [h('label', { class: 'label', for: id + '-a' },
         c.kind === 'youtube' ? 'Channel address or @handle' : c.kind === 'reports' ? 'Folder' : 'Feed or site address'), inp]));
-      if (c.kind === 'reports') kids.push(scFolders(ix, st),
-        h('p', { class: 'fine' }, 'Agent in the cloud? Have it write to a folder that syncs to /share. Google Drive folders come later.'));
+      if (c.kind === 'reports') { kids.splice(1, 0, scWhere(ix, st)); kids.push(scFolders(ix, st)); }
       else if (st.addr === c.address) kids.push(scSite(c.host, c.host_unicode, c.idn, c.new_site));
       acts.push(h('button', { type: 'button', class: 'act go', 'data-sccheck': ix }, 'Check'),
         h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Dismiss'));
@@ -6324,13 +6343,13 @@
       return btn('btn', kind === 'youtube' ? 'Add a YouTube channel' : kind === 'news' ? 'Add a news feed' : 'Add a reports folder', { 'data-fk': fk, disabled: full }, function () {
         CN.flow = kind; CN.addr = ''; CN.draft = null; CN.other = null; CN.msg = '';
         CN.tell = 'important';
-        if (kind === 'reports') rpBrowse(null, '#rp-h');
+        if (kind === 'reports') { CN.rpWhere = 'folder'; CN.dp = null; rpBrowse(null, '#rp-h'); }
         renderSetup(kind === 'reports' ? '#rp-h' : '#cn-addr');
       });
     }
     return h('div', { class: 'btns cnadd' }, [go('youtube', 'cn-add-yt'), go('news', 'cn-add-news'), go('reports', 'cn-add-rp')]);
   }
-  function cnCancel() { var k = CN.flow; CN.flow = null; CN.draft = null; CN.other = null; CN.rp = null; renderSetup('[data-fk="' + (k === 'news' ? 'cn-add-news' : k === 'reports' ? 'cn-add-rp' : 'cn-add-yt') + '"]'); }
+  function cnCancel() { var k = CN.flow; CN.flow = null; CN.draft = null; CN.other = null; CN.rp = null; CN.dp = null; CN.rpWhere = null; renderSetup('[data-fk="' + (k === 'news' ? 'cn-add-news' : k === 'reports' ? 'cn-add-rp' : 'cn-add-yt') + '"]'); }
   function cnLast(c) {
     if (c.paused) return 'paused';
     if (c.status === 'new') return 'not read yet';
@@ -6592,6 +6611,84 @@
         return b;
       }))]);
   }
+  /* 0.11.2 Reports from a Google Drive folder (conn_reports_drive.py): where the folder is, and the Drive folder picker
+     shared by Setup and the chat card. First the owner's Google accounts, then the folders of one: My Drive, Shared
+     with me or a name search, a page at a time, with breadcrumbs. Folder names only (text); nothing is read until
+     Check. st = { acc, email, trail: [{ id, name }], q, data, list, next, loading, err, seq } */
+  var RP_WHERE = [['folder', 'A folder on this box'], ['drive', 'A Google Drive folder']];
+  var DP_SEQ = 0;
+  function dpLoad(st, body, redraw, focus, more) {
+    var seq = st.seq = ++DP_SEQ, b = { where: 'drive' };
+    Object.keys(body || {}).forEach(function (k) { if (body[k] != null) b[k] = body[k]; });
+    st.loading = true; st.err = null;
+    api('POST', 'api/connectors/reports/folders', b).then(function (r) {
+      if (seq !== st.seq) return;
+      st.loading = false; st.data = r || {}; st.next = st.data.next || null;
+      st.list = (more ? st.list || [] : []).concat(Array.isArray(st.data.folders) ? st.data.folders : []);
+      redraw(focus);
+    }, function (e) {
+      if (seq !== st.seq) return;
+      st.loading = false; st.err = e.message; redraw(focus);
+    });
+  }
+  function dpStart(st, redraw, focus) { st.acc = null; st.trail = []; st.q = ''; st.list = []; dpLoad(st, {}, redraw, focus); }
+  function dpGo(st, trail, redraw, focus) {
+    var at = trail[trail.length - 1];
+    st.trail = trail;
+    dpLoad(st, at.search ? { account: st.acc, q: at.search } : { account: st.acc, parent: at.id }, redraw, focus);
+  }
+  /* the folder this picker is in, when it can be a source (a real folder, not My Drive or a search) */
+  function dpPicked(st) { var d = st && st.data; return d && d.pickable && !st.loading && st.acc && d.parent ? { account: st.acc, folder: d.parent } : null; }
+  function dpView(st, pre, redraw) {
+    var d = st.data, kids = [];
+    if (st.err) kids.push(h('p', { class: 'cnerr err', role: 'alert' }, st.err));
+    if (!d) { kids.push(h('p', { class: 'muted' }, 'Loading…')); return h('div', { class: 'dpick' }, kids); }
+    if (!st.acc) {
+      var accs = Array.isArray(d.accounts) ? d.accounts : [];
+      kids.push(h('p', { class: 'rppath' }, 'Your Google accounts'),
+        accs.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Google accounts' }, accs.map(function (a) {
+          return h('li', null, btn('rpdir', [h('span', { class: 'rpdn' }, a.email), a.granted === false ? h('span', { class: 'muted' }, ' · no Drive access yet') : null],
+            { 'data-fk': pre + '-acc:' + a.id }, function () {
+              st.acc = a.id; st.email = a.email;
+              dpGo(st, [{ id: 'root', name: 'My Drive' }], redraw, '[data-fk="' + pre + '-crumb:0"]');
+            }));
+        })) : h('p', { class: 'muted rpnone' }, 'No Google account yet. Connect one in Setup › Accounts first.'));
+      return h('div', { class: 'dpick' }, kids);
+    }
+    var trail = st.trail || [], crumbs = [btn('tbtn dpc', st.email || 'Accounts', { 'data-fk': pre + '-crumb:acc', 'aria-label': 'Back to your Google accounts' }, function () { dpStart(st, redraw, '[data-fk^="' + pre + '-acc:"]'); })];
+    trail.forEach(function (c, i) {
+      crumbs.push(h('span', { class: 'dpsep', 'aria-hidden': 'true' }, '›'));
+      crumbs.push(i === trail.length - 1 ? h('b', { class: 'dpcur', 'aria-current': 'location', 'data-fk': pre + '-crumb:' + i, tabindex: '-1' }, c.name || '')
+        : btn('tbtn dpc', c.name || '', { 'data-fk': pre + '-crumb:' + i }, function () { dpGo(st, trail.slice(0, i + 1), redraw, '[data-fk="' + pre + '-crumb:' + i + '"]'); }));
+    });
+    var q = h('input', { class: 'inp', type: 'search', id: pre + '-q', autocomplete: 'off', maxlength: '100', 'aria-label': 'Search your Drive folders by name', placeholder: 'Search folders' });
+    q.value = st.q || '';
+    function search() {
+      st.q = q.value.trim();
+      if (st.q) dpGo(st, [{ id: null, name: 'Search: ' + st.q, search: st.q }], redraw, '#' + pre + '-q');
+    }
+    on(q, 'input', function () { st.q = q.value; });
+    on(q, 'keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+    kids.push(h('nav', { class: 'dpcrumbs', 'aria-label': 'Where you are in Drive' }, crumbs),
+      h('div', { class: 'dpsearch' }, [q, btn('btn', 'Search', { 'data-fk': pre + '-search' }, search)]));
+    if (d.need_access) { kids.push(h('p', { class: 'cnnote', role: 'status' }, d.note || 'This account hasn’t given Callsheet read-only Drive access.')); return h('div', { class: 'dpick' }, kids); }
+    var here = trail[trail.length - 1] || {}, fs = Array.isArray(st.list) ? st.list : [];
+    var list = fs.map(function (f) {
+      return h('li', null, btn('rpdir', h('span', { class: 'rpdn' }, f.name), { 'data-fk': pre + '-dir:' + f.id, 'aria-label': 'Open ' + f.name }, function () {
+        dpGo(st, (here.search ? [{ id: 'root', name: 'My Drive' }] : trail).concat([{ id: f.id, name: f.name }]), redraw, '[data-fk="' + pre + '-crumb:' + (here.search ? 1 : trail.length) + '"]');
+      }));
+    });
+    if (here.id === 'root' && trail.length === 1) list.unshift(h('li', null, btn('rpdir', h('span', { class: 'rpdn' }, 'Shared with me'), { 'data-fk': pre + '-shared' }, function () {
+      dpGo(st, [{ id: 'shared', name: 'Shared with me' }], redraw, '[data-fk="' + pre + '-crumb:0"]');
+    })));
+    kids.push(list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : h('p', { class: 'muted rpnone' }, st.loading ? 'Loading…' : here.search ? 'No folders with that name.' : 'No folders in here.'));
+    if (st.next) kids.push(btn('tbtn', 'More folders', { 'data-fk': pre + '-more', disabled: st.loading }, function () {
+      var b = here.search ? { account: st.acc, q: here.search, page: st.next } : { account: st.acc, parent: here.id, page: st.next };
+      dpLoad(st, b, redraw, '[data-fk="' + pre + '-more"]', true);
+    }));
+    if (!d.pickable && !st.loading) kids.push(h('p', { class: 'muted' }, 'Open the folder for this source.'));
+    return h('div', { class: 'dpick' }, kids);
+  }
   /* the text to paste into the other agent, with Copy (the clipboard, or the text selected to copy by hand) */
   function rpInstr(text, id) {
     var ta = h('textarea', { class: 'inp rpins', id: id, rows: '9', readonly: '', spellcheck: 'false' });
@@ -6624,6 +6721,25 @@
     var err = errBox(), d = CN.draft, p = CN.rp || {}, data = p.data;
     var kids = [h('h3', { class: 'cnflow-h', id: 'rp-h', tabindex: '-1' }, 'Add a reports folder')];
     if (!d) {
+      var drive = CN.rpWhere === 'drive', dp = CN.dp || (CN.dp = {});
+      var pick = drive ? dpPicked(dp) : null;
+      var body = drive ? (pick ? { kind: 'reports', where: 'drive', account: pick.account, address: pick.folder } : null)
+        : (data && data.pickable && !p.loading ? { kind: 'reports', address: data.path } : null);
+      var checkB = btn('btn primary', 'Check this folder', { 'data-fk': 'rp-check', disabled: !body }, function () {
+        run([checkB], err, function () { return api('POST', 'api/connectors/check', body); }, function (r) {
+          CN.draft = r; CN.label = r.label || r.title || ''; renderSetup('#cn-label');
+        });
+      });
+      kids.push(rpTells(RP_WHERE, drive ? 'drive' : 'folder', 'Where', 'rp-where', function (w) {
+        CN.rpWhere = w;
+        if (w === 'drive' && !CN.dp.data && !CN.dp.loading) dpStart(CN.dp, rpRedraw);
+        renderSetup('[data-fk="' + cssq('rp-where:' + w) + '"]');
+      }));
+      if (drive) {
+        kids.push(h('p', { class: 'note' }, 'Pick the Google Drive folder your agent in the cloud uploads its reports to, one folder for each source. Callsheet reads it with that account’s read-only Drive access.'),
+          dpView(dp, 'rp-dp', rpRedraw), h('div', { class: 'btns' }, [checkB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err);
+        return h('div', { class: 'cnflow rpflow', role: 'group', 'aria-labelledby': 'rp-h' }, kids);
+      }
       kids.push(h('p', { class: 'note' }, 'Pick the folder another agent writes its reports to, one folder for each source. Other Home Assistant add-ons can read /share and /media too, so use a folder just for these short digests and keep full reports somewhere else.'));
       if (p.err) kids.push(h('p', { class: 'cnerr', role: 'alert' }, p.err));
       if (!data) kids.push(h('p', { class: 'muted' }, 'Loading…'));
@@ -6638,11 +6754,6 @@
         if (data.path) list.unshift(h('li', null, btn('rpdir up', '↑ Up', { 'data-fk': 'rp-up', 'aria-label': 'Up to ' + (data.parent || 'the shared folders') }, function () { rpBrowse(data.parent || null, '#rp-h'); })));
         kids.push(list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : null);
         if (!fs.length) kids.push(h('p', { class: 'muted rpnone' }, data.path ? 'No folders in here.' : 'Callsheet can’t see /share or /media.'));
-        var checkB = btn('btn primary', 'Check this folder', { 'data-fk': 'rp-check', disabled: !data.pickable || p.loading }, function () {
-          run([checkB], err, function () { return api('POST', 'api/connectors/check', { kind: 'reports', address: data.path }); }, function (r) {
-            CN.draft = r; CN.label = r.label || r.title || ''; renderSetup('#cn-label');
-          });
-        });
         kids.push(data.pickable ? null : h('p', { class: 'muted' }, 'Open the folder for this source, inside /share or /media.'),
           h('div', { class: 'btns' }, [checkB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err);
       }
@@ -6673,12 +6784,13 @@
         h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
         e.preventDefault();
         run([addB], err, function () { return api('POST', 'api/connectors', { token: d.token, label: lab.value.trim() || null, tell: CN.tell }); }, function (r) {
-          CN.flow = null; CN.draft = null; CN.rp = null; CN.open[r.id] = true;
+          CN.flow = null; CN.draft = null; CN.rp = null; CN.dp = null; CN.rpWhere = null; CN.open[r.id] = true;
           return cnAgain('[data-cn="' + cssq(r.id) + '"] [data-fk^="cn-pause"]', 'Added. Paste the instruction under ' + (r.label || 'it') + ' › Advanced into the other agent.');
         });
       }), ins);
     return h('div', { class: 'cnflow rpflow', role: 'group', 'aria-labelledby': 'rp-h' }, kids);
   }
+  function rpRedraw(focus) { if (inPlace('connections') && CN.flow === 'reports') renderSetup(focus || '#rp-h'); }
   function rpFlag(m) { return mk8(m[0] === 'instructions' ? 'lure' : m[0] === 'unverified' ? 'unverified' : '', m[1]); }
   /* the Briefing: From your reports (B.reports: unexpired, newest first, a few per source; text only, no links) */
   function reportsSection() {
