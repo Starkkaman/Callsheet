@@ -34,6 +34,7 @@ import chat                          # 0.6.0 chat
 import inject
 import people as people_mod          # 0.8.2 people
 import triage                        # 0.8.4 AI sorting
+import reader as reader_mod          # 0.12.0 reader
 import connectors as connectors_mod  # 0.10.0 connectors
 import net                           # 0.10.0 connectors
 from scheduler import Scheduler
@@ -44,7 +45,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 
 
 class MethodNotAllowed(Exception):
@@ -123,6 +124,9 @@ class App:
         self.sorter = triage.Sorter(self.store, self.syncer, self.index, self.people, clock=clock,
                                     scanner=self.scanner)
         self.syncer.sorter = self.sorter
+        # 0.12.0 reader (reader.py, docs/reader.md): "what this is" and "why you", after the sorter's pass
+        self.reader = reader_mod.Reader(self.store, self.sorter)
+        self.sorter.reader = self.reader
         self._connectors_init()  # 0.10.0 connectors
         try:   # 0.9.1: sorting on by default; a 0.9.0 shadow week turns on once, with a one-time notice
             self.sorter.migrate()
@@ -241,6 +245,7 @@ class App:
         self._brief_writing(brief, cache, s, now)
         self._brief_people(brief)
         self._brief_sorting(brief)  # 0.8.4: only when sorting is on (shadow mode leaves the brief as it was)
+        self._brief_reading(brief)  # 0.12.0: "what this is" and "why you" for the reply rows
         self._brief_0100(brief)  # 0.10.0 connectors: "From your channels and feeds"
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
@@ -309,7 +314,13 @@ class App:
             raise InputError(str(e)) from None
 
     def sorting_view(self, _body=None):
-        return self._srt(self.sorter.view)
+        out = self._srt(self.sorter.view)
+        if isinstance(out, dict) and "error" not in out:
+            try:   # 0.12.0: the reader's counts (numbers only)
+                out["reading"] = self.reader.status()
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"Callsheet reading status failed: {type(e).__name__}\n")
+        return out
 
     def sorting_settings(self, body):
         return self._srt(self.sorter.update_settings, body)
@@ -358,6 +369,13 @@ class App:
         except Exception as e:  # noqa: BLE001 (the brief must always load)
             brief.pop("sorting", None)
             sys.stderr.write(f"Callsheet sorting line failed: {type(e).__name__}\n")
+
+    def _brief_reading(self, brief):
+        try:
+            self.reader.for_brief(brief)
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            brief.pop("reading", None)
+            sys.stderr.write(f"Callsheet reading line failed: {type(e).__name__}\n")
 
     # --- 0.8.2: people (people.py, docs/people.md) ---------------------------------------------------------------
     def _people_routes(self):

@@ -120,6 +120,9 @@ CHECK_PER_DAY = 10
 KEEP_DAYS = 60             # label rows older than this are pruned
 CACHE_MAX = 3000           # cards kept in memory for the Check page and Why (never stored)
 SLOW_FACTOR = 3.0          # the night job yields when its batches take 3x the measured median
+CF_SHRINK_S = 15 * 60      # 0.12.0: after the server said its context was full, half-size batches this long
+READER_BODY = 8000         # 0.12.0: a live mail body kept in memory for the reader (it reads up to 4,000 after quotes)
+READ_AFTER = ("empty", "done", "waiting", "cap", "budget")   # 0.12.0: sorter reasons after which the reader runs
 # 0.9.0: two night windows by default, 22:00-01:00 and 04:00-06:00 (the owner's server runs a security audit around
 # 01:00-04:00); both belong to the same night (a night runs noon to noon). The night job resumes from its cursor
 # every night until it has read `days` back (5 h at 21-36 cards a minute is ~6,300-10,800 cards a night; a busy
@@ -514,11 +517,18 @@ def thread_source(thread, account_email, acc_id, area, invite_msgs=()):
     text = " ".join(__import__("html").unescape(last.get("snippet") or "").split())
     key = rules.row_key("mail:" + str(thread.get("id", "")) + ":" + str(last.get("id", "")))
     owner_wrote = any("SENT" in (m.get("labelIds") or []) for m in msgs[:-1])
+    prev = []   # 0.12.0: the reader's "who wrote what, when" (the two messages before; snippets, memory only)
+    for m in msgs[-3:-1]:
+        mh = rules.last_headers(m)
+        frm = next((v for n, v in mh if n.lower() == "from"), "")
+        prev.append({"from": frm, "ts": int(m.get("internalDate") or 0) / 1000, "owner": "SENT" in (m.get("labelIds") or []),
+                     "text": " ".join(__import__("html").unescape(m.get("snippet") or "").split())})
     return {"key": key, "ch": "mail", "headers": hdrs, "labels": labels, "subject": subject, "text": text,
             "area": area, "ts": int(last.get("internalDate") or 0) / 1000, "acc": acc_id,
             "hash": _h(subject, text, sorted(labels))[:16], "dup": dup_id("gmail", last.get("id")),
             "msg": str(last.get("id") or ""),   # 0.9.1: the card reads this message's body (Sorter._fill_bodies)
-            "thread": {"pos": len(msgs), "of": len(msgs), "owner_wrote": owner_wrote},
+            "thread": {"pos": len(msgs), "of": len(msgs), "owner_wrote": owner_wrote, "id": str(thread.get("id") or "")},
+            "prev": prev,
             "invite": "email" if last.get("id") in invite_msgs else None}
 
 
@@ -1466,8 +1476,8 @@ def in_window(t, start, end):
     return st <= t < en if st < en else (t >= st or t < en)
 
 
-class Busy(writer.WriterError):
-    """LOCAL_LOCK was taken (Chat or the brief writer): the sorter yields."""
+class Busy(writer.Busy):
+    """LOCAL_LOCK was taken (Chat or the brief writer): the sorter yields. (0.12.0: a writer.Busy, like ContextFull.)"""
 
 
 class InputError(ValueError):
@@ -1498,6 +1508,8 @@ class Sorter:
         self._stop = threading.Event()
         self._thread = None
         self.last_run = None
+        self.reader = None                  # 0.12.0: reader.Reader (api.App sets it); runs after the sorter's pass
+        self._shrink_until = 0.0            # 0.12.0: smaller batches until then (after a ContextFull)
 
     # settings ------------------------------------------------------------------------------------------------------
     def settings(self):
@@ -1677,7 +1689,8 @@ class Sorter:
         def notify(event):
             if event == "lock":
                 raise Busy("The model server is busy.")
-        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic, notify=notify)  # noqa: SLF001
+        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic, notify=notify,  # noqa: SLF001
+                            budget=writer.INFLIGHT_MAX)   # 0.12.0: the in-flight budget (design 2.9a)
 
     # day counters ------------------------------------------------------------------------------------------------------
     def _day(self):
@@ -1714,8 +1727,10 @@ class Sorter:
         return (statistics.median(xs) if xs else EST_CARD_S) * n
 
     def batch_size(self, s, now=None):
-        """0.9.0: `night_batch` (12) inside a night window, else `batch` (6; Chat never waits long)."""
-        return int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
+        """0.9.0: `night_batch` (12) inside a night window, else `batch` (6; Chat never waits long). 0.12.0: half that
+        for CF_SHRINK_S after the server said its context was full (a smaller batch next time)."""
+        n = int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
+        return max(1, n // 2) if self.clock() < self._shrink_until else n
 
     # collecting ----------------------------------------------------------------------------------------------------------
     def _remember(self, key, meta, area):
@@ -1764,6 +1779,11 @@ class Sorter:
                     if src["key"] in queued:
                         self.srcs[src["key"]] = src      # its text again (the queue outlived a restart)
                         continue
+                    if self.reader is not None and old[1] != "rules":
+                        try:   # 0.12.0: the reader's text again, or a surfaced item it hasn't read yet
+                            self.reader.catch_up(src)
+                        except Exception as e:  # noqa: BLE001 (reading never stops sorting)
+                            self.log(f"Callsheet reader: an item wasn't queued ({type(e).__name__})")
                     if old[1] != "rules":
                         continue
                 if not self.pending.put(src, origin, now_ts):
@@ -1864,6 +1884,11 @@ class Sorter:
                                       src.get("dup") or "", per_card.get(cid)))
             if self.pending.remove(src["key"], src["hash"][:16]):
                 self.srcs.pop(src["key"], None)
+            if self.reader is not None:   # 0.12.0: surfaced items go to the reader (references; the text in memory)
+                try:
+                    self.reader.enqueue(src, merged[cid].get("group"))
+                except Exception as e:  # noqa: BLE001 (reading never stops sorting)
+                    self.log(f"Callsheet reader: an item wasn't queued ({type(e).__name__})")
         usage = res.get("usage") if isinstance(res, dict) and isinstance(res.get("usage"), dict) else {}
         timings = res.get("timings") if isinstance(res, dict) and isinstance(res.get("timings"), dict) else {}
         return len(cards), secs, fb, {"in": usage.get("prompt_tokens") or 0, "out": usage.get("completion_tokens") or 0,
@@ -1937,6 +1962,7 @@ class Sorter:
             src["full"] = bool(body and str(body).strip())
             if src["full"]:
                 src["text"] = clip_body(str(body).strip(), BODY_CHARS * 2)
+                src["body"] = clip_body(str(body).strip(), READER_BODY)   # 0.12.0: the reader's copy (memory only)
 
     def _caps(self, s, d):
         return d["cards"] >= s["day_cards"] or d["gpu_s"] >= s["day_gpu_min"] * 60
@@ -2034,7 +2060,11 @@ class Sorter:
             try:
                 c, secs, f, u = self._batch(take, ctx, s, room - (self.monotonic() - t0))
             except writer.WriterError as e:   # they stay in the queue
-                if isinstance(e, Busy):
+                if isinstance(e, writer.ContextFull):   # 0.12.0: the server is full: busy, smaller batches for a while
+                    self._shrink_until = self.clock() + CF_SHRINK_S
+                    reason = "context_full"
+                    break
+                if isinstance(e, writer.Busy):
                     reason = "yield"
                     break
                 if isinstance(e, writer.ServerFault):   # 0.8.5: no more batches this run; the rules' labels stay
@@ -2137,7 +2167,9 @@ class Sorter:
                 med = self._est(1)
                 try:
                     _, secs, _, _ = self._batch(todo, ctx, s, room)
-                except Busy:
+                except writer.Busy as e:   # 0.12.0: also ContextFull (busy, the same rows next time)
+                    if isinstance(e, writer.ContextFull):
+                        self._shrink_until = self.clock() + CF_SHRINK_S
                     st["cursor"], st["done_n"] = st.get("prev_cursor"), st["done_n"] - len(rows)
                     st["paused"] = "busy"
                     self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
@@ -2182,9 +2214,27 @@ class Sorter:
                 return "night:" + r
             if ran:
                 return "night:ran"
-        return self.run_pass()
+        r = self.run_pass()
+        self.read_after(r)
+        return r
+
+    def read_after(self, reason):
+        """0.12.0: the reader goes after the sorter, one after the other on slot 1: only when the sorter's pass left
+        nothing it could do now (its queue empty or waiting for text, or its day cap), never when it yielded."""
+        if self.reader is None or reason not in READ_AFTER:
+            return None
+        try:
+            return self.reader.run_pass()
+        except Exception as e:  # noqa: BLE001 (the loop keeps going; type only)
+            self.log(f"Callsheet reader: a pass failed ({type(e).__name__})")
+            return None
 
     def prune(self):
+        if self.reader is not None:   # 0.12.0: the reader's results live 7 days
+            try:
+                self.reader.prune()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Callsheet reader: prune failed ({type(e).__name__})")
         return self.labels.prune(self.clock() - KEEP_DAYS * 86400)
 
     def start_thread(self):
