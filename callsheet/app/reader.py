@@ -34,7 +34,8 @@ changes. Items not read yet show their rules line, marked "not read yet".
 
 Storage (callsheet.db): reader_items (results; pruned after KEEP_DAYS) and reader_queue (references only: key, hash,
 index id, Gmail account and message ids, times). Message text stays in memory or is read again from the index or Gmail.
-Logs are counts only.
+0.12.2: reader_counts (per day and field: shown, or why not; COUNT_DAYS), in "Copy the numbers" as reader_counts and one
+log line per finished day. Logs are counts only.
 """
 import collections
 import datetime as dt
@@ -73,6 +74,7 @@ EV_BEFORE_D, EV_AFTER_D = 14, 45
 MAX_TOKENS = 512
 TIMEOUT_S = 90
 KEEP_DAYS = 7
+COUNT_DAYS = 30            # 0.12.2: the per-day field counts (numbers only) are kept this long
 DAY_ITEMS = 200            # design 2.9: 200 items / 15 GPU minutes a day
 DAY_GPU_MIN = 15
 EST_ITEM_S = 3.5           # an item's planning time until measured
@@ -91,6 +93,12 @@ MARKS = ("claim", "lure", "hidden_text", "check")
 FLAGS = ("instructions", "steer")
 DROPS = ("url", "instructions", "repeated", "actions", "claim", "ground_number", "ground_money", "ground_date",
          "ground_name", "empty", "cap")
+# 0.12.2 (test lead): per day and per field, how often the Reader showed it or why not (numbers only, never text).
+# One outcome per field for each answer (an unusable answer counts once per try) and for each flagged item.
+FIELDS = ("gist", "why_you", "due", "amount", "ctx")
+OUTCOMES = ("shown", "not_given", "empty", "flagged", "schema_invalid", "instructions", "repeated", "actions",
+            "claim", "ground_number", "ground_money", "ground_date", "ground_name", "amount_none", "amount_ambiguous",
+            "no_context")
 KEY = triage.KEY
 DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 SID = re.compile(r"s[1-9][0-9]?")
@@ -576,7 +584,7 @@ def check(ans, info, entries, today, owner_first=()):
                     [p["who"] + " " + p["text"] for p in info["prev"]] + [e["words"] for e in cited],
                     extra_names=list(owner_first))
     today_ok = info["sent"] is not None and info["sent"] == today
-    out, marks = {}, []
+    out, marks, fields = {}, [], {}
     for k in ("gist", "why_you"):
         t, why, mk, n_url = check_text(ans[k], corpus, info["flagged"], info["who"], today_ok, owner_first)
         if n_url:
@@ -584,6 +592,7 @@ def check(ans, info, entries, today, owner_first=()):
         if why:
             drops[why] += 1
         out[k] = t
+        fields[k] = "shown" if t else (why or "empty")
         marks += mk
     if info["lure"]:
         marks.append("lure")
@@ -606,19 +615,24 @@ def check(ans, info, entries, today, owner_first=()):
                 break
         if due is None:
             drops["ground_date"] += 1
+    fields["due"] = "shown" if due else "ground_date" if d.get("date") else "not_given"
     amount = None
+    fields["amount"] = "not_given"
     if d.get("amount_s") in info["sents"]:
         found = amounts(info["sents"][d["amount_s"]])
         if len(found) == 1:
             amount = found[0][:40]
+            fields["amount"] = "shown"
         else:
-            drops["amount_none" if not found else "amount_ambiguous"] += 1
+            fields["amount"] = "amount_none" if not found else "amount_ambiguous"
+            drops[fields["amount"]] += 1
     refs = [e["ref"] for e in cited][:MAX_CTX]
+    fields["ctx"] = "shown" if refs else "not_given" if entries else "no_context"
     res = {"state": "read", "gist": out["gist"], "why_you": out["why_you"], "kind": ans["kind"],
            "importance": ans["importance"], "confidence": ans["confidence"], "ctx": refs,
            "due_date": due.isoformat() if due else None, "due_phrase": phrase, "due_s": date_sid,
            "amount": amount, "amount_s": d.get("amount_s") if amount else None,
-           "marks": list(dict.fromkeys(m for m in marks if m in MARKS))}
+           "marks": list(dict.fromkeys(m for m in marks if m in MARKS)), "fields": fields}
     return res, drops
 
 
@@ -634,6 +648,9 @@ CREATE TABLE IF NOT EXISTS reader_queue (
   key TEXT PRIMARY KEY, hash TEXT NOT NULL, origin TEXT NOT NULL, ix INTEGER, acc TEXT NOT NULL DEFAULT '',
   msg TEXT NOT NULL DEFAULT '', ts REAL NOT NULL, queued REAL NOT NULL, tries INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS reader_queue_order ON reader_queue (ts, queued);
+CREATE TABLE IF NOT EXISTS reader_counts (
+  day TEXT NOT NULL, field TEXT NOT NULL, outcome TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, field, outcome));
 """
 _REF_T = ("person", "project", "event", "note")
 
@@ -879,15 +896,62 @@ class Reader:
         return out
 
     def prune(self):
+        cut = (self.sorter._today() - dt.timedelta(days=COUNT_DAYS)).isoformat()  # noqa: SLF001
         with self.store.lock:
+            self.db.execute("DELETE FROM reader_counts WHERE day<=?", (cut,))
             return self.db.execute("DELETE FROM reader_items WHERE at<?",
                                    (self.clock() - KEEP_DAYS * 86400,)).rowcount
+
+    # 0.12.2: per-day field counts (numbers only) ---------------------------------------------------------------------
+    def _count(self, day, fields):
+        """One outcome per field (FIELDS x OUTCOMES; anything else is not stored)."""
+        rows = [(day, f, o) for f, o in (fields or {}).items() if f in FIELDS and o in OUTCOMES]
+        if not rows or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", str(day)):
+            return
+        with self.store.lock:
+            self.db.executemany("INSERT INTO reader_counts (day, field, outcome, n) VALUES (?,?,?,1) "
+                                "ON CONFLICT(day, field, outcome) DO UPDATE SET n=n+1", rows)
+
+    def counts(self, days=COUNT_DAYS):
+        """"Copy the numbers" `reader_counts`: {day: {field: {outcome: n}}}, newest day first, at most `days` days."""
+        with self.store.lock:
+            ds = [r[0] for r in self.db.execute("SELECT DISTINCT day FROM reader_counts ORDER BY day DESC LIMIT ?",
+                                                (int(days),))]
+            rs = self.db.execute(f"SELECT day, field, outcome, n FROM reader_counts WHERE day IN "
+                                 f"({', '.join('?' * len(ds))})", ds).fetchall() if ds else []
+        out = {d: {} for d in ds}
+        for r in rs:
+            out[r["day"]].setdefault(r["field"], {})[r["outcome"]] = int(r["n"])
+        return {d: {f: dict(sorted(out[d][f].items())) for f in FIELDS if f in out[d]} for d in ds}
+
+    def _log_counts(self, day):
+        """Once per finished day: one log line with the day's field counts (shown, dropped by reason; numbers only),
+        like the sorter's rescue count."""
+        if not day or self.store._get_meta("reader_counts_logged", "") == day:  # noqa: SLF001
+            return
+        self.store._set_meta("reader_counts_logged", day)  # noqa: SLF001
+        try:
+            c = self.counts(COUNT_DAYS + 5).get(day)
+        except Exception:  # noqa: BLE001 (a log line never stops the reader)
+            return
+        if not c:
+            return
+        parts = []
+        for f in FIELDS:
+            o = c.get(f)
+            if not o:
+                continue
+            why = ", ".join(f"{k} {v}" for k, v in sorted(o.items(), key=lambda kv: (-kv[1], kv[0])) if k != "shown")
+            parts.append(f"{f} {o.get('shown', 0)} shown, {sum(o.values()) - o.get('shown', 0)} not"
+                         + (f" ({why})" if why else ""))
+        self.log(f"Callsheet reader: {day}: " + "; ".join(parts))
 
     # counts (numbers only) -----------------------------------------------------------------------------------------------
     def _day(self):
         d = self.store._get_meta("reader_day", {}) or {}  # noqa: SLF001
         today = self.sorter._today().isoformat()  # noqa: SLF001
         if d.get("day") != today:
+            self._log_counts(d.get("day"))   # 0.12.2: the finished day's field counts, once
             d = {"day": today, "items": 0, "gpu_s": 0.0, "read": 0, "flagged": 0, "failed": 0, "invalid": 0,
                  "valid": 0, "context_full": 0, "drops": {}, "lat": []}
         return d
@@ -1073,6 +1137,7 @@ class Reader:
                                                                          "marks": ["lure"] if info["lure"] else []},
                                 s["model"], PROMPT_VERSION))
             self._remove(src["key"], row["hash"])
+            self._count(day, dict.fromkeys(FIELDS, "flagged"))
             return "flagged", 0.0, collections.Counter(), None
         entries, notes = self._context(src, meta, card, tctx, info)
         cids = [e["id"] for e in entries]
@@ -1092,6 +1157,7 @@ class Reader:
             content = None
         ans, _why = parse(content, cids, info["sids"])
         if ans is None:
+            self._count(day, dict.fromkeys(FIELDS, "schema_invalid"))
             tries = int(row.get("tries") or 0) + 1
             if tries >= MAX_TRIES:
                 self._put(store_row(src["key"], row["hash"], day, now_ts, {"state": "failed"}, s["model"],
@@ -1102,6 +1168,7 @@ class Reader:
                     self.db.execute("UPDATE reader_queue SET tries=? WHERE key=?", (tries, src["key"]))
             return "failed", secs, collections.Counter(), False
         result, drops = check(ans, info, entries, tctx.today, tctx.owner_first)
+        self._count(day, result.get("fields"))
         self._put(store_row(src["key"], row["hash"], day, now_ts, result, s["model"], PROMPT_VERSION))
         self._remove(src["key"], row["hash"])
         return "read", secs, drops, True

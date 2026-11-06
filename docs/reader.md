@@ -1,7 +1,8 @@
-# Reader (0.12.0)
+# Reader (0.12.0; field counts and gold set v2 in 0.12.2)
 
 The design's stage "Reader" (Wheatley design 2.4 D, there called 0.10.1; it ships as 0.12.0 because 0.10.1 was taken
-by Reports). Code: `callsheet/app/reader.py`; tests: `tests/test_reader_0120.py`.
+by Reports). Code: `callsheet/app/reader.py`; tests: `tests/test_reader_0120.py`,
+`tests/test_reader_0122.py` (field counts, gold set v2).
 
 ## What it does
 
@@ -100,8 +101,29 @@ After the answer (`parse`, then `check`):
   amount as written, marks (claim, lure, hidden_text), flag, model, prompt version. Pruned after 7 days.
 - `reader_queue`: references only.
 - meta `reader` (on/off, windows) and `reader_day` (counts, drops, latencies: numbers only).
+- `reader_counts` (0.12.2): day, field, outcome, n. Kept 30 days (`COUNT_DAYS`, pruned with the items).
 
 Logs are counts only.
+
+## Field counts (0.12.2)
+
+For the test lead, per day (the owner's time zone) and per field the reader can show, how often it was shown and,
+when not, why (numbers only, never text). Fields (`FIELDS`): `gist`, `why_you`, `due`, `amount`, `ctx` (the cards).
+Each answer gives one outcome per field; a flagged item gives `flagged` for every field; an unusable answer gives
+`schema_invalid` for every field, once per try (an item tried twice counts twice). Outcomes (`OUTCOMES`):
+
+- every field: `shown`, `flagged`, `schema_invalid`;
+- `gist`, `why_you`: `empty` (nothing left after cleaning), `instructions`, `repeated` (repeats a flagged sentence),
+  `actions` (says Callsheet did something), `claim`, `ground_number`, `ground_money`, `ground_date`, `ground_name`;
+- `due`: `not_given` (the model gave none), `ground_date` (no item sentence says that date);
+- `amount`: `not_given`, `amount_none` (the cited sentence holds no amount), `amount_ambiguous` (more than one);
+- `ctx`: `not_given` (entries offered, none cited), `no_context` (none offered). A cited card can still be left out
+  at view time (`_cards`) when its record is gone.
+
+"Copy the numbers" (Setup › AI, `GET api/sorting/numbers`) carries them as `reader_counts`:
+`{"2026-11-05": {"gist": {"shown": 40, "ground_name": 2}, ...}, ...}`, newest day first. When a day is over, one log
+line gives that day's counts, like the sorter's rescue count: `Callsheet reader: 2026-11-05: gist 40 shown, 2 not
+(ground_name 2); why_you ...; due ...; amount ...; ctx ...`.
 
 ## The setting
 
@@ -128,3 +150,40 @@ rate for today.
 server under the same rules and reports the schema-valid rate, flagged rate, grounding drops, latency p50/p95, ContextFull
 count, Chat latency with and without the reader running, and the bars the fakes can't measure (the model's own
 precision and recall on the gold set, claims, lures).
+
+`--gold gold_v2.jsonl` (0.12.2) uses the gold set v2 instead of the 12 built-in items and reports precision and recall
+per field (due date, amount) with 95% Wilson intervals, overall and per category, plus the field outcomes.
+
+## Gold set v2 (0.12.2)
+
+`tests/fixtures/c0122/gold_v2.jsonl` (the same file sits next to the live check as `scratchpad/c0120/gold_v2.jsonl`;
+`gen_gold_v2.py` there builds both): 107 synthetic messages, one JSON object per line: `id`, `cat`, `from`,
+`subject`, `body`, `sent` (with the owner's offset), `tz` (the owner's time zone), `gold` (`date`, `date_also`,
+`amount`), two fake answers (`good`: what a careful model would answer; `trap`: the tempting wrong one, null = same
+as good; each `{date, date_in, amount_in}`, the fake citing the sentence that holds that text), `expect` (the checks'
+output for both answers) and an optional `note`.
+
+| category | n | hard cases |
+|---|---|---|
+| currency | 16 | USD, CAD, EUR, GBP, "CA$", "C$", "US$", "US$ 45", codes after the number, 1.234,56 € |
+| range | 9 | "$1–2k", "between 500 and 800 dollars", "$1,000-$1,500", "2-3k", "5–7k EUR", "up to $2,000" |
+| deadline | 14 | "by EOW", "end of month", "by the 15th", "the 15th of December", "the 1st", "30/11", "in two weeks" |
+| timezone | 9 | an invite at 09:00 ET for a Pacific owner, CET/EST times on the owner's previous day, AoE, a late-evening message |
+| cancel_reschedule | 12 | cancelled (no due date) vs moved (the new date wins), "was 13 Nov", "postponed to next Tuesday" |
+| quoted | 8 | the older amount under "On … wrote:", "> " lines, Outlook "Original Message", a forwarded header |
+| signature | 8 | amounts, dates and names in signatures with and without "-- " |
+| two_amounts | 8 | two or three amounts in one sentence, the total next to the deposit |
+| totals | 10 | totals vs line items, subtotal/VAT/total, per-seat prices |
+| control | 13 | no date or amount, "5k" run vs budget, room numbers, times |
+
+`test_reader_0122.GoldV2` runs every item through `item_of`, `parse` and `check` with both fakes and pins the output
+item by item; the careful fake must keep precision >= 0.95. What the fake run shows (dates / amounts):
+
+- careful fake: precision 56/56 and 36/36; recall 56/68 (0.82, 95% CI 0.72–0.90) and 36/42 (0.86, 0.72–0.93). Lost
+  by the checks: dates no sentence names ("EOW", "end of month", "in two weeks", "30/11"), owner-local dates of
+  invites across midnight, "by Monday" said on a Monday (read as that same day), amounts only in quoted mail, and a
+  clear total in a sentence with more amounts.
+- trap fake: precision 28/44 (0.64, 0.49–0.76) and 22/33 (0.67, 0.50–0.80). What the checks can't catch: a cancelled
+  or moved date the sentence still names, a weekday read alone ("Tue 10 Nov" also gives this Tuesday), a line item or
+  subtotal in its own sentence, an amount in a signature without "-- " or under a forwarded header, and the bare end
+  of a range ("2-3k", "5–7k EUR"). Older amounts in quoted mail never reach the model.

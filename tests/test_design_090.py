@@ -247,8 +247,8 @@ class Design090(unittest.TestCase):
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")
-        self.assertRegex(cfg, r'(?m)^version: "0\.12\.1"$')  # 0.12.1 = reports from Google Drive
-        self.assertIn('APP_VERSION = "0.12.1"', (APP / "api.py").read_text(encoding="utf-8"))
+        self.assertRegex(cfg, r'(?m)^version: "0\.12\.2"$')  # 0.12.2 = the reader's counts and gold set v2
+        self.assertIn('APP_VERSION = "0.12.2"', (APP / "api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

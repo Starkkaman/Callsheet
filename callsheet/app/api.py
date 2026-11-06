@@ -45,7 +45,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.12.2"
 
 
 class MethodNotAllowed(Exception):
@@ -407,7 +407,12 @@ class App:
         return self._srt(self.sorter.answer_check, body.get("key"), body.get("right"), body.get("label"))
 
     def sorting_numbers(self, _body=None):
-        return self.sorter.numbers()
+        out = self.sorter.numbers()
+        try:   # 0.12.2: the reader's per-day field counts, shown or why not (numbers only, 30 days)
+            out["reader_counts"] = self.reader.counts()
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Callsheet reader counts failed: {type(e).__name__}\n")
+        return out
 
     def sorting_fix(self, body):
         body = body if isinstance(body, dict) else {}

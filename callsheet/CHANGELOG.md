@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.2 (How often the reader shows each part)
+
+Nothing changes on the page. This release helps check the reader on real mail.
+
+- **Counts per day.** For each part the reader can show (what this is, why you, the due date, the amount, the cards
+  from Callsheet), Callsheet now counts every day how often it was shown, and when not, why: a name or date it
+  couldn't find in the message, two amounts in one sentence, no amount in the sentence, a message not read because it
+  holds instructions, an answer it couldn't use, and so on. Only numbers are kept, never text, for 30 days.
+- **Copy the numbers** (Setup › AI) now includes these counts as `reader_counts`, and the log gets one line with the
+  counts when a day is over.
+- **A bigger test set.** The tests now check the reader's rules on 107 made-up messages with hard cases: amounts in
+  several currencies, ranges, "by EOW" and "end of month", invites in another time zone, cancelled and moved dates,
+  older amounts in quoted mail, signatures, two amounts in a sentence, and totals next to line items.
+
 ## 0.12.1 (Reports from Google Drive)
 
 Agents that run in the cloud can now hand reports to Callsheet through a Google Drive folder. Callsheet reads it with
