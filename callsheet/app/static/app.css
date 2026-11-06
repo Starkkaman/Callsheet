@@ -1751,7 +1751,7 @@ html.bv-lock,html.bv-lock body{overflow:hidden}
 .bv .scard .rppath{font-size:var(--fs-sm);overflow-wrap:anywhere}
 .bv .scdone{display:grid;gap:8px;width:min(100%,560px)}
 .bv .scdone .scok{font-weight:700}
-.bv .scdone .sct{overflow-wrap:anywhere}
+.bv .scdone .sct{flex:1 1 0;min-width:0;overflow-wrap:anywhere}
 .bv .scdone .rpinsw{display:grid;gap:4px}
 .bv .scdone .rpins{width:100%;font-family:var(--mono,monospace);font-size:var(--fs-xs)}
 @media (max-width:700px){
