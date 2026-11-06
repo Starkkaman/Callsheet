@@ -805,5 +805,16 @@ class UndoPrefs(Base):
         self.assertEqual(self.order(), ["Phoronix", "Hacker News"])
 
 
+
+class GoodRulesOnly(unittest.TestCase):
+    """Test lead 2026-11-06: until "Good to know" has >= 20 gold items, its class follows the rules only."""
+    def test_report_pick_ignored(self):
+        ints = [{"id": "i1", "text": "drone rules", "level": "always"}]
+        c = {"origin": "report", "source": "Security audit", "title": "Nightly audit", "text": "All patched.",
+             "flag": None}
+        strong = {"interest": "i1", "strength": "strong", "kind": "news", "big": "yes"}
+        self.assertEqual(picker.classify(c, strong, ints)[0], picker.classify(c, None and strong or
+                         picker.baseline(c, ints), ints)[0])
+
 if __name__ == "__main__":
     unittest.main()

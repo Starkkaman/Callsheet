@@ -423,12 +423,17 @@ def never_hit(card, interests):
                for i in interests)
 
 
+RULES_ONLY_ORIGINS = ("report",)   # the origins of the "good" class (group_of)
+
+
 def classify(card, pick, interests, tell="important", note_drop=False):
     """The whole rules step for one card: (pick class: launches|news|good|channels|none, decide's result). Pure; the
     page, the tests and the live harness use it."""
     levels = {i["id"]: i["level"] for i in interests}
     levels["_text"] = {i["id"]: i["text"] for i in interests}
     card = dict(card, never_hit=never_hit(card, interests))
+    if card.get("origin") in RULES_ONLY_ORIGINS:   # test lead 2026-11-06: "Good to know" stays rules-only until its
+        pick = baseline(card, interests)            # gold set has >= 20 items (the model's pick is ignored there)
     res = decide(card, pick, levels, tell, note_drop)
     return (group_of(card, pick.get("kind")) if res["keep"] else "none"), res
 

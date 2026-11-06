@@ -74,3 +74,9 @@ Outside the repo (scratchpad harness): schema-valid rate (bar 98%), precision an
 with Wilson intervals against the rules-only baseline, overrides 20/20, paired injection runs (bar: at most 1 flip in
 10 batches), owner notes respected 9/10, stability on a repeat at temperature 0 (95%), batch p95 30 s and Chat p95 10 s
 during the run, ContextFull with 0 lost.
+
+## Good to know: rules only for now
+
+The test lead (2026-11-06) set a 20-item minimum gold set per class before the model may change a class. "Good to
+know" (reports) had 4 gold items, so `classify` uses the rules-only `baseline` pick for report cards
+(`RULES_ONLY_ORIGINS`) until that class has >= 20 gold items and passes against the rules baseline.
