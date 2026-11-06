@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.0 (What you should know)
+
+Today now has a short **What you should know** list: the things that don't need you but are worth a glance, in calm
+panels by kind: Meetings, Money, Alerts, Good to know, Launches, News and Channels. Only groups with something in them
+show up.
+
+- It uses your **What to watch for** list (Setup › Connections › Connectors) and each source's **When to tell you**
+  choice. Always tell me: mentioned. If it's important: mentioned when it matches something you watch for. Only in
+  the list: never mentioned. A topic set to Never is never mentioned, whatever else says yes.
+- Your local AI model only answers from fixed choices (which topic, how close, what kind, big or not). It writes no
+  text. Callsheet's own rules decide what is mentioned. Deals are mentioned only when the topic says deals.
+- Each item says where it came from. **More like this** and **Less like this** move a source up or down. Nothing is
+  ever hidden, and security alerts and invites always show. Your choices are listed in Setup with Forget.
+- A promo it mentions stays in **Sorted for you**. Something said here isn't repeated in the feeds or reports lists.
+- A message, feed item or report that asks to be shown first, or says it matches your interests, is checked: those
+  lines are never read by the model, and the item is marked and shown last.
+- It runs after the reader, one request at a time, and waits for Chat. It keeps each answer for 7 days.
+
 ## 0.12.1 (Reports from Google Drive)
 
 Agents that run in the cloud can now hand reports to Callsheet through a Google Drive folder. Callsheet reads it with

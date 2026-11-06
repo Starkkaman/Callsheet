@@ -713,6 +713,12 @@ class Injection(Base):
                     app.handle("POST", "connectors", {"token": d1["token"], "tell": tell})
                     b = app.brief()
                     rep = b.pop("reports")
+                    know = b.pop("know", None)   # 0.13.0: an Always source is mentioned under What you should know,
+                    for g in (know or {}).get("groups", []):   # marked and last, in Good to know only
+                        self.assertEqual(g["id"], "good")
+                        for x in g["items"]:
+                            self.assertTrue({m[0] for m in x["marks"]} & {"steer", "instructions"}, x["title"])
+                            self.assertFalse(x["locked"])
                     for k in base_brief:
                         self.assertEqual(b.get(k), base_brief[k], k)
                     self.assertEqual(set(b), set(base_brief))

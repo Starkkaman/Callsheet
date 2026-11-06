@@ -35,6 +35,7 @@ import inject
 import people as people_mod          # 0.8.2 people
 import triage                        # 0.8.4 AI sorting
 import reader as reader_mod          # 0.12.0 reader
+import picker as picker_mod          # 0.13.0 picker
 import connectors as connectors_mod  # 0.10.0 connectors
 import net                           # 0.10.0 connectors
 from scheduler import Scheduler
@@ -45,7 +46,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.13.0"
 
 
 class MethodNotAllowed(Exception):
@@ -128,6 +129,8 @@ class App:
         self.reader = reader_mod.Reader(self.store, self.sorter)
         self.sorter.reader = self.reader
         self._connectors_init()  # 0.10.0 connectors
+        self.picker = picker_mod.Picker(self.store, self.sorter, self.connectors)  # 0.13.0: after the reader, slot 1
+        self.sorter.picker = self.picker
         try:   # 0.9.1: sorting on by default; a 0.9.0 shadow week turns on once, with a one-time notice
             self.sorter.migrate()
         except Exception as e:  # noqa: BLE001 (the app always starts)
@@ -247,6 +250,7 @@ class App:
         self._brief_sorting(brief)  # 0.8.4: only when sorting is on (shadow mode leaves the brief as it was)
         self._brief_reading(brief)  # 0.12.0: "what this is" and "why you" for the reply rows
         self._brief_0100(brief)  # 0.10.0 connectors: "From your channels and feeds"
+        self._brief_picker(brief)  # 0.13.0: "What you should know" (rules over the stored picks; moves nothing)
         if not brief.get("sample"):
             try:  # 0.7.0: the Slipped line and the weekly review card
                 brief["projects"] = self.projects.brief_line()
@@ -281,14 +285,46 @@ class App:
         card; Remove (Undo) marks the card. The checks, reads and the approval record are Setup's own."""
         out = []
         for method, pat, fn in connectors_mod.ConnectorsApi(self.connectors).routes():
-            if (method, pat) == ("POST", r"connectors/check"):
+            if (method, pat) == ("GET", r"connectors"):
+                fn = self.connectors_view
+            elif (method, pat) == ("POST", r"connectors/check"):
                 fn = self.connectors_check
             elif (method, pat) == ("POST", r"connectors"):
                 fn = self.connectors_add
             elif method == "DELETE" and pat == rf"connectors/{connectors_mod.CID}":
                 fn = self.connectors_remove
             out.append((method, pat, fn))
+        # 0.13.0 picker: More / Less like this (the owner's; ranks only, never hides)
+        out += [("POST", r"picker/prefs", self.picker_pref_set),
+                ("DELETE", r"picker/prefs/(pf[0-9a-f]{8})", self.picker_pref_forget)]
         return out
+
+    def connectors_view(self, _body=None):
+        out = self.connectors.view()
+        try:   # 0.13.0: More / Less like this, listed under the interests with Forget
+            out["picker_prefs"] = self.picker.prefs()
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Callsheet picker prefs failed: {type(e).__name__}\n")
+        return out
+
+    def picker_pref_set(self, body):
+        try:
+            return self.picker.set_pref(body)
+        except ValueError as e:
+            raise InputError(str(e)) from None
+
+    def picker_pref_forget(self, _body, pid):
+        try:
+            return self.picker.forget_pref(pid)
+        except KeyError:
+            raise NotFound("That choice isn't there any more.") from None
+
+    def _brief_picker(self, brief):
+        try:
+            self.picker.know(brief)
+        except Exception as e:  # noqa: BLE001 (the brief must always load)
+            brief.pop("know", None)
+            sys.stderr.write(f"Callsheet picker list failed: {type(e).__name__}\n")
 
     def connectors_check(self, body):
         if not (isinstance(body, dict) and "chat" in body):
@@ -390,6 +426,10 @@ class App:
                 out["reading"] = self.reader.status()
             except Exception as e:  # noqa: BLE001
                 sys.stderr.write(f"Callsheet reading status failed: {type(e).__name__}\n")
+            try:   # 0.13.0: the picker's counts (numbers only)
+                out["picking"] = self.picker.status()
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"Callsheet picking status failed: {type(e).__name__}\n")
         return out
 
     def sorting_settings(self, body):
