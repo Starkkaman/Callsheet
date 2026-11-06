@@ -26,6 +26,29 @@ sorting, and never sends anything.
 - **Your data stays here.** The results are kept 7 days in Callsheet's own database; the waiting list keeps only
   references; logs keep counts only.
 
+## 0.11.1 (Set up from Chat)
+
+You can now ask Chat to add a YouTube channel, a news feed or a reports folder. Callsheet still reads a site only when
+you press Check, and adds it only when you press Add.
+
+- **Ask in Chat**: "Follow Small Science on YouTube", "Add this feed: https://…" or "Hook up my agent's nightly audit".
+  Wheatley answers with a card holding the same fields as Setup: the address, the name on Today and When to tell you.
+  You can change any of them. You can also paste the address into Chat.
+- **The card shows the real site**, the way Callsheet will contact it. An international name also shows its xn-- form
+  with a note to check it's the site you mean. A site Callsheet has never contacted says "New site".
+- **Some addresses are refused, in plain words, with Try again**: anything that isn't https://, names and addresses on
+  your home network, other ports, user@site addresses, hidden or right-to-left characters and link shorteners. Nothing
+  is contacted for them.
+- **Only your own messages can bring up a card.** Mail, chats, feeds, reports and anything Chat looks up can't offer,
+  fill in or press one. Text you paste counts as yours, so the card always shows the site plainly.
+- **After Add**, the card folds to one line: "Added 09:14 · name · …" with **Undo** (removes it again) and
+  **See it in Setup**. For a reports folder, the text to paste into the other agent is shown with Copy. For an agent
+  in the cloud, use a folder that syncs here; Google Drive folders come later.
+- **When to tell you** (Always tell me, If it's important, Only in the list) is now on channels and feeds too, in Setup
+  and on the card. For now it only moves "Always tell me" sources to the top of the Briefing list; the coming rundown
+  will use it.
+- **Wheatley has a face** in Chat: a round lens whose lids show whether it's resting, reading or answering.
+
 ## 0.11.0 (A new look: Jam)
 
 Callsheet gets the calm look shared across the Jam apps. Nothing about what Callsheet reads, writes or sends has

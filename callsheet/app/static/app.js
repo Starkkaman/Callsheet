@@ -5751,7 +5751,7 @@
       s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
   }
   function chatAnswer(m, i) {
-    var kids = [h('span', { class: 'label' }, ['Callsheet', m.by ? h('span', { class: 'by' }, ' · ' + m.by) : null])];
+    var kids = [wlLabel('idle', m.by)];   /* 0.11.1: Wheatley, with the Lens */
     if (m.error) {
       kids.push(h('p', { class: 'err' }, m.error));
       /* 0.6.2: a busy or loading server: one click asks the same question again (only on the latest answer) */
@@ -5767,6 +5767,7 @@
       if (m.sources && m.sources.length) kids.push(h('div', { class: 'from' }, [h('span', { class: 'label' }, 'From'), m.sources.map(chatChip)]));
     }
     if (m.proposal) kids.push(chatCard(m, i));  /* 0.8.1 Remember: the Save card (also after a failed answer) */
+    if (m.setup) kids.push(scCard(m, i));       /* 0.11.1: the setup card */
     var steps = (m.steps || []).length ? h('p', { class: 'csteps' }, m.steps.join(' · ')) : null;
     kids.push(h('div', { class: 'macts' }, [steps, m.text ? h('button', { type: 'button', class: 'tbtn', 'data-ccopy': String(i) }, 'Copy') : null]));
     return h('div', { class: 'ma' }, kids);
@@ -5875,11 +5876,224 @@
   }
   function chatBusy(p, canStop) {
     var steps = p.steps || [];
-    return h('div', { class: 'ma' }, [h('span', { class: 'label' }, 'Callsheet'),
+    return h('div', { class: 'ma' }, [wlLabel('listening'),
       h('div', { class: 'busy', role: 'status' }, [h('span', { class: 'spin', 'aria-hidden': 'true' }), p.text || 'Thinking…']),
       steps.length ? h('div', { class: 'bsteps' }, steps.map(function (s) { return h('span', { class: 'bst done' }, s); })) : null,
       canStop ? h('button', { type: 'button', class: 'tbtn', 'data-cstop': '1' }, 'Stop') : null]);
   }
+  /* ---------- 0.11.1 Wheatley's mark: the Lens (concept D, no glint) with eyelid shutters (concept A). Three still states
+     (idle, listening, speaking); a change slides the lids or the pupil in 250 ms, nothing loops, reduced motion turns it
+     off. Colours follow the look: the body is the text colour, the face the page. No SVG masks (the lids are clipped by a
+     clipPath), so it draws in Home Assistant's app too. Master and small cut: mockups/dist/wheatley-logo-final. ---------- */
+  var WL_SEQ = 0, SVGNS = null;   /* the SVG namespace, taken from a bundled icon (no address in the page) */
+  function svgEl(tag, attrs, kids) {
+    if (!SVGNS) { var ic = ico('note'); SVGNS = ic ? ic.namespaceURI : document.documentElement.namespaceURI; }
+    var el = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    (kids || []).forEach(function (c) { if (c) el.appendChild(c); });
+    return el;
+  }
+  function wheatley(state, small) {
+    var id = 'wl-c' + (++WL_SEQ), face = small ? 18 : 16.5;
+    var kids = [svgEl('circle', { class: 'b', cx: '32', cy: '32', r: small ? '26' : '25' })];
+    if (!small) [[17.15, 17.15], [46.85, 17.15], [17.15, 46.85], [46.85, 46.85]].forEach(function (p) {
+      kids.push(svgEl('circle', { class: 'f', cx: String(p[0]), cy: String(p[1]), r: '1.7' }));
+    });
+    kids.push(svgEl('circle', { class: 'f', cx: '32', cy: '32', r: String(face) }));
+    if (!small) kids.push(svgEl('circle', { class: 'b', cx: '32', cy: '32', r: '13.6' }));
+    kids.push(svgEl('g', { class: 'ey' }, [svgEl('circle', { class: 'i', cx: '32', cy: '32', r: small ? '12.5' : '10.5' }),
+      svgEl('circle', { class: 'p', cx: '32', cy: '32', r: small ? '5' : '4.2' })]));
+    kids.push(svgEl('clipPath', { id: id }, [svgEl('circle', { cx: '32', cy: '32', r: String(face) })]),
+      svgEl('g', { 'clip-path': 'url(#' + id + ')' }, [
+        svgEl('rect', { class: 'b lt', x: String(32 - face), y: String(32 - 3 * face), width: String(2 * face), height: String(2 * face) }),
+        svgEl('rect', { class: 'b lb', x: String(32 - face), y: String(32 + face), width: String(2 * face), height: String(2 * face) })]));
+    return svgEl('svg', { class: 'wl' + (small ? ' sm' : ''), viewBox: '0 0 64 64', 'data-s': state || 'idle', 'aria-hidden': 'true', focusable: 'false' }, kids);
+  }
+  function wlLabel(state, by) {
+    return h('span', { class: 'label wlab' }, [wheatley(state, true), 'Wheatley', by ? h('span', { class: 'by' }, ' · ' + by) : null]);
+  }
+
+  /* ---------- 0.11.1 Set up from Chat (chat.py build_card; docs/connectors.md "From Chat"). The owner's own "add /
+     follow / hook up …" gets a card with Setup's fields. Callsheet builds it from the owner's words: the address is the
+     one the owner wrote, the site is shown as Callsheet will contact it (with the xn-- form for an international name)
+     and "new site" when Callsheet has never contacted it. Check and Add are Setup's own endpoints with the card's
+     one-time token (chat + turn): nothing is read before Check, nothing is added before Add, one loud button at a time.
+     After Add the card folds to one line with Undo (removes the connector) and See it in Setup. ---------- */
+  var SC_TELLS = [['always', 'Always tell me'], ['important', 'If it’s important'], ['list', 'Only in the list']];
+  function scState(c) {
+    var all = CH.sc || (CH.sc = {}), st = all[c.pid];
+    if (!st) st = all[c.pid] = { stage: c.status === 'refused' ? 'refused' : 'address', addr: c.address || '', name: c.name || '',
+      tell: c.tell || 'important', refusal: c.status === 'refused' ? { word: c.word, text: c.text } : null, draft: null, other: null,
+      err: '', seq: 0, host: c.host || '', dismissed: false, browse: null };
+    return st;
+  }
+  function scBind(c) { return { chat: CH.conv && CH.conv.id, turn: c.turn, token: c.token }; }
+  function scOpen(m) { var c = m && m.setup; return !!(c && c.token && !c.added && !c.undone && !c.expired && !scState(c).dismissed); }
+  function scMsg(i) { var m = CH.conv && CH.conv.messages && CH.conv.messages[Number(i)]; return m && m.setup && m.setup.pid ? m : null; }
+  function scHostOf(a) { var m = /^(?:https:\/\/)?([^\/?#:@\s]+)/i.exec(String(a || '').trim()); return m ? m[1].toLowerCase() : ''; }
+  function scSite(host, uni, idn, fresh) {
+    if (!host) return null;
+    return h('div', { class: 'scsite' }, [h('span', { class: 'label' }, 'Site'), h('b', { class: 'schost' }, host),
+      idn && uni ? h('p', { class: 'scnote' }, 'Written as ' + uni + '. The name uses letters from another alphabet: check it’s the site you mean.') : null,
+      fresh ? h('p', { class: 'scnote' }, 'New site: Callsheet has never contacted it.') : null]);
+  }
+  function scCheck(i, other) {
+    var m = scMsg(i); if (!m) return;
+    var c = m.setup, st = scState(c), addr = String(st.addr || '').trim();
+    var body = other ? { kind: c.kind, address: st.other.feed_url, via: st.other.token, chat: scBind(c) } : { kind: c.kind, address: addr, chat: scBind(c) };
+    if (!body.address) { st.err = c.kind === 'reports' ? 'Pick a folder first.' : 'Paste an address first.'; chatRender('#sc' + i + '-a'); return; }
+    var seq = ++st.seq;
+    st.stage = 'checking'; st.err = ''; st.reading = other ? st.other.host : (c.kind === 'reports' ? addr : scHostOf(addr));
+    chatRender('[data-scstop="' + i + '"]');
+    api('POST', 'api/connectors/check', body).then(function (r) {
+      if (seq !== st.seq) return;
+      if (r && r.stage === 'refused') { st.stage = 'refused'; st.refusal = { word: r.word, text: r.text }; chatRender('[data-scagain="' + i + '"]'); return; }
+      if (r && r.stage === 'other_host') { st.stage = 'other'; st.other = r; chatRender('[data-scother="' + i + '"]'); return; }
+      st.stage = 'found'; st.draft = r || {}; if (!st.name) st.name = st.draft.label || st.draft.title || '';
+      chatRender('#sc' + i + '-n');
+    }, function (e) {
+      if (seq !== st.seq) return;
+      st.stage = 'address'; st.err = e.message; chatRender('#sc' + i + '-a');
+    });
+  }
+  function scAdd(i, b) {
+    var m = scMsg(i); if (!m) return;
+    var c = m.setup, st = scState(c), d = st.draft;
+    if (!d || !d.token || !c.token) return;
+    b.disabled = true; st.err = '';
+    api('POST', 'api/connectors', { token: d.token, label: String(st.name || '').trim() || null, tell: st.tell, chat: scBind(c) }).then(function (r) {
+      c.added = { id: r.id, at: Date.now() / 1000, label: r.label, noun: r.noun, kind: r.kind, every: r.every, tell_label: r.tell_label,
+        folder: r.folder, instruction: r.instruction };
+      delete c.token; CN.at = 0;
+      chatRender('[data-scsee="' + i + '"]');
+    }, function (e) { st.err = e.message; chatRender('[data-scadd="' + i + '"]'); });
+  }
+  function scUndo(i, b) {
+    var m = scMsg(i), a = m && m.setup.added;
+    if (!a || !a.id) return;
+    b.disabled = true;
+    api('DELETE', 'api/connectors/' + encodeURIComponent(a.id)).then(function () {
+      m.setup.added = null; m.setup.undone = true; CN.at = 0;
+      chatRender('[data-ask-in]');
+    }, function (e) { b.disabled = false; scState(m.setup).err = e.message; chatRender('[data-scundo="' + i + '"]'); });
+  }
+  function scBrowse(i, path) {
+    var m = scMsg(i); if (!m) return;
+    var st = scState(m.setup);
+    st.browse = { path: path, loading: true, data: st.browse && st.browse.data };
+    api('POST', 'api/connectors/reports/folders', { path: path }).then(function (r) {
+      st.browse = { path: path, data: r }; if (r && r.pickable) st.addr = r.path;
+      chatRender('[data-scdir="' + i + '"]');
+    }, function (e) { st.browse = null; st.err = e.message; chatRender('#sc' + i + '-a'); });
+  }
+  function scFolders(i, st) {
+    var b = st.browse, d = b && b.data;
+    if (!b) return h('button', { type: 'button', class: 'tbtn', 'data-scbrowse': i }, 'Pick a folder');
+    if (!d) return h('p', { class: 'muted' }, 'Loading…');
+    var fs = Array.isArray(d.folders) ? d.folders : [];
+    var list = fs.slice(0, 30).map(function (f) {
+      return h('li', null, h('button', { type: 'button', class: 'rpdir', 'data-scdir': i, 'data-path': f.path }, [h('span', { class: 'rpdn' }, f.name),
+        typeof f.reports === 'number' && f.reports ? h('span', { class: 'muted' }, ' · ' + plural(f.reports, 'report', 'reports')) : null]));
+    });
+    if (d.path) list.unshift(h('li', null, h('button', { type: 'button', class: 'rpdir up', 'data-scdir': i, 'data-path': d.parent || '' }, '↑ Up')));
+    return h('div', { class: 'scdirs' }, [h('p', { class: 'rppath' }, d.path ? ['In ', h('b', null, d.path)] : 'Home Assistant’s shared folders'),
+      list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : h('p', { class: 'muted' }, 'No folders in here.')]);
+  }
+  function scFolded(c, i) {
+    var a = c.added, st = scState(c);
+    var when = a.at ? fmtWhen(new Date(a.at * 1000).toISOString()) : '';
+    var line = [a.label, a.noun, a.kind === 'news' ? a.every : a.tell_label].filter(Boolean).join(' · ');
+    return h('div', { class: 'scdone' }, [h('div', { class: 'csaved', role: 'status' }, [h('span', { class: 'scok', 'aria-hidden': 'true' }, '✓'),
+      h('span', { class: 'sct' }, 'Added ' + when + ' · ' + line),
+      h('button', { type: 'button', class: 'tbtn', 'data-scundo': i, 'aria-label': 'Undo: remove ' + (a.label || 'it') }, 'Undo'),
+      h('button', { type: 'button', class: 'tbtn', 'data-scsee': i }, 'See it in Setup ›')]),
+      st.err ? h('p', { class: 'err', role: 'alert' }, st.err) : null,
+      a.kind === 'reports' && a.instruction ? rpInstr(a.instruction, 'sc' + i + '-ins') : null]);
+  }
+  function scCard(m, i) {
+    var c = m.setup;
+    if (!c || typeof c !== 'object') return null;
+    var ix = String(i), id = 'sc' + ix;
+    if (c.added) return scFolded(c, ix);
+    if (c.undone) return h('p', { class: 'muted csaved' }, 'Removed. Callsheet doesn’t read it any more.');
+    var st = scState(c);
+    if (st.dismissed) return h('p', { class: 'muted csaved' }, 'Not added.');
+    if (c.expired || !c.token) return h('p', { class: 'muted csaved' }, 'Not added. This card has expired; ask again to set it up.');
+    var kids = [h('div', { class: 'hd', id: id + '-h' }, h('span', null, c.title || 'Add a connector'))];
+    var acts = [];
+    if (st.stage === 'checking') {
+      kids.push(h('div', { class: 'busy', role: 'status' }, [h('span', { class: 'spin', 'aria-hidden': 'true' }), 'Reading ' + (st.reading || 'it') + '…']));
+      acts.push(h('button', { type: 'button', class: 'tbtn', 'data-scstop': ix }, 'Stop'));
+    } else if (st.stage === 'refused') {
+      kids.push(h('div', { class: 'screfuse', role: 'alert' }, [h('b', null, (st.refusal && st.refusal.word) || 'Can’t use this address'),
+        h('p', null, (st.refusal && st.refusal.text) || 'Nothing was read.')]));
+      acts.push(h('button', { type: 'button', class: 'act', 'data-scagain': ix }, 'Try again'),
+        h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Back to the chat'));
+    } else if (st.stage === 'other') {
+      kids.push(h('p', null, ['This site’s feed is on another site, ', h('b', { class: 'schost' }, st.other.host), '. Check it there?']));
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-scother': ix }, 'Check ' + st.other.host),
+        h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
+    } else if (st.stage === 'found') {
+      var d = st.draft || {}, latest = Array.isArray(d.latest) ? d.latest.slice(0, 3) : [];
+      var nm = h('input', { class: 'inp', id: id + '-n', type: 'text', maxlength: '60', autocomplete: 'off', 'data-scname': ix });
+      nm.value = st.name;
+      kids.push(h('div', { class: 'cnfound' }, [h('b', { class: 'cnfname' }, c.kind === 'reports' ? (d.folder || '') : (d.title || '')),
+          latest.length ? h('span', { class: 'label' }, c.kind === 'youtube' ? 'Latest videos' : c.kind === 'reports' ? 'Latest reports' : 'Latest stories') : null,
+          latest.length ? h('ol', { class: 'cnlatest' }, latest.map(function (x) {
+            return h('li', null, [h('span', null, x.title || ''), x.flagged ? cnFlag(['instructions', 'Reads like instructions · shown as text']) : null]);
+          })) : null,
+          d.note ? h('p', { class: 'cnnote' }, d.note) : null]),
+        d.duplicate ? h('p', { class: 'err' }, 'You’ve already added this as ' + d.duplicate + '.') : null,
+        h('div', { class: 'cform' }, [h('label', { class: 'label', for: id + '-n' }, 'Name on Today'), nm]),
+        rpTells(d.tells || SC_TELLS, st.tell, 'When to tell you', 'sc-tell-' + ix, function (t) { st.tell = t; chatRender('[data-fk="' + cssq('sc-tell-' + ix + ':' + t) + '"]'); }),
+        c.kind === 'reports' ? h('p', { class: 'scnote' }, d.hostline || '') : scSite(d.host, d.host_unicode, d.idn, d.new_site),
+        c.kind === 'reports' ? null : h('p', { class: 'fine' }, 'Callsheet will read it ' + (d.every || '') + '. Nothing about you is sent.'));
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-scadd': ix }, c.kind === 'youtube' ? 'Add channel' : c.kind === 'reports' ? 'Add folder' : 'Add feed'),
+        h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
+    } else {
+      var inp = h('input', { class: 'inp', id: id + '-a', type: 'text', maxlength: '2000', autocomplete: 'off', spellcheck: 'false',
+        inputmode: c.kind === 'reports' ? null : 'url', 'data-scaddr': ix,
+        placeholder: c.kind === 'youtube' ? 'youtube.com/@channel' : c.kind === 'reports' ? '/share/reports/…' : 'A feed or a site address' });
+      inp.value = st.addr;
+      on(inp, 'keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); scCheck(ix, false); } });
+      kids.push(h('div', { class: 'cform' }, [h('label', { class: 'label', for: id + '-a' },
+        c.kind === 'youtube' ? 'Channel address or @handle' : c.kind === 'reports' ? 'Folder' : 'Feed or site address'), inp]));
+      if (c.kind === 'reports') kids.push(scFolders(ix, st),
+        h('p', { class: 'fine' }, 'Agent in the cloud? Have it write to a folder that syncs to /share. Google Drive folders come later.'));
+      else if (st.addr === c.address) kids.push(scSite(c.host, c.host_unicode, c.idn, c.new_site));
+      acts.push(h('button', { type: 'button', class: 'act go', 'data-sccheck': ix }, 'Check'),
+        h('button', { type: 'button', class: 'tbtn', 'data-scdismiss': ix }, 'Dismiss'));
+      kids.push(h('p', { class: 'fine' }, c.kind === 'reports' ? 'Nothing is read until you press Check.' : 'Nothing is contacted until you press Check.'));
+    }
+    if (st.err) kids.push(h('p', { class: 'err', role: 'alert' }, st.err));
+    kids.push(h('div', { class: 'acts' }, acts));
+    return h('div', { class: 'csave scard', role: 'group', 'aria-labelledby': id + '-h', 'data-sc': ix }, kids);
+  }
+  function scClick(d, t) {
+    var k = d.sccheck || d.scother || d.scadd || d.scback || d.scagain || d.scdismiss || d.scstop || d.scundo || d.scsee || d.scbrowse || d.scdir;
+    var m = k != null ? scMsg(k) : null;
+    if (!m) return false;
+    var c = m.setup, st = scState(c);
+    if (d.sccheck) scCheck(k, false);
+    else if (d.scother) scCheck(k, true);
+    else if (d.scadd) scAdd(k, t);
+    else if (d.scundo) scUndo(k, t);
+    else if (d.scsee) { var aid = c.added && c.added.id; if (aid) { CN.open[aid] = true; CN.at = 0; openSetup('connections', '[data-cn="' + cssq(aid) + '"] [data-fk^="cn-pause"]'); } }
+    else if (d.scbrowse) scBrowse(k, null);
+    else if (d.scdir) scBrowse(k, d.path || null);
+    else if (d.scstop) { st.seq++; st.stage = 'address'; chatRender('#sc' + k + '-a'); }
+    else if (d.scback || d.scagain) { st.stage = 'address'; st.draft = null; st.other = null; st.err = ''; chatRender('#sc' + k + '-a'); }
+    else if (d.scdismiss) { st.dismissed = true; chatRender('[data-ask-in]'); }
+    return true;
+  }
+  function scInput(t) {
+    var d = t.dataset, k = d.scaddr != null ? d.scaddr : d.scname, m = k != null ? scMsg(k) : null;
+    if (!m) return false;
+    var st = scState(m.setup);
+    if (d.scaddr != null) st.addr = t.value; else st.name = t.value;
+    return true;
+  }
+  /* ---------- end 0.11.1 Set up from Chat ---------- */
   function chatCompose(ov) {
     if (!ov) return null;
     if (!ov.ready) return h('div', { class: 'compose' }, [h('p', { class: 'cnote' }, ov.why || 'Set up the chat model first.'),
@@ -5892,7 +6106,7 @@
       chatScopeRow(), empty ? h('div', { class: 'sugg', role: 'group', 'aria-label': 'Suggestions' }, (chatScope() ? PJ_SCOPE_SUGG : CHAT_SUGG).map(function (s) { return h('button', { type: 'button', 'data-csug': s }, s); })) : null,
       CH.err && CH.ov ? h('p', { class: 'err', role: 'alert' }, CH.err) : null,
       h('div', { class: 'inrow' }, [h('label', { class: 'sr', for: 'ch-ask' }, 'Ask Callsheet'), inp,
-        h('button', { type: 'button', class: CH.conv && (CH.conv.messages || []).some(cardOpen) ? 'act ghost' : 'act', 'data-csend': '1', 'aria-label': 'Ask',
+        h('button', { type: 'button', class: CH.conv && (CH.conv.messages || []).some(function (m) { return cardOpen(m) || scOpen(m); }) ? 'act ghost' : 'act', 'data-csend': '1', 'aria-label': 'Ask',
           disabled: chatPending() }, [ico('send'), h('span', { class: 'd-only' }, 'Ask')])]),  /* 0.8.1: the Save card's button is the loud one */
       h('p', { class: 'fine' }, 'Answers come from your own mail, chat and calendar on this box. Callsheet can’t send or change anything.'
         + (ov.provider === 'claude' ? ' With Claude, the search results for each question go to Anthropic.' : ''))]);
@@ -5988,10 +6202,11 @@
     else if (d.pedit) { var em = chatCardMsg(d.pedit); if (em) { var es = cardState(em.proposal); es.edit = !es.edit; chatRender(es.edit ? '[data-ptext="' + d.pedit + '"]' : '[data-pedit="' + d.pedit + '"]'); } }
     else if (d.pdismiss) { var dm = chatCardMsg(d.pdismiss); if (dm) { cardState(dm.proposal).dismissed = true; chatRender('[data-ask-in]'); } }
     else if (d.pmem) openSetup('ai', '#mem-h');
+    else scClick(d, t);   /* 0.11.1: the setup card */
   });
   document.addEventListener('input', function (e) {
     if (e.target.dataset && e.target.dataset.askIn) CH.input = e.target.value;
-    else if (e.target.dataset && U.tab === 'chat' && main.contains(e.target)) cardInput(e.target);  /* 0.8.1 */
+    else if (e.target.dataset && U.tab === 'chat' && main.contains(e.target)) { if (!scInput(e.target)) cardInput(e.target); }  /* 0.8.1, 0.11.1 */
   });
   document.addEventListener('change', function (e) {  /* 0.8.1: the Save card's checkbox and area */
     var d = e.target.dataset;
@@ -6210,7 +6425,8 @@
     function go(kind, fk) {
       return btn('btn', kind === 'youtube' ? 'Add a YouTube channel' : kind === 'news' ? 'Add a news feed' : 'Add a reports folder', { 'data-fk': fk, disabled: full }, function () {
         CN.flow = kind; CN.addr = ''; CN.draft = null; CN.other = null; CN.msg = '';
-        if (kind === 'reports') { CN.tell = 'important'; rpBrowse(null, '#rp-h'); }
+        CN.tell = 'important';
+        if (kind === 'reports') rpBrowse(null, '#rp-h');
         renderSetup(kind === 'reports' ? '#rp-h' : '#cn-addr');
       });
     }
@@ -6250,7 +6466,7 @@
       });
     return h('li', { class: 'cnrow' + (c.paused ? ' paused' : ''), 'data-cn': c.id }, [
       h('div', { class: 'cnmain' }, [h('b', { class: 'cnname' }, c.label),
-        h('span', { class: 'muted cnline' }, (rp ? [c.noun, c.folder, c.tell_label, cnLast(c)] : [c.noun, c.host, c.every, cnLast(c)]).filter(Boolean).join(' · '))]),
+        h('span', { class: 'muted cnline' }, (rp ? [c.noun, c.folder, c.tell_label, cnLast(c)] : [c.noun, c.host, c.every, c.tell_label, cnLast(c)]).filter(Boolean).join(' · '))]),
       acts,
       c.error && !c.paused ? cnWarn(c, err) : null,
       c.paused ? null : cnAsk(c, err),
@@ -6309,7 +6525,12 @@
       return b;
     });
     var out = [h('div', { class: 'field' }, [h('span', { class: 'label', id: 'cn-ev-' + c.id }, 'How often'),
-      h('div', { class: 'chips seg', role: 'group', 'aria-labelledby': 'cn-ev-' + c.id }, every)])];
+      h('div', { class: 'chips seg', role: 'group', 'aria-labelledby': 'cn-ev-' + c.id }, every)]),
+      /* 0.11.1: When to tell you, for channels and feeds too (for the rundown; today it orders the Briefing list) */
+      rpTells(c.tells || SC_TELLS, c.tell, 'When to tell you', 'cn-tell:' + c.id, function (t, b) {
+        run([b], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { tell: t }); },
+          function () { return cnAgain('[data-fk="' + cssq('cn-tell:' + c.id + ':' + t) + '"]'); });
+      })];
     if (c.kind === 'youtube') {
       var s = sw(c.skip_shorts, 'Skip Shorts for ' + c.label, function () {
         run([s], err, function () { return api('PATCH', 'api/connectors/' + encodeURIComponent(c.id), { skip_shorts: !c.skip_shorts }); },
@@ -6366,10 +6587,11 @@
         d.duplicate ? h('p', { class: 'cnerr' }, 'You’ve already added this as ' + d.duplicate + '.') : null,
         on(h('form', { class: 'cnform', novalidate: '', 'aria-label': yt ? 'Add the channel' : 'Add the feed' }, [
           h('div', { class: 'field' }, [h('label', { class: 'label', for: 'cn-label' }, 'Name on Today'), lab]),
+          rpTells(d.tells || SC_TELLS, CN.tell, 'When to tell you', 'cn-tell-new', function (t) { CN.tell = t; renderSetup('[data-fk="' + cssq('cn-tell-new:' + t) + '"]'); }),
           h('p', { class: 'cnhost' }, ['Callsheet will read ', h('b', null, d.host || ''), ' ' + (d.every || '') + '. ' + (v.nothing_sent || 'Nothing about you is sent.')]),
           h('div', { class: 'btns' }, [addB, btn('tbtn', 'Cancel', { 'data-fk': 'cn-cancel' }, cnCancel)]), err]), 'submit', function (e) {
           e.preventDefault();
-          run([addB], err, function () { return api('POST', 'api/connectors', { token: d.token, label: lab.value.trim() || null }); }, function (r) {
+          run([addB], err, function () { return api('POST', 'api/connectors', { token: d.token, label: lab.value.trim() || null, tell: CN.tell }); }, function (r) {
             var host = d.host; CN.flow = null; CN.draft = null; CN.other = null;
             return cnAgain('[data-cn="' + cssq(r.id) + '"] [data-fk^="cn-pause"]', 'Added. ' + host + ' is now listed in Places Callsheet contacts.');
           });

@@ -68,6 +68,12 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   offered only when the owner's own message asks to remember; it writes nothing. A note is saved only when the owner
   presses Save, after `inject.instructions` and `states_decision` checks, using a one-time token tied to the chat and
   turn. Text in mail, chat or tool results can never create or save a note.
+- **Chat may help set up connectors, owner-pressed only (owner approved 2026-11-06).** When the owner's own message asks
+  to add a channel, feed or reports folder (text the owner types or pastes into Chat counts as the owner's; the owner
+  decided he may paste addresses), Chat may offer a setup card with the same fields as Setup → Connectors. Chat itself
+  checks, fetches and adds nothing: Check (the only step that contacts a site, through `net.py`'s rules) and Add run
+  only when the owner presses them, with the same approval record as Setup. Text in mail, feeds, reports or tool results
+  can never offer, fill or press a card. Its own injection test before release.
 - **Projects (0.7.0) live in Callsheet only.** Projects, tasks and notes are stored in `callsheet.db`, never written
   to Obsidian or any account. Drafted projects and the AI's names and next steps stay "Suggested" until the owner
   adds them. "Ask about this project" scopes Chat to the project's linked index items: the scope is a filter on
