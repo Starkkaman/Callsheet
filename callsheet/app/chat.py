@@ -704,7 +704,7 @@ REFUSALS = {
                     "youtube.com/@kurzgesagt, or ask for a news feed instead."),
     "folder": ("Not a shared folder", "A reports folder is a folder inside /share or /media, Home Assistant's shared "
                "folders. Pick one below."),
-    "drive": ("Not a Drive folder", "Pick the Google Drive folder from the list below."),   # 0.11.2
+    "drive": ("Not a Drive folder", "Pick the Google Drive folder from the list below."),   # 0.12.1
     "odd": ("Not an address Callsheet can read", "Check the address and try again."),
 }
 IDN_NOTE = "This name uses letters from another alphabet. Check it's the site you mean."
@@ -833,7 +833,7 @@ def card_address(kind, raw, allow_test_names=False, where=None, account=None):
     host (IDNA A-label; "" for a folder), host_unicode ("" unless it differs), idn} or {ok: False, why, word, text}.
     Refused: non-https schemes, user@host, ports other than 443, number addresses, names on the home network (local
     names; addresses on a private network are refused again by net.py after DNS), invisible or bidi characters, link
-    shorteners, a non-YouTube address on a YouTube card, a reports folder outside /share or /media. 0.11.2: a Drive
+    shorteners, a non-YouTube address on a YouTube card, a reports folder outside /share or /media. 0.12.1: a Drive
     reports folder (where="drive") is a Drive folder id the picker showed plus one of the owner's account ids."""
     a = str(raw or "").strip()
     if not a:
@@ -930,7 +930,7 @@ def build_card(intent, ai, known_hosts=(), allow_test_names=False):
     a = card_address(kind, pick, allow_test_names)
     out = {"kind": kind, "title": CARD_TITLES[kind], "address": shown[:300], "name": name, "tell": tell,
            "tells": [list(x) for x in CONNECT_TELLS], "status": "ok" if a["ok"] else "refused"}
-    if kind == "reports":   # 0.11.2: a cloud agent's reports come from a Google Drive folder (picked on the card)
+    if kind == "reports":   # 0.12.1: a cloud agent's reports come from a Google Drive folder (picked on the card)
         out["where"] = "drive" if not pick and _DRIVE_WORDS.search(intent.get("words") or "") else "folder"
     if a["ok"]:
         out.update(host=a["host"], host_unicode=a["host_unicode"], idn=a["idn"],

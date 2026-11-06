@@ -452,7 +452,7 @@ class Connectors:
         via = self._draft(body["via"]) if body.get("via") else None
         ctx = Ctx(self)
         extra = {}
-        if is_local(k) and body.get("where") is not None:   # 0.11.2 reports: where="drive" with the account
+        if is_local(k) and body.get("where") is not None:   # 0.12.1 reports: where="drive" with the account
             extra = {"where": body.get("where"), "account": body.get("account")}
         try:
             draft = k.check(ctx, address, via, **extra)
@@ -467,7 +467,7 @@ class Connectors:
             token = self._keep(draft)
             out = {key: draft.get(key) for key in ("title", "label", "folder", "latest", "files", "unreadable",
                                                    "unreadable_n", "instruction", "note")}
-            out.update(where=draft.get("where") or "folder", email=draft.get("email"))   # 0.11.2
+            out.update(where=draft.get("where") or "folder", email=draft.get("email"))   # 0.12.1
             out.update(stage="found", token=token, kind=kind, noun=k.noun, host="", every_s=k.every_s,
                        every=every_label(k.every_s), duplicate=dup,
                        hostline=draft.get("hostline") or k.hostline(draft["folder"], k.every_s),
@@ -944,7 +944,7 @@ class Connectors:
         return k.brief_list(self, [r for r in self._rows() if r["kind"] == "reports"])
 
     def folders(self, body):
-        """0.10.2a: the Reports folder picker (subfolder names under /share and /media; no file is opened). 0.11.2:
+        """0.10.2a: the Reports folder picker (subfolder names under /share and /media; no file is opened). 0.12.1:
         where="drive": the owner's Google accounts, then the Drive folders of one (conn_reports_drive.folders)."""
         import conn_reports
         if isinstance(body, dict) and body.get("where") == "drive":

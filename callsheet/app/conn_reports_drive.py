@@ -1,4 +1,4 @@
-"""0.11.2 Reports from a Google Drive folder (CLAUDE.md "Reports": the existing drive.readonly access, no new host).
+"""0.12.1 Reports from a Google Drive folder (CLAUDE.md "Reports": the existing drive.readonly access, no new host).
 
 The same Reports kind as conn_reports.py, with the folder on Google Drive instead of under /share or /media, for agents
 that run in the cloud and have Drive access of their own. One source = one of the owner's connected Google accounts and

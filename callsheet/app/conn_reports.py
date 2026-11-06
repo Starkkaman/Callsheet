@@ -509,7 +509,7 @@ class Reports:
 
     def __init__(self, wall=time.time, access=None):
         self.wall = wall    # file times are real times (tests move them, not this)
-        # 0.11.2 Drive folders (conn_reports_drive.py): the owner's Google accounts (tests pass a fake), and what the
+        # 0.12.1 Drive folders (conn_reports_drive.py): the owner's Google accounts (tests pass a fake), and what the
         # previous look at each Drive source saw (a young file is read once it looked the same twice)
         self.access = access
         self.drive_seen = {}
@@ -528,7 +528,7 @@ class Reports:
         return cfg.get("folder", "")
 
     def key(self, cfg):
-        if self.is_drive(cfg):      # 0.11.2: a Drive source is the account and the folder id
+        if self.is_drive(cfg):      # 0.12.1: a Drive source is the account and the folder id
             return "drive:" + str(cfg.get("account")) + ":" + str(cfg.get("folder_id"))
         return cfg.get("folder")
 
@@ -537,7 +537,7 @@ class Reports:
                 "It never changes or deletes them.")
 
     def check(self, ctx, address, via=None, where=None, account=None):
-        """The owner's Check: the folder's report files as they are now (nothing is recorded). 0.11.2: where="drive"
+        """The owner's Check: the folder's report files as they are now (nothing is recorded). 0.12.1: where="drive"
         with the account id and the Drive folder id as the address (conn_reports_drive.py)."""
         if where == "drive":
             import conn_reports_drive as D
@@ -601,7 +601,7 @@ class Reports:
     def read(self, conns, r):
         """One look at the folder: new and edited report files into the index. Returns (new, state changes)."""
         cid, cfg = r["id"], conns._cfg(r)
-        if self.is_drive(cfg):      # 0.11.2: a Drive folder, read through google.py's allowlist
+        if self.is_drive(cfg):      # 0.12.1: a Drive folder, read through google.py's allowlist
             import conn_reports_drive as D
             try:
                 fo = D.DriveFolder(self._access(conns), cfg.get("account"), str(cfg.get("folder_id") or ""),
@@ -739,7 +739,7 @@ class Reports:
                 "LIMIT ?", (r["id"], SHOW_MAX)).fetchall()
         shown = cfg.get("shown") or cfg.get("folder") or ""
         tell = cfg.get("tell") if cfg.get("tell") in dict(TELLS) else "important"
-        if self.is_drive(cfg):      # 0.11.2
+        if self.is_drive(cfg):      # 0.12.1
             import conn_reports_drive as D
             email = str(cfg.get("email") or "")
             ins, where = D.instruction(shown, email, r["label"]), D.shown(shown, email)

@@ -4,7 +4,7 @@ Read-only by construction: every request goes through `request()`, which checks 
 explicit allowlist of (method, URL prefix) pairs. Gmail and Calendar are GET only; the only POSTs
 go to the OAuth token and revoke endpoints. 0.6.0 (Know me index): GET only to Drive's files.list
 (`/drive/v3/files`), files.get (`/drive/v3/files/<id>`, metadata or alt=media for plain text) and
-files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately (0.11.2: the
+files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately (0.12.1: the
 Reports Drive folders read through the same three). Anything else raises NotAllowed before any network I/O.
 Redirects are not followed.
 
@@ -351,13 +351,13 @@ def drive_export(token, file_id, mime):
 
 
 def drive_file(token, file_id, fields):
-    """0.11.2 Reports from Drive: one file's or folder's metadata (files.get, JSON). A GET under /drive/v3/files/."""
+    """0.12.1 Reports from Drive: one file's or folder's metadata (files.get, JSON). A GET under /drive/v3/files/."""
     return request("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
                    params={"fields": fields, "supportsAllDrives": "true"})
 
 
 def drive_media_bytes(token, file_id, limit):
-    """0.11.2 Reports from Drive: a file's bytes (files.get alt=media), at most limit + 1 read (the caller refuses a
+    """0.12.1 Reports from Drive: a file's bytes (files.get alt=media), at most limit + 1 read (the caller refuses a
     longer one). The same endpoint and allowlist as drive_media; bytes so the caller decides what is text."""
     return _request_body("GET", api_base() + "/drive/v3/files/" + _q(file_id), token=token,
                          params={"alt": "media", "supportsAllDrives": "true"}, limit=limit + 1)

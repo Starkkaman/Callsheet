@@ -389,7 +389,7 @@
   function events() { return ((B && B.schedule) || []).filter(function (e) { return !isDismissed('ev:' + (e.key || e.id)); }); }
   function replyById(id) { return replies().filter(function (r) { return r.id === id; })[0] || null; }
   function eventById(id) { return ((B && B.schedule) || []).filter(function (e) { return e.id === id; })[0] || null; }
-  function gistSum(r) { return (r.gist && r.gist.summary) || r.short || r.text || ''; }
+  function gistSum(r) { return rdSum(r) || (r.gist && r.gist.summary) || r.short || r.text || ''; }  /* 0.12.0: the reader's gist first */
   function srcKind(r) {
     if (r.via === 'slack' || /^slack/i.test(r.source || '')) return 'slack';
     if (r.via === 'mail' || /^(mail|gmail)/i.test(r.source || '')) return 'mail';
@@ -509,11 +509,11 @@
     var sel = U.open && U.open.kind === 'reply' && U.open.id === r.id;
     return h('div', { class: 'row' + (sel ? ' sel' : '') + (U.kcur === r.id ? ' kcur' : ''), 'data-row': r.id, 'data-kr': r.id }, [
       h('button', { type: 'button', class: 'ck', 'data-ck': r.id, 'aria-pressed': 'false', 'aria-label': 'Mark done: ' + r.who }, h('span', { class: 'bx' })),
-      h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id, title: reasonWords(r) || null,
-        'aria-label': r.who + ': ' + gistSum(r) + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') + (r.uses_name ? ', uses ' + r.uses_name + '’s name' : '') }, [
+      h('button', { type: 'button', class: 'rmain', 'data-open': 'reply:' + r.id, title: reasonWords(r) && rdWords(r) ? reasonWords(r) + ' · ' + rdWords(r) : reasonWords(r) || rdWords(r) || null,
+        'aria-label': r.who + ': ' + gistSum(r) + (rdWords(r) ? ', ' + rdWords(r) : '') + (ageOf(r) ? ', ' + ageOf(r) : '') + (reasonOf(r) ? ', ' + reasonOf(r)[1] : '') + (r.new && B.previous_at ? ', new' : '') + (r.claim === true ? ', says something was done: check' : gistCheck(r) ? ', ' + CHECK_LABEL : '') + (r.uses_name ? ', uses ' + r.uses_name + '’s name' : '') }, [
         h('span', { class: 'ri' }, ico(srcKind(r), srcName(r))),
-        h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r)), reasonWords(r) ? h('span', { class: 'why' }, reasonWords(r)) : null]),
-        claimMark(r), nameMark(r), srMark(r) /* 0.8.4, sorting on only */, h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
+        h('span', { class: 'tx' }, [newDot(r), h('span', { class: 'who' }, r.who), h('span', { class: 'sum' }, gistSum(r)), rdLine(r) /* 0.12.0 */ || (reasonWords(r) ? h('span', { class: 'why' }, reasonWords(r)) : null)]),
+        claimMark(r), nameMark(r), srMark(r) /* 0.8.4, sorting on only */, rdMark(r) /* 0.12.0 */, h('span', { class: 'age', title: waitOf(r) || null }, waitShort(r) || ageOf(r)), rdot(r)]),
       npBtn('reply', r.id, where + '-' + r.id)]);
   }
   function doneRows() {
@@ -1396,7 +1396,7 @@
     r.uses_name ? h('p', { class: 'pflag' }, 'Uses ' + r.uses_name + '’s name, but not the address you saved for that VIP. It isn’t treated as a VIP.') : null,  /* 0.8.0 */
     r.sender_fail === true ? h('p', { class: 'pflag' }, 'Sender not verified: Gmail couldn’t confirm this sender.') : null,
     r.uses_your_name === true ? h('p', { class: 'pflag' }, 'Uses your name; not from your accounts.') : null,  /* 0.8.2 */
-    h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r)),
+    rdPanel(r) || [h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r))],  /* 0.12.0 */
     ds.length ? [h('h3', { class: 'plab' }, 'Exact details'), h('div', { class: 'facts' }, ds.map(function (d) {
       return h('span', { class: 'fact' }, [h('b', null, String(d.label || '') + ':'), String(d.value || '')]);
     })), h('div', { class: 'fhint' }, 'Quoted exactly from the message.')] : null,
@@ -3443,6 +3443,7 @@
     ['ai', null, 'People', '[data-fk="pp-open"]', 'same person merge', ['people']],
     ['ai', null, 'Writing style', '[data-fk="ai-style"]', 'profile tone', ['active_profile']],
     ['ai', null, 'AI sorting', '#sr-st', 'sorting sort labels shadow week on off promos updates needs you', ['sorting.mode']],
+    ['ai', null, 'Read each message', '#rd-st', 'reader reading what this is why you summary gist', []],
     ['ai', null, 'Sorting model, items a day and night reading', '[data-fk="sr-adv"]', 'sorting gemma model limit backfill night days back', ['sorting.model', 'sorting.day_cards', 'sorting.backfill']],
     ['ai', null, 'Local model health', '#sr-st', 'unhealthy check again server broken garbage', []],
     ['ai', null, 'Check the sorting', '[data-fk="sr-check-open"]', 'sorting right wrong labels numbers copy', []],
@@ -4787,7 +4788,26 @@
     var check = off ? null : h('div', { class: 'lrow srcheck-l' }, [
       h('span', null, [h('b', null, 'Check the sorting'), h('span', { class: 'muted' }, ' · ' + (c.done || 0) + ' of ' + (c.per_day || 10) + ' today')]),
       btn('btn sm', 'Open', { 'data-fk': 'sr-check-open', 'aria-label': 'Open Check the sorting' }, function () { location.hash = 'sorting'; })]);
-    return h('div', { class: 'where aisort' }, [lmHealth(v), sortSettings(v), check, off ? null : srLearned(v)]);
+    return h('div', { class: 'where aisort' }, [lmHealth(v), sortSettings(v), off ? null : rdSettings(v), check, off ? null : srLearned(v)]);
+  }
+  /* 0.12.0: Setup › AI › Read each message (On by default). Off: no reader requests; rows keep the sorting's reason. */
+  var RD_NOTE = { on: 'Your local model reads each message Callsheet shows you and says what it is and why it’s for you.',
+    off: 'Rows show the sorting’s reason instead.' };
+  function rdSettings(v) {
+    var rd = v.reading || {}, on = rd.setting !== false, t = rd.today || {}, err = errBox();
+    var seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-labelledby': 'rd-st' }, [[true, 'On'], [false, 'Off']].map(function (m) {
+      var k = m[0] ? 'on' : 'off';
+      return btn('', m[1], { role: 'radio', 'aria-checked': String(on === m[0]), 'data-fk': 'rd-' + k }, function () {
+        if (on === m[0]) return;
+        run([].slice.call(seg.querySelectorAll('button')), err, function () { return api('PATCH', 'api/reading/settings', { on: m[0] }); },
+          function (r) { srAfter(r, '[data-fk="rd-' + k + '"]'); });
+      });
+    }));
+    var line = !on ? null : v.settings.mode !== 'on' ? 'Starts when sorting is on.'
+      : plural(t.read || 0, 'message', 'messages') + ' read today · ' + (rd.waiting || 0) + ' waiting';
+    return h('section', { class: 'srsec rdset', 'aria-labelledby': 'rd-st' }, [
+      h('h2', { class: 'h3', id: 'rd-st', tabindex: '-1' }, 'Read each message'), seg, h('p', { class: 'muted rdhow' }, RD_NOTE[on ? 'on' : 'off']) /* one sentence: not folded under Sorting's "?" */, err,
+      line ? h('p', { class: 'muted srstat' }, line) : null]);
   }
   /* the brief (only when sorting is on: B.sorting is absent otherwise) */
   function srRow(r) { return B && B.sorting && B.sorting.on && B.sorting.rows ? B.sorting.rows[r.id] || null : null; }
@@ -4822,6 +4842,88 @@
         h('div', null, [h('dt', null, 'Placed in'), h('dd', null, (SR_GROUP[x.group] || '') + ': ' + (x.note && x.note.how === 'note' ? 'your note.' : x.learned && x.learned.how === 'prior' ? 'what you taught it.' : srWhyText(x.why)))])]),
       srMarks(x.marks), fixes, err]);
   }
+  /* 0.12.0 reader (reader.py, docs/reader.md): "What this is" and "Why you", written by the owner's local model and
+     checked by Callsheet (B.reading, only when reading is on). The cards come from Callsheet's own data (people,
+     projects, calendar, notes), never from the model's words. Items not read yet keep the rules' line; items that read
+     like instructions to an assistant aren't read: their subject and the rules' reason show, with a label. */
+  var RD_FLAG = 'Reads like instructions to an assistant, so Callsheet didn’t read it. Check it yourself.';
+  var RD_MARK = { claim: 'Their words, not a fact: check before you rely on it.',
+    lure: 'Has a link that asks you to sign in or pay. Go to the site yourself, not through the link.' };
+  var RD_CARD = { person: 'Person', project: 'Project', event: 'Calendar', note: 'Your note' };
+  function readingOf(r) {
+    var R = B && B.reading && B.reading.on && B.reading.rows && typeof B.reading.rows === 'object' ? B.reading.rows : null;
+    var x = R && r ? R[r.id] : null;
+    return x && typeof x === 'object' && ['read', 'not_read', 'flagged'].indexOf(x.state) >= 0 ? x : null;
+  }
+  function rdStr(v) { return typeof v === 'string' && v ? v : ''; }
+  /* the row's summary: the reader's gist when it read the item; a flagged item's subject */
+  function rdSum(r) {
+    var x = readingOf(r);
+    if (!x) return '';
+    return x.state === 'read' ? rdStr(x.gist) : x.state === 'flagged' ? rdStr(x.subject) : '';
+  }
+  function rdWords(r) {
+    var x = readingOf(r);
+    if (!x) return '';
+    return x.state === 'read' ? rdStr(x.why) : x.state === 'not_read' ? 'Not read yet' : 'Not read: reads like instructions to an assistant';
+  }
+  /* the row's second line, "why you" (Comfortable rows, in place of the reasons; Compact rows keep one line and say it
+     in the tooltip). Not read yet: the rules' line stays, the tooltip and the panel say so. */
+  function rdLine(r) {
+    var x = readingOf(r);
+    if (x && x.state === 'flagged') return h('span', { class: 'rdy rdn' }, 'Reads like instructions to an assistant, so it wasn’t read.');
+    return x && x.state === 'read' && rdStr(x.why) ? h('span', { class: 'rdy' }, x.why) : null;
+  }
+  /* a flagged row's label, in every density */
+  function rdMark(r) {
+    var x = readingOf(r);
+    return x && x.state === 'flagged' ? h('span', { class: 'mk8 rdflag', title: RD_FLAG }, 'Not read') : null;
+  }
+  function rdMarks(x) {
+    return (Array.isArray(x.marks) ? x.marks : []).filter(function (m) { return RD_MARK[m]; }).map(function (m) {
+      return h('p', { class: 'rdmark' }, RD_MARK[m]);
+    });
+  }
+  function rdFacts(x) {
+    var due = x.due && typeof x.due === 'object' && rdStr(x.due.label) ? x.due : null;
+    var amt = x.amount && typeof x.amount === 'object' && rdStr(x.amount.text) ? x.amount : null;
+    if (!due && !amt) return null;
+    var ph = due && rdStr(due.phrase) && due.phrase.toLowerCase() !== due.label.toLowerCase() ? ' (“' + due.phrase + '”)' : '';
+    return [h('div', { class: 'facts rdfacts' }, [
+      due ? h('span', { class: 'fact rdfact' }, [h('b', null, 'Due:'), due.label + ph]) : null,
+      amt ? h('span', { class: 'fact rdfact' }, [h('b', null, 'Amount:'), amt.text]) : null]),
+    amt && rdStr(amt.note) ? h('div', { class: 'fhint' }, amt.note) : null];
+  }
+  function rdCards(x, compact) {
+    var cs = (Array.isArray(x.ctx) ? x.ctx : []).filter(function (c) { return c && RD_CARD[c.t] && rdStr(c.title); });
+    if (!cs.length) return null;
+    return h('ul', { class: 'rdcards' + (compact ? ' cmp' : ''), 'aria-label': 'From Callsheet' }, cs.map(function (c) {
+      return h('li', { class: 'rdcard' }, [h('span', { class: 'rdk' }, RD_CARD[c.t]), h('span', { class: 'rdt' }, c.title),
+        rdStr(c.sub) && !compact ? h('span', { class: 'rds' }, c.sub) : null]);
+    }));
+  }
+  /* the panel: replaces "What they want" when reading is on */
+  function rdPanel(r) {
+    var x = readingOf(r);
+    if (!x) return null;
+    if (x.state === 'flagged') return [h('p', { class: 'pflag' }, RD_FLAG), h('h3', { class: 'plab' }, 'Subject'), h('p', { class: 'what' }, rdStr(x.subject) || gistSum(r))];
+    if (x.state === 'not_read') return [h('h3', { class: 'plab' }, 'What they want'), h('p', { class: 'what' }, gistSum(r)), checkLabel('p', gistCheck(r)),
+      h('p', { class: 'rdnote' }, 'Not read yet. Callsheet reads it soon with your local model.')];
+    var g = rdStr(x.gist), w = rdStr(x.why), quoted = r.gist && Array.isArray(r.gist.details) && r.gist.details.length;
+    return [h('h3', { class: 'plab' }, 'What this is'), h('p', { class: 'what' }, g || gistSum(r)), g ? null : checkLabel('p', gistCheck(r)),
+      w ? [h('h3', { class: 'plab' }, 'Why you'), h('p', { class: 'what rdwhy' }, w)] : null,
+      rdMarks(x), quoted ? null : rdFacts(x),  /* say it once: the brief's quoted details win */
+      rdCards(x) ? [h('h3', { class: 'plab' }, 'From Callsheet'), rdCards(x)] : null];
+  }
+  /* One at a time: the why line, labels and the cards (compact) under the gist */
+  function rdOat(r) {
+    var x = readingOf(r);
+    if (!x) return null;
+    if (x.state === 'flagged') return h('p', { class: 'pflag rdoflag' }, RD_FLAG);
+    if (x.state === 'not_read') return h('p', { class: 'rdnote oatrd' }, 'Not read yet');
+    return [rdStr(x.why) ? h('p', { class: 'oatwhy' }, [h('span', { class: 'rdk' }, 'Why you'), x.why]) : null, rdMarks(x), rdFacts(x), rdCards(x, true)];
+  }
+  /* end 0.12.0 reader */
   /* sorting on: the reply rows in sections (B.sorting.sections, built by the server; every row in exactly one). Needs you
      open; For your info folds after 5; Sorted for you shows counts, each opening its list. Rows the server didn't place
      (none should be) go to Needs you: nothing is hidden. */
@@ -5823,7 +5925,7 @@
     if (!st) st = all[c.pid] = { stage: c.status === 'refused' ? 'refused' : 'address', addr: c.address || '', name: c.name || '',
       tell: c.tell || 'important', refusal: c.status === 'refused' ? { word: c.word, text: c.text } : null, draft: null, other: null,
       err: '', seq: 0, host: c.host || '', dismissed: false, browse: null,
-      where: c.where === 'drive' ? 'drive' : 'folder', dp: {} };   /* 0.11.2: a reports card's Drive folder */
+      where: c.where === 'drive' ? 'drive' : 'folder', dp: {} };   /* 0.12.1: a reports card's Drive folder */
     return st;
   }
   function scBind(c) { return { chat: CH.conv && CH.conv.id, turn: c.turn, token: c.token }; }
@@ -5840,7 +5942,7 @@
     var m = scMsg(i); if (!m) return;
     var c = m.setup, st = scState(c), addr = String(st.addr || '').trim();
     var body = other ? { kind: c.kind, address: st.other.feed_url, via: st.other.token, chat: scBind(c) } : { kind: c.kind, address: addr, chat: scBind(c) };
-    var dpick = c.kind === 'reports' && st.where === 'drive' ? dpPicked(st.dp) : null;   /* 0.11.2 */
+    var dpick = c.kind === 'reports' && st.where === 'drive' ? dpPicked(st.dp) : null;   /* 0.12.1 */
     if (c.kind === 'reports' && st.where === 'drive') {
       if (!dpick) { st.err = 'Open the Drive folder for this source first.'; chatRender('[data-sccheck="' + i + '"]'); return; }
       body = { kind: 'reports', where: 'drive', account: dpick.account, address: dpick.folder, chat: scBind(c) };
@@ -5903,7 +6005,7 @@
     return h('div', { class: 'scdirs' }, [h('p', { class: 'rppath' }, d.path ? ['In ', h('b', null, d.path)] : 'Home Assistant’s shared folders'),
       list.length ? h('ul', { class: 'rpdirs', 'aria-label': 'Folders' }, list) : h('p', { class: 'muted' }, 'No folders in here.')]);
   }
-  /* 0.11.2: where a reports card's folder is (this box, or Google Drive for an agent in the cloud) */
+  /* 0.12.1: where a reports card's folder is (this box, or Google Drive for an agent in the cloud) */
   function scWhere(ix, st) {
     return rpTells(RP_WHERE, st.where, 'Where', 'sc-where-' + ix, function (w) {
       st.where = w; st.err = '';
@@ -5961,7 +6063,7 @@
         c.kind === 'reports' ? null : h('p', { class: 'fine' }, 'Callsheet will read it ' + (d.every || '') + '. Nothing about you is sent.'));
       acts.push(h('button', { type: 'button', class: 'act go', 'data-scadd': ix }, c.kind === 'youtube' ? 'Add channel' : c.kind === 'reports' ? 'Add folder' : 'Add feed'),
         h('button', { type: 'button', class: 'tbtn', 'data-scback': ix }, 'Back'));
-    } else if (c.kind === 'reports' && st.where === 'drive') {   /* 0.11.2: a Google Drive folder, picked here */
+    } else if (c.kind === 'reports' && st.where === 'drive') {   /* 0.12.1: a Google Drive folder, picked here */
       var redraw = function (f) { chatRender(f || '[data-sc="' + ix + '"] [data-fk^="sc-where-"]'); };
       if (!st.dp.data && !st.dp.loading && !st.dp.err) dpStart(st.dp, redraw);
       kids.push(scWhere(ix, st), dpView(st.dp, id + '-dp', redraw));
@@ -6611,7 +6713,7 @@
         return b;
       }))]);
   }
-  /* 0.11.2 Reports from a Google Drive folder (conn_reports_drive.py): where the folder is, and the Drive folder picker
+  /* 0.12.1 Reports from a Google Drive folder (conn_reports_drive.py): where the folder is, and the Drive folder picker
      shared by Setup and the chat card. First the owner's Google accounts, then the folders of one: My Drive, Shared
      with me or a name search, a page at a time, with breadcrumbs. Folder names only (text); nothing is read until
      Check. st = { acc, email, trail: [{ id, name }], q, data, list, next, loading, err, seq } */
@@ -6897,6 +6999,7 @@
         h('span', { class: 'age' }, waitShort(r) || ageOf(r))]),
       h('h2', { class: 'oatwho', id: 'oat-h', tabindex: '-1' }, r.who),
       h('p', { class: 'oatwant' }, gistSum(r)),
+      rdOat(r),  /* 0.12.0 */
       claimMark(r),
       d ? h('div', { class: 'oatdraft' }, [h('div', { class: 'label' }, 'Draft'), h('p', null, d)])
         : h('p', { class: 'muted' }, oatHidden(r) || 'No draft for this one.'),

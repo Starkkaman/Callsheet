@@ -1,4 +1,4 @@
-"""0.11.2 Reports from a Google Drive folder (conn_reports_drive.py): W-RP for the Drive path.
+"""0.12.1 Reports from a Google Drive folder (conn_reports_drive.py): W-RP for the Drive path.
 
 The Drive kind end to end against a fake Google (no network): the picker (accounts, My Drive, Shared with me, search,
 paging), Check, Add, looks, the Briefing and Remove; and the bars: every request URL is one of the permitted Drive GETs
@@ -849,7 +849,7 @@ class Page(unittest.TestCase):
 
     def test_css_tokens_only(self):
         css = (ROOT / "callsheet" / "app" / "static" / "app.css").read_text(encoding="utf-8")
-        part = css[css.index("/* ===== 0.11.2: Reports from Drive"):]
+        part = css[css.index("/* ===== 0.12.1: Reports from Drive"):]
         part = part[:part.index("/* =====", 10)] if "/* =====" in part[10:] else part
         self.assertIsNone(re.search(r"#[0-9a-fA-F]{3,8}\b", part))
         self.assertNotRegex(part, r"rgba?\(|hsl\(")
@@ -859,12 +859,12 @@ class Docs(unittest.TestCase):
     def test_rule_docs_and_version(self):
         rule = (ROOT / "CLAUDE.md").read_text()
         self.assertIn("Reports (0.10.2a, owner approved 2026-11-05)", rule)
-        self.assertIn("built in 0.11.2", rule)
+        self.assertIn("built in 0.12.1", rule)
         doc = (ROOT / "docs" / "connectors.md").read_text()
         self.assertIn("### From a Google Drive folder", doc)
         self.assertIn(D.instruction("<folder>", "<account>", "<name>").split("\n")[0], doc)
         self.assertIn("conn_reports_drive.py", (ROOT / "filemap.md").read_text())
-        self.assertIn("## 0.11.2", (ROOT / "callsheet" / "CHANGELOG.md").read_text())
+        self.assertIn("## 0.12.1", (ROOT / "callsheet" / "CHANGELOG.md").read_text())
 
 
 if __name__ == "__main__":

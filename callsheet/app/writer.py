@@ -329,6 +329,21 @@ class LocalTimeout(WriterError):
     """0.6.1: the local model didn't answer within the timeout (the preset fallback says so)."""
 
 
+class Busy(WriterError):
+    """0.12.0: the model server can't take this request now: wait and try again later. Never a model fault: nothing is
+    marked unhealthy and the work stays queued (the sorter's and the reader's own "busy" errors are Busy too)."""
+
+
+class ContextFull(Busy):
+    """0.12.0 (design 2.9a, test lead, binding): the shared server's unified context is full (llama.cpp HTTP 500
+    "Context size has been exceeded", .rule "server"), or this request would take Callsheet's own in-flight tokens over
+    the budget (.rule "budget": nothing was sent). Wait and retry, never a model fault."""
+
+    def __init__(self, rule="server"):
+        super().__init__("The model server is full right now; Callsheet will try again shortly.")
+        self.rule = rule
+
+
 class Refused(WriterError):
     """Claude declined (stop_reason "refusal"). .category: stop_details.category, if any."""
 
@@ -1060,6 +1075,8 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
         text = _error_body(e) if e.code >= 500 else ""
         if e.code >= 500 and _GRAMMAR.search(text):  # 0.8.5: a llama.cpp internal error is a server fault
             raise ServerFault("grammar") from None
+        if e.code >= 500 and _CONTEXT_FULL.search(text):  # 0.12.0: the shared context is full: busy, not a fault
+            raise ContextFull("server") from None
         if e.code in (500, 503) and _loading_body(e, text):
             raise _Loading("The local model server was still loading the model.") from None
         raise WriterError(f"The local model server said no (HTTP {e.code}).") from None
@@ -1154,6 +1171,7 @@ PROBE_MIN_WORDS = 4
 _UNUSED = re.compile(r"<unused\d{1,6}>")
 _SPECIAL = re.compile(r"<\|[^<>|\s]{0,40}\|>")
 _GRAMMAR = re.compile(r"empty grammar stack|grammar stack after accepting|ggml_assert")
+_CONTEXT_FULL = re.compile(r"context size has been exceeded|exceed_context_size")   # 0.12.0 (HTTP 5xx body, lower case)
 _UNIT_REPEAT = re.compile(r"((?=\w)\S{2,12}?)\1{%d,}" % (FAULT_REPEAT - 1))
 _WORDY = re.compile(r"\w")
 
@@ -1404,12 +1422,78 @@ def reset_health():
         _HEALTH.clear()
 
 
+# --- 0.12.0: Callsheet's own in-flight budget on the shared server (design 2.9a; test lead, binding) -------------------
+# The server (np 2, one unified context of 65,536 tokens) answers HTTP 500 "Context size has been exceeded" when the
+# requests in flight need more than that. Callsheet counts what its own requests hold (the prompt estimated from its
+# characters, CHARS_PER_TOKEN, plus max_tokens) while they are in flight, and the background work (the sorter and the
+# reader) never takes the total over INFLIGHT_MAX, leaving room for Chat and Home Assistant. Chat is counted but never
+# refused (Chat goes first). Numbers only; memory only.
+INFLIGHT_MAX = 56_000
+_INFLIGHT = {"tokens": 0, "n": 0, "peak": 0, "refused": 0}
+_INFLIGHT_LOCK = threading.Lock()
+
+
+def estimate_tokens(body):
+    """A request's share of the server's context: its messages' and schema's characters / CHARS_PER_TOKEN, plus
+    max_tokens (which already holds any reasoning budget)."""
+    if not isinstance(body, dict):
+        return 0
+    chars = 0
+    for m in body.get("messages") or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        chars += len(c) if isinstance(c, str) else len(json.dumps(c, ensure_ascii=False)) if c else 0
+    rf = body.get("response_format")
+    if rf:
+        chars += len(json.dumps(rf, ensure_ascii=False))
+    mt = body.get("max_tokens")
+    return int(chars / CHARS_PER_TOKEN) + (int(mt) if isinstance(mt, int) and not isinstance(mt, bool) else 0)
+
+
+class _InFlight:
+    """`with _InFlight(tokens, limit):` counts a request while it is in flight. With a limit, a request that would take
+    the total over it raises ContextFull("budget") before anything is sent."""
+
+    def __init__(self, tokens, limit=None):
+        self.tokens, self.limit = max(0, int(tokens)), limit
+
+    def __enter__(self):
+        with _INFLIGHT_LOCK:
+            if self.limit is not None and _INFLIGHT["tokens"] + self.tokens > self.limit:
+                _INFLIGHT["refused"] += 1
+                raise ContextFull("budget")
+            _INFLIGHT["tokens"] += self.tokens
+            _INFLIGHT["n"] += 1
+            _INFLIGHT["peak"] = max(_INFLIGHT["peak"], _INFLIGHT["tokens"])
+        return self
+
+    def __exit__(self, *exc):
+        with _INFLIGHT_LOCK:
+            _INFLIGHT["tokens"] = max(0, _INFLIGHT["tokens"] - self.tokens)
+            _INFLIGHT["n"] = max(0, _INFLIGHT["n"] - 1)
+        return False
+
+
+def inflight(tokens, limit=None):
+    return _InFlight(tokens, limit)
+
+
+def inflight_view():
+    """{tokens, n, peak, refused}: what Callsheet's own requests hold now, the peak and how many were held back."""
+    with _INFLIGHT_LOCK:
+        return dict(_INFLIGHT)
+
+
+def inflight_room(limit=INFLIGHT_MAX):
+    with _INFLIGHT_LOCK:
+        return max(0, limit - _INFLIGHT["tokens"])
+
+
 # 0.6.0 chat: one request at a time to the local model server. Every local POST (brief writer, evaluation, chat)
 # goes through _post, so the brief and a chat question never hit the server at the same moment.
 LOCAL_LOCK = threading.Lock()
 
 
-def _post(base, key, body, opts, log, clock, notify=None, timing=None):
+def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None):
     """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK.
     0.6.2 (chat): `notify(event)` (optional) hears "lock" while another Callsheet request holds LOCAL_LOCK (called
     again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
@@ -1418,7 +1502,10 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
     Without notify the lock is taken as before (the brief writer and the evaluation).
     0.8.5: an answer with garbage or a llama.cpp internal error raises ServerFault (never retried) and marks the
     server and model unhealthy; while marked, ServerFault comes at once; after FAULT_BACKOFF_S a health probe goes
-    first."""
+    first.
+    0.12.0: the request is counted in the in-flight budget while it is out (estimate_tokens); `budget` (the sorter and
+    the reader pass INFLIGHT_MAX) refuses it with ContextFull("budget") when it would take the total over. HTTP 500
+    "Context size has been exceeded" raises ContextFull("server"): busy, never retried here, never a fault."""
     model = body.get("model") if isinstance(body, dict) else None
     if _in_backoff(base, model):  # 0.8.5: an unhealthy server gets nothing until its next health check is due
         raise ServerFault("backoff")
@@ -1439,17 +1526,19 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None):
                 if _in_backoff(base, model):
                     raise ServerFault("backoff")
                 _probe_gate(base, key, model, opts, log)  # the backoff is over: a real health probe first
-            if notify:
-                notify("sent")
-            try:
-                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
-            except _Loading:
-                if log:
-                    log(f"Callsheet writer: the local model server was loading the model; trying again in {LOAD_WAIT} s")
+            with inflight(estimate_tokens(body), budget):
                 if notify:
-                    notify("loading")
-                _sleep(LOAD_WAIT)
-                res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
+                    notify("sent")
+                try:
+                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
+                except _Loading:
+                    if log:
+                        log(f"Callsheet writer: the local model server was loading the model; trying again in "
+                            f"{LOAD_WAIT} s")
+                    if notify:
+                        notify("loading")
+                    _sleep(LOAD_WAIT)
+                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
             rule = fault_of(res)
             if rule in CONTENT_RULES:  # 0.8.5: text in a message can provoke these: probe at once before blaming
                 pr = _probe(base, key, model, body.get("id_slot") if isinstance(body, dict) else None,

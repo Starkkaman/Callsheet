@@ -1,4 +1,4 @@
-# Connectors (0.10.0, Reports 0.10.2a, Reports from Drive 0.11.2)
+# Connectors (0.10.0, Reports 0.10.2a, Reports from Drive 0.12.1)
 
 `callsheet/app/connectors.py`, `conn_youtube.py`, `conn_news.py`, `net.py`, `feedxml.py`. Design:
 `~/project/daily-brief/wheatley/design.md` (connectors, `net.py`, safety 4.1, stage 0.10.0). Owner decisions
@@ -240,9 +240,9 @@ Chat to find them"). **Chat** finds reports in the index (`source` `reports`, `p
 2,000 rows per source; the text lives in index.db (500 per source, 30 days). Remove deletes both, never the files.
 Logs: counts only.
 
-**Not in 0.10.2a**: the Google Drive folder option (design 3.9, built in 0.11.2, below) and the email fallback.
+**Not in 0.10.2a**: the Google Drive folder option (design 3.9, built in 0.12.1, below) and the email fallback.
 
-### From a Google Drive folder (0.11.2)
+### From a Google Drive folder (0.12.1)
 
 `callsheet/app/conn_reports_drive.py`. For agents that run in the cloud (owner, 2026-11-06: "google drive, or shared
 folders only for now"). The same Reports kind with **Where: A Google Drive folder**: the owner picks one of the
@@ -326,7 +326,7 @@ offered to the model; anywhere else a call is ignored and counted in the log.
 
 The card is built by Callsheet (`chat.build_card`), never from the model's text: the address is one the owner wrote
 (the model only picks among them), a name only when all its words are the owner's, `tell` only from the fixed list.
-0.11.2: a reports card has **Where** (a folder on this box, or a Google Drive folder with the same picker as Setup);
+0.12.1: a reports card has **Where** (a folder on this box, or a Google Drive folder with the same picker as Setup);
 the owner's words "cloud", "drive" or "Google Drive" (and no /share path) open it on Drive. A Drive card's Check sends
 `{kind: "reports", where: "drive", account, address: <folder id>}`; `card_address` accepts only a Drive id and an
 account id there. `chat.card_address` applies the rules before anything is read (parsing only): https only, no user@host, port 443 only,
@@ -356,7 +356,7 @@ kind; today only the Briefing list uses it (Always tell me first).
 0.10.2a: `POST api/connectors/reports/folders {path}` (the folder picker: subfolder names, no file opened),
 `POST api/connectors/check {kind: "reports", address: <folder>}`, `POST api/connectors {token, label?, tell}`,
 `PATCH api/connectors/<id> {tell}`. 0.11.1: `tell` for every kind; `chat: {chat, turn, token}` on check and add from a
-Chat card. 0.11.2: `POST api/connectors/reports/folders {where: "drive", account?, parent?, q?, page?}` (the owner's
+Chat card. 0.12.1: `POST api/connectors/reports/folders {where: "drive", account?, parent?, q?, page?}` (the owner's
 Google accounts, then Drive folder names), `POST api/connectors/check {kind: "reports", where: "drive", account,
 address: <folder id>}`.
 
