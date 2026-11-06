@@ -288,18 +288,22 @@ class App:
     def connectors_check(self, body):
         if not (isinstance(body, dict) and "chat" in body):
             return self.connectors.check(body)
-        bad = [k for k in body if k not in ("kind", "address", "via", "chat")]
+        bad = [k for k in body if k not in ("kind", "address", "via", "chat")
+               and not (k in ("where", "account") and body.get("kind") == "reports")]   # 0.11.2: Drive folders
         if bad:
             raise InputError(f"A card's Check doesn't take {str(bad[0])[:30]}.")
         kind, via = body.get("kind"), body.get("via") or None
         pid = self.chat.card_claim(body.get("chat"), kind, via)
-        a = chat.card_address(kind, body.get("address"), bool(getattr(self.connectors.net, "allow_test_names", False)))
+        where = body.get("where") if kind == "reports" else None
+        a = chat.card_address(kind, body.get("address"), bool(getattr(self.connectors.net, "allow_test_names", False)),
+                              where=where, account=body.get("account"))
         if not a["ok"]:   # refused before anything is read
             return {"stage": "refused", "why": a["why"], "word": a["word"], "text": a["text"]}
         if not a["address"]:
             raise InputError("Pick a folder first." if kind == "reports" else "Paste an address first.")
         try:
-            r = self.connectors.check({"kind": kind, "address": a["address"], **({"via": via} if via else {})})
+            extra = {"where": where, "account": body.get("account")} if where == "drive" else {}
+            r = self.connectors.check({"kind": kind, "address": a["address"], **({"via": via} if via else {}), **extra})
         except InputError as e:
             if "private network" in str(e):   # net.py, after DNS: the name points into the home network
                 word, text = chat.REFUSALS["home"]
