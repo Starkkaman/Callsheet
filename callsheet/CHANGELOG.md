@@ -10,7 +10,7 @@
   that chat. When a search would include anything else (words from your mail, a feed or a web page, an email
   address, a phone number, an amount, an order or account number, a long number, a web address or the name of
   someone you know), Chat asks first: "Search the web for '…'?" with exactly the words it would send. Reply yes to
-  search those words, or write other words.
+  search those words, or write other words. You're asked once, never twice for the same question.
 - **Set it up** in Setup › AI › Web search: paste your SearXNG address (like http://192.168.10.157:30053), press
   Check, and turn it on. Off means Chat doesn't search at all.
 - **Limits.** At most 5 searches and 5 pages per question, and 100 searches and 100 pages a day (change the daily

@@ -511,6 +511,12 @@ class Turn:
         c = self.check(args["query"])
         if not c["query"]:
             return {"error": "The query is empty."}, None
+        if not c["ok"] and self.approved:
+            # 0.14.0: the owner already said yes to one exact search in this turn: he is asked once, never twice;
+            # another query that would need his yes is refused, and the model answers from what it has
+            self.ignored += 1
+            return {"error": "The owner said yes to one search, and it ran. Callsheet doesn't ask twice: answer from "
+                             "what you have, and say what you couldn't look up."}, None
         if not c["ok"]:
             self.asked = {"query": c["query"], "why": c["why"]}
             return {"asked": True, "note": "Nothing was searched. Callsheet now asks the owner whether to search for "

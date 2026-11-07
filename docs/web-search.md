@@ -42,7 +42,11 @@ in a tool result (an item, a search result, a page) are not his, so such a query
 A word the model adds on its own stays strict too: a year guessed from "latest" ("Transport Canada drone rules
 2026"), a synonym ("regulations" for "rules") or "news" makes the turn ask with that exact query (0.14.0 live check D:
 one of three web questions asked first). `chat.WEB_RULE` therefore tells the model to use the owner's words as written
-and add no year, date, synonym or other word of its own.
+and add no year, date, synonym or other word of its own. It also tells the model to call `web_search` whenever the web
+would help and never to ask about searching in its own words (live check D: it once asked "Would you like me to look
+up Hotel Belcaro's address on the web?" instead): the check decides whether to search at once or ask with the exact
+query and token. A word from an item (the restaurant's name in an invitation) only when the question needs it, never
+anything private; such a query always asks.
 
 ## Asking first
 
@@ -52,7 +56,11 @@ When the check fails, nothing is sent and the turn ends with a normal Wheatley m
 30 minutes), bound to this chat, the next turn and the exact query. The owner's next message uses the token up:
 
 - a plain yes ("yes", "ok go ahead", "sure, search it") runs exactly that query first, then the model answers;
+  another query in that turn that would need his yes is refused (`websearch.Turn.search`), never a second question;
 - anything else is a new message: its words become the owner's words and any query is checked again.
+
+A yes to a question the model asked in its own words is a plain message (no token): a query with words that aren't
+the owner's asks once with the exact query, and his yes to that runs it; one Callsheet question, never two.
 
 A forged or edited `web_ask` in the stored chat, an expired token, a yes in another chat or a turn later searches
 nothing.

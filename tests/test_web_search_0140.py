@@ -199,7 +199,8 @@ class QueryCheckTest(unittest.TestCase):
                          ("Transport Canada drone rules latest news", ["news"])):
             c = W.check_query(q, owner)
             self.assertEqual((c["ok"], c["why"], c["words"], c["query"]), (False, "words", stray, q), q)
-        for words in ("add no year, date, synonym or other word of your own", "Callsheet ask them first"):
+        for words in ("add no year, date, synonym or other word of your own",
+                      "never ask the owner in your own words whether to search", "asks the owner itself"):
             self.assertIn(words, chat.WEB_RULE)
 
     def test_private_patterns_ask_even_when_the_owner_wrote_them(self):
@@ -542,6 +543,31 @@ class ChatFlowTest(Base):
             tool_msg(call("c1", "web_search", {"query": "Zephyr boots manufacturer"})), say("x")])
         self.assertEqual(self.sx.queries, ["Zephyr boots manufacturer"])
         self.assertIn("web_ask", msg)   # asked again (his "yes" alone doesn't contain the words)
+
+    def test_yes_to_the_models_own_question_asks_exactly_once(self):
+        """0.14.0 live check D: the model asked in its own words ("Would you like me to look up Hotel Belcaro's
+        address on the web?") instead of calling web_search. The owner's yes to that is a plain message (no token):
+        the model's query has words that aren't his, so Callsheet asks once with the exact query; his yes to that runs
+        exactly it, and another query that would need his yes is refused in that turn: one Callsheet question, never
+        two."""
+        conv, msg = self.ask("Find the address of the restaurant in Dana's dinner invitation.", script=[
+            say("The invitation names Hotel Belcaro but no street address. Would you like me to look up Hotel "
+                "Belcaro's address on the web?")])
+        self.assertNotIn("web_ask", msg)
+        conv, msg = self.ask("yes", conv["id"], script=[
+            tool_msg(call("c1", "web_search", {"query": "Hotel Belcaro address"})), say("never used")])
+        self.assertEqual(msg["text"], "Search the web for 'Hotel Belcaro address'?")
+        self.assertEqual(msg["web_ask"]["query"], "Hotel Belcaro address")
+        self.assertEqual(self.sent(), (0, 0))
+        conv, msg = self.ask("yes", conv["id"], script=[
+            tool_msg(call("c1", "web_search", {"query": "Hotel Belcaro address Denver"})),
+            say("Hotel Belcaro's address is on Site 1 [w1].")])
+        self.assertEqual(self.sx.queries, ["Hotel Belcaro address"])
+        self.assertNotIn("web_ask", msg)
+        self.assertEqual(msg["text"], "Hotel Belcaro's address is on Site 1.")
+        self.assertTrue(any("ask twice" in t for t in self.tool_texts()))
+        self.assertEqual(sum(1 for m in conv["messages"] if m.get("web_ask")), 1)
+        self.assertEqual(msg["web"]["queries"], ["Hotel Belcaro address"])
 
     def test_edited_reply_is_a_new_query_checked_again(self):
         conv, msg = self.ask("Who makes the Zephyr boots?", script=[
