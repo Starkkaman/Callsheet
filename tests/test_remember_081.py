@@ -398,7 +398,7 @@ class UnscopedPinTest(PF.Base):
         loc.messages = [PF.say("Hello.")]
         c = self.make_chat()
         self.ask(c, "What should I do next?")
-        dump = json.dumps(loc.chats()[0]["body"], sort_keys=True, ensure_ascii=False)
+        dump = PF.pinned(loc.chats()[0]["body"])
         self.assertEqual(hashlib.sha256(dump.encode()).hexdigest(), PF.UNSCOPED_BODY_SHA)
         self.assertNotIn("propose_memory", dump)
 

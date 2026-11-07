@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import socket
 import threading
 import time
 import unicodedata
@@ -1043,16 +1044,18 @@ def _loading_body(e, text=None):
     return "loading" in text or "model limit" in text
 
 
-def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"], timing=None):
+def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"], timing=None, stream=None):
     """One request to {base}{path}; only /models (GET) and /chat/completions (POST) are allowed.
     Raises _Loading for HTTP 500/503 naming model loading or a reset connection (a cold load).
     0.6.2: `timing` (a dict, optional) gets first_byte_s (until the server's answer started: its queue, a model
-    swap and, without streaming, the generation) and read_s (reading the answer body)."""
+    swap and, without streaming, the generation) and read_s (reading the answer body).
+    0.14.0 (chat): `stream(kind, payload)` (optional, with body["stream"] true) reads the answer as server-sent events
+    (read_stream) and hears each piece; the result is the same dict a non-streamed answer gives."""
     if (method, path) not in (("GET", "/models"), ("POST", "/chat/completions")) or not base:
         raise WriterError("Callsheet doesn't make that request.")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(base.rstrip("/") + path, data=data, method=method)
-    req.add_header("Accept", "application/json")
+    req.add_header("Accept", "text/event-stream" if stream else "application/json")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     if key:
@@ -1061,7 +1064,12 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
     try:
         with _opener.open(req, timeout=timeout) as resp:
             first = time.monotonic()
-            raw = resp.read(4_000_000)
+            if stream and "event-stream" in (resp.headers.get("Content-Type") or "").lower():
+                stream("open", _closer(resp))
+                res = read_stream(resp, stream)
+            else:   # (a server that ignores `stream` answers in one piece: read as before)
+                stream = None
+                raw = resp.read(4_000_000)
             if timing is not None:
                 timing["first_byte_s"] = round(first - sent, 1)
                 timing["read_s"] = round(time.monotonic() - first, 1)
@@ -1081,16 +1089,179 @@ def _local(method, base, path, key, body=None, timeout=LOCAL_DEFAULTS["timeout"]
             raise _Loading("The local model server was still loading the model.") from None
         raise WriterError(f"The local model server said no (HTTP {e.code}).") from None
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:  # RemoteDisconnected is a reset
+        if stream:
+            stream("check", None)   # 0.14.0: Stop closed the connection: the caller's own exception, not an error
         reason = getattr(e, "reason", e)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason):
             raise LocalTimeout("The local model didn't answer in time.") from None
         if isinstance(e, ConnectionResetError) or isinstance(reason, ConnectionResetError):
             raise _Loading("The local model server closed the connection.") from None
         raise WriterError("Couldn't reach the local model. Check the server address.") from None
+    if stream:
+        return res
     try:
         return json.loads(raw)
     except ValueError:
         raise WriterError("The local model server sent an answer Callsheet can't read.") from None
+
+
+# --- 0.14.0: streamed answers (llama-server `stream: true`), stdlib only ------------------------------------------------
+STREAM_MAX = 8_000_000        # bytes of one streamed answer
+STREAM_LINE_MAX = 1_000_000   # one event line
+
+
+class StreamCut(WriterError):
+    """The server ended or broke a streamed answer partway (no finish, an error event, an unreadable event)."""
+
+
+class SSEReader:
+    """Server-sent events from bytes fed in any chunks: a line, an event or a UTF-8 character may be split anywhere
+    (lines are cut at b"\n" before decoding). feed() returns the data of each completed event; "[DONE]" sets .done and
+    ends the stream (anything after it is ignored). Comments (":") and other fields are skipped."""
+
+    def __init__(self):
+        self.buf, self.data, self.done = b"", [], False
+
+    def feed(self, chunk):
+        out = []
+        if self.done:
+            return out
+        self.buf += chunk
+        while not self.done:
+            i = self.buf.find(b"\n")
+            if i < 0:
+                if len(self.buf) > STREAM_LINE_MAX:
+                    raise StreamCut("The local model server sent a line Callsheet can't read.")
+                break
+            line, self.buf = self.buf[:i].rstrip(b"\r"), self.buf[i + 1:]
+            text = line.decode("utf-8", "replace")
+            if not text:
+                if self.data:
+                    d, self.data = "\n".join(self.data), []
+                    if d.strip() == "[DONE]":
+                        self.done = True
+                    else:
+                        out.append(d)
+                continue
+            if text.startswith(":"):
+                continue
+            field, _, val = text.partition(":")
+            if field == "data":
+                self.data.append(val[1:] if val.startswith(" ") else val)
+        return out
+
+    def close(self):
+        """The end of the bytes: a last event without its blank line."""
+        out = self.feed(b"\n\n") if (self.buf or self.data) and not self.done else []
+        return out
+
+
+class StreamAnswer:
+    """Puts streamed chat.completion.chunk objects back together as one non-streamed answer (message content,
+    reasoning_content, tool_calls by index, finish_reason, usage), telling `sink(kind, text)` about each piece:
+    "content", "reasoning" or "tool" (a tool call started: this reply isn't the final answer)."""
+
+    def __init__(self, sink=None):
+        self.sink = sink or (lambda kind, text: None)
+        self.content, self.reasoning, self.calls = [], [], {}
+        self.finish, self.usage, self.timings = None, None, None
+
+    def add(self, obj):
+        if not isinstance(obj, dict):
+            raise StreamCut("The local model server sent a stream Callsheet can't read.")
+        err = obj.get("error")
+        if err:
+            text = json.dumps(err).lower() if not isinstance(err, str) else err.lower()
+            if _CONTEXT_FULL.search(text):
+                raise ContextFull("server")
+            raise StreamCut("The local model server stopped partway with an error.")
+        if isinstance(obj.get("usage"), dict):
+            self.usage = obj["usage"]
+        if isinstance(obj.get("timings"), dict):
+            self.timings = obj["timings"]
+        for ch in obj.get("choices") or []:
+            if not isinstance(ch, dict):
+                continue
+            d = ch.get("delta") if isinstance(ch.get("delta"), dict) else {}
+            r = d.get("reasoning_content")
+            r = r if isinstance(r, str) else d.get("reasoning")
+            if isinstance(r, str) and r:
+                self.reasoning.append(r)
+                self.sink("reasoning", r)
+            for tc in d.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                idx = tc.get("index") if isinstance(tc.get("index"), int) else len(self.calls)
+                new = idx not in self.calls
+                rec = self.calls.setdefault(idx, {"id": None, "type": "function",
+                                                  "function": {"name": "", "arguments": ""}})
+                if isinstance(tc.get("id"), str) and tc["id"]:
+                    rec["id"] = tc["id"]
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                if isinstance(fn.get("name"), str):
+                    rec["function"]["name"] += fn["name"]
+                if isinstance(fn.get("arguments"), str):
+                    rec["function"]["arguments"] += fn["arguments"]
+                if new:
+                    self.sink("tool", None)
+            c = d.get("content")
+            if isinstance(c, str) and c:
+                self.content.append(c)
+                if not self.calls:
+                    self.sink("content", c)
+            if isinstance(ch.get("finish_reason"), str):
+                self.finish = ch["finish_reason"]
+
+    def result(self):
+        msg = {"role": "assistant", "content": "".join(self.content)}
+        if self.reasoning:
+            msg["reasoning_content"] = "".join(self.reasoning)
+        if self.calls:
+            msg["tool_calls"] = [dict(c, id=c["id"] or f"call_{i}") for i, c in sorted(self.calls.items())]
+        out = {"choices": [{"index": 0, "message": msg, "finish_reason": self.finish}], "usage": self.usage or {}}
+        if self.timings:
+            out["timings"] = self.timings
+        return out
+
+
+def read_stream(resp, sink, chunk=16384):
+    """Reads a streamed answer from an HTTP response (read1 when it has it) and returns StreamAnswer.result().
+    A stream that ends without [DONE] or a finish_reason raises StreamCut (after sink("check"): a Stop isn't a cut)."""
+    reader, ans, total = SSEReader(), StreamAnswer(sink), 0
+    read = getattr(resp, "read1", None) or resp.read
+    while not reader.done:
+        part = read(chunk)
+        if not part:
+            break
+        total += len(part)
+        if total > STREAM_MAX:
+            raise StreamCut("The local model's answer was too long.")
+        for d in reader.feed(part):
+            try:
+                ans.add(json.loads(d))
+            except ValueError:
+                raise StreamCut("The local model server sent a stream Callsheet can't read.") from None
+    if not reader.done:
+        for d in reader.close():
+            try:
+                ans.add(json.loads(d))
+            except ValueError:
+                raise StreamCut("The local model server sent a stream Callsheet can't read.") from None
+    if not reader.done and ans.finish is None:
+        sink("check", None)
+        raise StreamCut("The local model stopped answering partway.")
+    return ans.result()
+
+
+def _closer(resp):
+    """A function that ends this response's connection from another thread (Stop): the blocked read returns."""
+    def close():
+        try:
+            sock = resp.fp.raw._sock  # noqa: SLF001 (http.client keeps the socket here)
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:  # noqa: BLE001 (already closed, or not a socket: nothing to stop)
+            pass
+    return close
 
 
 def local_body(model, payload_text, ids, opts, ask=None):
@@ -1493,7 +1664,7 @@ def inflight_room(limit=INFLIGHT_MAX):
 LOCAL_LOCK = threading.Lock()
 
 
-def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None):
+def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None, stream=None):
     """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK.
     0.6.2 (chat): `notify(event)` (optional) hears "lock" while another Callsheet request holds LOCAL_LOCK (called
     again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
@@ -1505,7 +1676,9 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     first.
     0.12.0: the request is counted in the in-flight budget while it is out (estimate_tokens); `budget` (the sorter and
     the reader pass INFLIGHT_MAX) refuses it with ContextFull("budget") when it would take the total over. HTTP 500
-    "Context size has been exceeded" raises ContextFull("server"): busy, never retried here, never a fault."""
+    "Context size has been exceeded" raises ContextFull("server"): busy, never retried here, never a fault.
+    0.14.0: `stream` (chat only) streams the answer (see _local); the lock, the in-flight count and the fault checks
+    are the same, and the checks run on the whole answer when it is complete."""
     model = body.get("model") if isinstance(body, dict) else None
     if _in_backoff(base, model):  # 0.8.5: an unhealthy server gets nothing until its next health check is due
         raise ServerFault("backoff")
@@ -1530,7 +1703,8 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
                 if notify:
                     notify("sent")
                 try:
-                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
+                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing,
+                                 stream=stream)
                 except _Loading:
                     if log:
                         log(f"Callsheet writer: the local model server was loading the model; trying again in "
@@ -1538,7 +1712,8 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
                     if notify:
                         notify("loading")
                     _sleep(LOAD_WAIT)
-                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing)
+                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing,
+                                 stream=stream)
             rule = fault_of(res)
             if rule in CONTENT_RULES:  # 0.8.5: text in a message can provoke these: probe at once before blaming
                 pr = _probe(base, key, model, body.get("id_slot") if isinstance(body, dict) else None,

@@ -590,30 +590,44 @@ class ChatFlowTest(Base):
         print(f"\n  ask bar: {exact}/10 asks sent exactly the query shown, each token used once")
 
     def test_caps_hold_x10(self):
-        """Bar: at most 3 searches and 2 page reads per turn, whatever the model asks for."""
+        """Bar (0.14.0, test lead): at most 5 searches and 5 page reads per turn, whatever the model asks for (7 / 7,
+        in rounds of 4 + 3); the daily caps (100 / 100 by default, settable) hold."""
         most = [0, 0]
+        qs = ["best hiking boots", "winter boots", "hiking boots", "boots", "winter hiking", "best boots", "best winter"]
         for k in range(10):
             s0, p0 = self.sent()
             self.ask("best hiking boots for winter", script=[
-                tool_msg(*[call(f"s{i}", "web_search", {"query": q}) for i, q in
-                           enumerate(["best hiking boots", "winter boots", "hiking boots", "boots", "winter hiking"])]),
-                tool_msg(*[call(f"r{i}", "read_result", {"id": f"w{i}"}) for i in range(1, 6)]),
+                tool_msg(*[call(f"s{i}", "web_search", {"query": q}) for i, q in enumerate(qs[:4])]),
+                tool_msg(*[call(f"t{i}", "web_search", {"query": q}) for i, q in enumerate(qs[4:])]),
+                tool_msg(*[call(f"r{i}", "read_result", {"id": f"w{i}"}) for i in range(1, 5)]),
+                tool_msg(*[call(f"u{i}", "read_result", {"id": f"w{i}"}) for i in range(5, 8)]),
                 say("Done.")])
             s1, p1 = self.sent()
             most = [max(most[0], s1 - s0), max(most[1], p1 - p0)]
             self.assertLessEqual(s1 - s0, W.MAX_SEARCHES)
             self.assertLessEqual(p1 - p0, W.MAX_READS)
             self.now[0] += 16 * 60
+        self.assertEqual((W.MAX_SEARCHES, W.MAX_READS, W.DAY_SEARCHES, W.DAY_READS), (5, 5, 100, 100))
         self.assertEqual(most, [W.MAX_SEARCHES, W.MAX_READS])
-        self.assertEqual(W.usage(self.store, DAY), {"day": DAY, "searches": 30, "reads": 20})
+        self.assertEqual(W.usage(self.store, DAY), {"day": DAY, "searches": 50, "reads": 50})
         # the daily caps
         self.store._set_meta(W.USAGE, {"day": DAY, "searches": W.DAY_SEARCHES, "reads": W.DAY_READS - 1})
         s0, p0 = self.sent()
         self.ask("best hiking boots", script=[tool_msg(call("s", "web_search", {"query": "best hiking boots"})),
                                               say("x")])
         self.assertEqual(self.sent(), (s0, p0))
-        print(f"\n  caps bar: most per turn {most[0]} searches / {most[1]} pages over 10 turns asking for 5 / 5; "
-              f"day caps {W.DAY_SEARCHES}/{W.DAY_READS} held")
+        # settable in Setup (Advanced): a lower cap holds at once; out-of-range values are refused
+        W.update(self.store, {"day_searches": 3}, DAY)
+        self.store._set_meta(W.USAGE, {"day": DAY, "searches": 3, "reads": 0})
+        self.ask("best hiking boots", script=[tool_msg(call("s", "web_search", {"query": "best hiking boots"})),
+                                              say("x")])
+        self.assertEqual(self.sent(), (s0, p0))
+        for bad in (0, 1001, True, "50", 2.5):
+            with self.assertRaises(W.InputError):
+                W.update(self.store, {"day_reads": bad}, DAY)
+        self.assertEqual(W.public(self.store, DAY)["caps"]["day_searches"], 3)
+        print(f"\n  caps bar: most per turn {most[0]} searches / {most[1]} pages over 10 turns asking for 7 / 7; "
+              f"day caps {W.DAY_SEARCHES}/{W.DAY_READS} held (and a lowered cap of 3)")
 
     def test_busy_backs_off_and_says_so(self):
         self.sx.reply = lambda q: (429, {"Content-Type": "text/plain"}, b"slow down")

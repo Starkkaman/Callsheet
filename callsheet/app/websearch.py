@@ -34,11 +34,12 @@ from store import InputError
 KEY = "web_search"            # callsheet.db meta: the settings
 USAGE = "web_search_usage"    # callsheet.db meta: today's counts (the daily caps)
 GLOSSARY_KEY = "your_words"   # "Your words" (the owner's glossary), when Callsheet has one: [{term, meaning}] or text
-MAX_SEARCHES = 3              # per owner turn
-MAX_READS = 2                 # per owner turn
+MAX_SEARCHES = 5              # per owner turn
+MAX_READS = 5                 # per owner turn
 MAX_RESULTS = 10
-DAY_SEARCHES = 60
-DAY_READS = 40
+DAY_SEARCHES = 100            # the daily caps' defaults (Setup › AI › Web search › Advanced; DAY_LIMITS)
+DAY_READS = 100
+DAY_LIMITS = (1, 1000)
 PAGE_CHARS = 6000
 QUERY_CHARS = 200
 QUERY_WORDS = 16
@@ -69,8 +70,12 @@ WHY = {
 def load(store):
     saved = store._get_meta(KEY, {})  # noqa: SLF001 (web search's own meta key)
     saved = saved if isinstance(saved, dict) else {}
-    s = {"base_url": "", "on": False, "added": None, "checked": None, "check_ok": None}
+    s = {"base_url": "", "on": False, "added": None, "checked": None, "check_ok": None,
+         "day_searches": DAY_SEARCHES, "day_reads": DAY_READS}
     s.update({k: v for k, v in saved.items() if k in s})
+    for k, d in (("day_searches", DAY_SEARCHES), ("day_reads", DAY_READS)):
+        v = s[k]
+        s[k] = v if isinstance(v, int) and not isinstance(v, bool) and DAY_LIMITS[0] <= v <= DAY_LIMITS[1] else d
     if not isinstance(s["base_url"], str):
         s["base_url"] = ""
     s["on"] = bool(s["on"] and s["base_url"])
@@ -94,7 +99,7 @@ def public(store, today):
     u = usage(store, today)
     return dict(s, configured=bool(s["on"] and s["base_url"]), today={"searches": u["searches"], "reads": u["reads"]},
                 caps={"searches": MAX_SEARCHES, "reads": MAX_READS, "results": MAX_RESULTS,
-                      "day_searches": DAY_SEARCHES, "day_reads": DAY_READS})
+                      "day_searches": s["day_searches"], "day_reads": s["day_reads"], "day_limits": list(DAY_LIMITS)})
 
 
 def update(store, patch, today):
@@ -121,6 +126,10 @@ def update(store, patch, today):
                 if not isinstance(v, bool):
                     raise InputError("on must be true or false.")
                 s["on"] = v
+            elif k in ("day_searches", "day_reads"):   # 0.14.0: the daily caps (Advanced)
+                if not isinstance(v, int) or isinstance(v, bool) or not DAY_LIMITS[0] <= v <= DAY_LIMITS[1]:
+                    raise InputError(f"The daily limit must be a whole number from {DAY_LIMITS[0]} to {DAY_LIMITS[1]:,}.")
+                s[k] = v
             else:
                 raise InputError(f"The web search settings can't change {str(k)[:40]}.")
         if s["on"] and not s["base_url"]:
@@ -438,6 +447,10 @@ class Web:
     def busy(self):
         return self.clock() < self.busy_until
 
+    def day_cap(self, kind):
+        s = load(self.store)
+        return s["day_searches"] if kind == "searches" else s["day_reads"]
+
     def back_off(self):
         self.busy_until = self.clock() + BACKOFF_S
 
@@ -446,7 +459,7 @@ class Web:
 
     def take(self, kind):
         """Counts one search or page read against today's cap; False when the cap is reached."""
-        cap = DAY_SEARCHES if kind == "searches" else DAY_READS
+        cap = self.day_cap(kind)
         with self.store.lock:
             u = usage(self.store, self.today())
             if u[kind] >= cap:
@@ -508,7 +521,7 @@ class Turn:
             return {"error": BUSY + " Tell the owner that, and answer without the web."}, None
         if not self.web.take("searches"):
             self.ignored += 1
-            return {"error": f"Callsheet has done its {DAY_SEARCHES} web searches for today. Answer without the web."}, None
+            return {"error": f"Callsheet has done its {self.web.day_cap('searches')} web searches for today. Answer without the web."}, None
         self.searches += 1
         self.queries.append(c["query"])
         label = "Searched the web for '" + c["query"] + "'"
@@ -568,7 +581,7 @@ class Turn:
             return {"error": "That result's text reads like instructions, so Callsheet doesn't open it."}, None
         if not self.web.take("reads"):
             self.ignored += 1
-            return {"error": f"Callsheet has read its {DAY_READS} web pages for today."}, None
+            return {"error": f"Callsheet has read its {self.web.day_cap('reads')} web pages for today."}, None
         self.reads += 1
         self.read_ids.append(rid)
         label = "Read " + r["host"]

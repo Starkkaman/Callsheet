@@ -21,6 +21,15 @@ KEY = "sk-ant-api03-PREFETCHtestVALUE-5678abcd"
 UNSCOPED_BODY_SHA = "2142c7ee30fc0a55a2fd6c5bf92f88d040d7e00be6ef9a579575d3bd0f0b5b4b"
 
 
+def pinned(body):
+    """0.14.0: the chat streams its answers; apart from that the body is the pinned one. The pin is taken with
+    "stream" back to false and without "stream_options" (both checked here)."""
+    b = dict(body)
+    assert b.pop("stream") is True and b.pop("stream_options") == {"include_usage": True}, body
+    b["stream"] = False
+    return json.dumps(b, sort_keys=True, ensure_ascii=False)
+
+
 def extras(work):
     return [
         # project B: a note project holding the marker word
@@ -378,7 +387,7 @@ class UnscopedTest(Base):
         _, msg = self.ask(c, "What should I do next?")
         b0 = loc.chats()[0]["body"]
         self.assertEqual([x["role"] for x in b0["messages"]], ["system", "user"])
-        dump = json.dumps(b0, sort_keys=True, ensure_ascii=False)
+        dump = pinned(b0)
         self.assertNotIn("prefetch", dump)
         self.assertNotIn("first lookup", dump)
         self.assertEqual(msg["steps"], [])

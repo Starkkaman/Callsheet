@@ -3455,7 +3455,29 @@
       h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, v.on ? 'Chat can search the web' : 'Off')]),
       h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ws-url' }, 'Your SearXNG address'), h('div', { class: 'inrow wsrow' }, [url, check])]),
       meta.length ? h('p', { class: 'muted wsmeta' + (res && !res.ok ? ' bad' : ''), role: 'status' }, meta.join(' · ')) : null, err,
-      h('p', { class: 'note' }, 'Chat searches only with words you wrote, and asks first when a search would include anything else.')]);
+      h('p', { class: 'note' }, 'Chat searches only with words you wrote, and asks first when a search would include anything else.'),
+      wsAdvanced(v)]);
+  }
+  /* 0.14.0: the daily limits (default 100 searches and 100 pages), in a closed Advanced drawer */
+  function wsAdvanced(v) {
+    var caps = v.caps || {}, lim = caps.day_limits || [1, 1000], err = errBox();
+    var adv = btn('tbtn disc', 'Advanced', { 'aria-expanded': String(!!WS.adv), 'aria-controls': 'ws-adv', 'data-fk': 'ws-adv' }, function () {
+      WS.adv = !WS.adv; renderSetup('[data-fk="ws-adv"]');
+    });
+    if (!WS.adv) return h('div', { class: 'wsadv' }, adv);
+    function num(key, label, val) {
+      var id = 'ws-' + key, inp = h('input', { class: 'inp num', type: 'number', id: id, min: String(lim[0]), max: String(lim[1]), step: '1', value: String(val), 'data-fk': id });
+      on(inp, 'change', function () {
+        var n = Number(inp.value), body = {};
+        body[key] = n;
+        run([inp], err, function () { return api('PATCH', 'api/web-search', body); }, function (r) { WS.v = r; renderSetup('[data-fk="' + id + '"]'); });
+      });
+      return h('div', { class: 'field' }, [h('label', { class: 'label', for: id }, label), inp]);
+    }
+    return h('div', { class: 'wsadv' }, [adv, h('div', { id: 'ws-adv', class: 'advbody' }, [
+      num('day_searches', 'Searches a day', caps.day_searches || 100), num('day_reads', 'Pages a day', caps.day_reads || 100), err,
+      h('p', { class: 'muted' }, 'Today: ' + ((v.today && v.today.searches) || 0) + ' searches, ' + ((v.today && v.today.reads) || 0) + ' pages. At most '
+        + (caps.searches || 5) + ' searches and ' + (caps.reads || 5) + ' pages for each question.')])]);
   }
   function aiStyle() {
     var w = writerOf(), p = (w.prompt_profiles || []).filter(function (x) { return x.id === (w.active_profile || 'default'); })[0];
@@ -5696,6 +5718,7 @@
     input: '', err: '', loading: false, sending: null, timer: null, fails: 0,
     items: {},           /* index item id -> api/chat/item/<id> (null while loading) */
     earlier: false, clearAsk: false, scroll: true, keepTop: null,
+    thinkOpen: {},       /* 0.14.0: Thinking panel open state by message key (closed by default after the answer) */
     cards: {}            /* 0.8.1: Save card state by proposal id: {edit, text, people, topics, area, confirm, ok, warning, err, busy, dismissed} */
   };
   var CHAT_SUGG = ['What’s waiting on me?', 'When did I last talk to…', 'Summarise this week'];
@@ -5737,6 +5760,14 @@
     var sb = main.querySelector('[data-csend]');
     if (sb) sb.disabled = chatPending();
   }
+  /* 0.14.0 Show thinking: the chat's thinking setting (both engines), kept on this box */
+  function chatThinking(v) {
+    var ov = CH.ov;
+    if (!ov) return;
+    ov.thinking = v; chatRender('[data-cthink]');
+    api('PATCH', 'api/chat/settings', { local: { thinking: v }, claude: { thinking: v } }).then(function () { return chatOverview(); },
+      function (e) { ov.thinking = !v; CH.err = e.message; chatRender('[data-cthink]'); });
+  }
   function chatPending() { return !!(CH.sending || (CH.conv && CH.conv.pending)); }
   function chatPoll() {
     clearTimeout(CH.timer); CH.timer = null;
@@ -5748,13 +5779,29 @@
         if (!CH.conv || CH.conv.id !== cid) return;
         CH.fails = 0; CH.conv = c;
         if (c.pending) { chatRefreshMsgs(); chatPoll(); }
-        else { CH.scroll = true; chatRender(); chatOverview(); }
+        else if (!chatSwap()) { CH.scroll = true; chatRender(); chatOverview(); }
       }, function (e) {
         if (!CH.conv || CH.conv.id !== cid) return;
         if (++CH.fails < 5) { chatPoll(); return; }
         CH.fails = 0; CH.conv.pending = null; CH.err = e.message; chatRender();
       });
-    }, 1000);
+    }, chatFast(CH.conv.pending) ? 300 : 1000);   /* 0.14.0: 300 ms while the answer streams */
+  }
+  function chatFast(p) {
+    return !!(p && (p.state === 'writing' || p.state === 'checking' || (p.live && p.live.length) || (p.thinking && p.thinking.sents && p.thinking.sents.length)));
+  }
+  /* 0.14.0: the answer is done: its final version replaces the streamed one in place (same spot, no re-render flash) */
+  function chatSwap() {
+    var box = main.querySelector('.chatcol .msgs'), old = box && box.querySelector('[data-live]');
+    var msgs = (CH.conv && CH.conv.messages) || [], i = msgs.length - 1;
+    if (!old || i < 0 || msgs[i].role !== 'assistant' || ui.view !== 'brief' || U.tab !== 'chat') return false;
+    var atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    old.replaceWith(chatAnswer(msgs[i], i));
+    if (atEnd) box.scrollTop = box.scrollHeight;
+    var sb = main.querySelector('[data-csend]');
+    if (sb) sb.disabled = chatPending();
+    chatOverview();
+    return true;
   }
   function chatAsk(text) {
     text = String(text || '').trim();
@@ -5827,7 +5874,8 @@
   }
   function chatCol() {
     var ov = CH.ov, convs = (ov && ov.conversations) || [];
-    var head = h('div', { class: 'dtop' }, [h('h2', null, 'Chat'), ov && ov.label ? h('span', { class: 'cmodel' }, ov.label) : null, h('span', { class: 'sp' }),
+    var think = ov && ov.ready ? chsw(ov.thinking, 'Show thinking', function () { chatThinking(!ov.thinking); }) : null;
+    var head = h('div', { class: 'dtop' }, [h('h2', null, 'Chat'), ov && ov.label ? h('span', { class: 'cmodel' }, ov.label) : null, h('span', { class: 'sp' }), think,
       convs.length ? h('button', { type: 'button', class: 'tbtn', 'data-cearlier': '1', 'aria-expanded': String(CH.earlier), 'aria-controls': 'ch-earlier' }, 'Earlier chats') : null,
       h('button', { type: 'button', class: 'act ghost cnew', 'data-cnew': '1', disabled: !CH.conv && !CH.sending }, [ico('chat'), 'New chat'])]);
     var earlier = CH.earlier && convs.length ? h('div', { class: 'cearly', id: 'ch-earlier' }, [
@@ -5878,16 +5926,58 @@
       /* 0.8.4: the mail's HTML had text a reader wouldn't see (dropped before indexing) */
       s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
   }
-  /* 0.14.0: a web source: its title and host as text (never a link: Callsheet doesn't open sites for you) */
+  /* 0.14.0: a web source's address, only when it is a plain http(s) address without a user name or password (the
+     result's own address from SearXNG; links inside answers stay defanged text). Anything else: no link. */
+  function webHref(u) {
+    if (typeof u !== 'string' || !/^https?:\/\//i.test(u)) return null;
+    try { var x = new URL(u); return (x.protocol === 'https:' || x.protocol === 'http:') && !x.username && !x.password ? x.href : null; }
+    catch (e) { return null; }
+  }
+  /* 0.14.0: a web source: its title and host, a link to the page (a new tab, no referrer). A result that reads like
+     instructions stays text, never a link. */
   function webChip(s) {
-    var instr = s.instructions === true;
-    return h('span', { class: 'schip wchip' + (instr ? ' instr' : ''), title: (s.title || '') + ' · ' + (s.host || ''),
-      'aria-label': 'Web page: ' + (s.title || '') + ', ' + (s.host || '') + (instr ? ', contains instructions' : '') }, [
-      h('span', { class: 'wt' }, s.title || s.host || 'Web page'), h('small', { class: 'wh' }, s.host || ''),
-      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null]);
+    var instr = s.instructions === true, href = instr ? null : webHref(s.url);
+    var attrs = { class: 'schip wchip' + (instr ? ' instr' : '') + (href ? ' wlink' : ''), title: (s.title || '') + ' · ' + (s.host || ''),
+      'aria-label': 'Web page: ' + (s.title || '') + ', ' + (s.host || '') + (instr ? ', contains instructions' : href ? ' (opens in a new tab)' : '') };
+    var kids = [h('span', { class: 'wt' }, s.title || s.host || 'Web page'), h('small', { class: 'wh' }, s.host || ''),
+      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null];
+    if (!href) return h('span', attrs, kids);
+    attrs.href = href; attrs.target = '_blank'; attrs.rel = 'noopener noreferrer'; attrs.referrerpolicy = 'no-referrer';
+    return h('a', attrs, kids);
+  }
+  /* ---------- 0.14.0: the streamed answer and Show thinking. Sentences arrive whole, defanged and with their marks
+     (chat.py Live): all text, never a link. The Thinking panel is the model's working, not an answer. ---------- */
+  var LIVE_MARK = { claim: 'the sender’s claim, unverified', instruction: 'reads like an instruction', lure: 'link lure' };
+  function liveParas(sents) {
+    var paras = [], cur = null;
+    (sents || []).forEach(function (r) {
+      if (!cur || r.p) { cur = []; paras.push(cur); }
+      if (cur.length) cur.push(' ');
+      cur.push(h('span', { class: 'ls' + (r.k && r.k.length ? ' lflag' : '') }, String(r.t || '')));
+      (r.k || []).forEach(function (k) { cur.push(' ', h('b', { class: 'imark lmark' }, LIVE_MARK[k] || k)); });
+    });
+    return paras.map(function (kids) { return h('p', null, kids); });
+  }
+  function thinkPanel(t, key, live) {
+    if (!t) return null;
+    var openNow = CH.thinkOpen[key] != null ? CH.thinkOpen[key] : !!live;   /* open while it streams, closed after */
+    var body = (t.sents && t.sents.length) ? liveParas(t.sents) : [h('p', { class: 'muted' }, live ? 'Thinking…' : 'This model didn’t share its thinking.')];
+    if (t.cut) body.push(h('p', { class: 'muted' }, 'Thinking was cut short.'));
+    var sm = h('summary', null, [h('span', { class: 'tl' }, 'Thinking'), h('span', { class: 'tn' }, 'the model’s working, not an answer')]);
+    var d = h('details', { class: 'cthink', open: openNow }, [sm, h('div', { class: 'tb' }, body)]);
+    on(sm, 'click', function () { CH.thinkOpen[key] = !d.open; });   /* the owner's own toggle only (not the default) */
+    return d;
+  }
+  /* the Jam channel-reveal switch (settings steel): role=switch; the label is visible text next to it */
+  function chsw(onNow, label, fn) {
+    var b = h('button', { type: 'button', class: 'chsw', role: 'switch', 'aria-checked': String(!!onNow), 'data-cthink': '1' }, [
+      h('span', { class: 'ch', 'aria-hidden': 'true' }, h('span', { class: 'th' })), h('span', { class: 'cl' }, label)]);
+    on(b, 'click', fn);
+    return b;
   }
   function chatAnswer(m, i) {
     var kids = [wlLabel('idle', m.by)];   /* 0.11.1: Wheatley, with the Lens */
+    if (m.thinking && !m.stopped) kids.push(thinkPanel(m.thinking, (CH.conv ? CH.conv.id : '') + ':' + i, false));
     if (m.error) {
       kids.push(h('p', { class: 'err' }, m.error));
       /* 0.6.2: a busy or loading server: one click asks the same question again (only on the latest answer) */
@@ -6017,7 +6107,16 @@
   }
   function chatBusy(p, canStop) {
     var steps = p.steps || [];
-    return h('div', { class: 'ma' }, [wlLabel('listening'),
+    if (p.live && p.live.length || p.thinking) {   /* 0.14.0: thinking and the answer so far, then a quiet state line */
+      var n = ((CH.conv && CH.conv.messages) || []).length, live = p.live && p.live.length;
+      return h('div', { class: 'ma mlive', 'data-live': '1' }, [wlLabel(live ? 'speaking' : 'listening'),
+        p.thinking ? thinkPanel(p.thinking, (CH.conv ? CH.conv.id : '') + ':' + n, true) : null,
+        live ? h('div', { class: 'lans' }, liveParas(p.live)) : null,
+        h('p', { class: 'lstate', role: 'status' }, p.checking ? 'checking…' : live ? '' : (p.text || 'Thinking…')),
+        steps.length ? h('div', { class: 'bsteps' }, steps.map(function (s) { return h('span', { class: 'bst done' }, s); })) : null,
+        canStop ? h('button', { type: 'button', class: 'tbtn', 'data-cstop': '1' }, 'Stop') : null]);
+    }
+    return h('div', { class: 'ma', 'data-live': '1' }, [wlLabel('listening'),
       h('div', { class: 'busy', role: 'status' }, [h('span', { class: 'spin', 'aria-hidden': 'true' }), p.text || 'Thinking…']),
       steps.length ? h('div', { class: 'bsteps' }, steps.map(function (s) { return h('span', { class: 'bst done' }, s); })) : null,
       canStop ? h('button', { type: 'button', class: 'tbtn', 'data-cstop': '1' }, 'Stop') : null]);
