@@ -186,6 +186,22 @@ class QueryCheckTest(unittest.TestCase):
         long_q = " ".join(["boots"] * (W.QUERY_WORDS + 1))
         self.assertFalse(W.check_query(long_q, owner)["ok"])
 
+    def test_live_check_d_latest_question(self):
+        """0.14.0 live check D: "What's the latest on …?" Case, punctuation, plurals, possessives and hyphens are
+        normalised; a word the owner didn't write (a year the model guessed from "latest", a synonym, "news") still
+        asks first with that exact query, and the prompt tells the model to add none."""
+        owner = ["What's the latest on Transport Canada drone rules?"]
+        for q in ("Transport Canada drone rules", "latest Transport Canada drone rules", "transport canada drone-rules",
+                  "Transport Canada's drone rules", "TRANSPORT CANADA DRONE RULE", "latest: Transport Canada, drones"):
+            self.assertTrue(W.check_query(q, owner)["ok"], q)
+        for q, stray in (("Transport Canada drone rules 2026", ["2026"]),
+                         ("Transport Canada drone regulations", ["regulations"]),
+                         ("Transport Canada drone rules latest news", ["news"])):
+            c = W.check_query(q, owner)
+            self.assertEqual((c["ok"], c["why"], c["words"], c["query"]), (False, "words", stray, q), q)
+        for words in ("add no year, date, synonym or other word of your own", "Callsheet ask them first"):
+            self.assertIn(words, chat.WEB_RULE)
+
     def test_private_patterns_ask_even_when_the_owner_wrote_them(self):
         """×10 per kind; the owner pasted every one of them (so they're his words): each still asks first."""
         asked, n = 0, 0

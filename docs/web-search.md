@@ -39,6 +39,11 @@ string is the one shown and the one sent. It goes out at once only when:
 The owner pasting a mail counts as his words, but the private patterns still apply to it. Words that only appeared
 in a tool result (an item, a search result, a page) are not his, so such a query asks.
 
+A word the model adds on its own stays strict too: a year guessed from "latest" ("Transport Canada drone rules
+2026"), a synonym ("regulations" for "rules") or "news" makes the turn ask with that exact query (0.14.0 live check D:
+one of three web questions asked first). `chat.WEB_RULE` therefore tells the model to use the owner's words as written
+and add no year, date, synonym or other word of its own.
+
 ## Asking first
 
 When the check fails, nothing is sent and the turn ends with a normal Wheatley message: `Search the web for
