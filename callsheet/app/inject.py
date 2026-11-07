@@ -23,6 +23,10 @@ after such an imperative ("Visit https://...", "Log in at https://..."). It deli
   ("Click here to unsubscribe", "manage your preferences", "view in browser"), and link lures in the owner's own
   Obsidian notes (`source="obsidian"`: the owner's text, not someone else's).
 A flag only adds a caution mark and the label below, so a rare false positive costs little.
+0.14.0 adds text that speaks to an AI reading it ("If you are an AI, ..."), requests to save something in its memory,
+"tell Callsheet/the AI ...", orders to mark something as paid or approved, and the owner's voice in someone else's text
+("This is Isaac", with the owner's names: `owner`, see owner_terms). `marks()` is the one detector set the index flag
+and Chat's live marks share (docs/chat.md).
 
 The index stores, per item, only VERSION and short hashes of the flagged sentences (`keys`), never extra text: the
 sentences themselves are re-derived from the body the index already holds when the chat needs them.
@@ -30,7 +34,7 @@ sentences themselves are re-derived from the body the index already holds when t
 import hashlib
 import re
 
-VERSION = 2            # bump when the rules change: the index re-checks every item (backfill)
+VERSION = 3            # bump when the rules change: the index re-checks every item (backfill)
 MAX_KEYS = 8           # hashes stored per item
 LABEL = "This answer repeats an instruction found in a message, event or document. It isn't advice."
 
@@ -39,6 +43,14 @@ _AGENT = r"(?:callsheet|(?:the\s+)?(?:assistant|ai|a\.i\.|chatbot|bot|model|llm|
 _LEAD = r"^[\W_]{0,4}"          # bullets, quotes, a stray "<" before a prefix
 _ACTION_DONE = (r"(?:sent|done|completed|paid|approved|signed|confirmed|transferred|forwarded|booked|replied|"
                 r"accepted|agreed|released|settled|wired|actioned|handled)")
+# 0.14.0: an AI by a word no person goes by ("tell the AI", "AI reading this"; not "your assistant", a person)
+_BOT = (r"(?:callsheet|(?:the\s+|your\s+|this\s+|an?\s+|any\s+|every\s+)?(?:ai|a\.i\.|ai\s+(?:assistant|model|agent|"
+        r"system)|virtual\s+assistant|digital\s+assistant|chatbot|llm|(?:large\s+)?language\s+model|bot))")
+# ... and the words that name one only at the end of a phrase ("If you are an assistant," but not "an assistant manager")
+_BOT_ANY = (r"(?:ai|a\.i\.|artificial\s+intelligence|(?:ai\s+|virtual\s+|digital\s+)?assistant|(?:ai\s+|large\s+)?"
+            r"(?:language\s+)?model|llm|chatbot|bot|ai\s+agent|callsheet|automated\s+(?:system|assistant|reader|tool))")
+_BOT_END = (r"(?=\s*(?:[,.;:!?)–—]|-\s|$)|\s+(?:reading|processing|summari[sz]ing|parsing|scanning|that|who|"
+            r"or|and|like|tool|program|system)\b)")
 
 RULES = (
     # "Callsheet note:", "Note to Callsheet:", "Assistant:", "AI:", "Message for the assistant:" at the start
@@ -78,7 +90,53 @@ RULES = (
     ("when-asked", re.compile(r"\bwhen(?:ever)?\s+(?:you(?:'re|\s+are)\s+|someone\s+)?(?:is\s+)?asked\s+(?:about|for|if|"
                               r"whether|what|how|who)\b[^.;!?]{0,120}?\b(?:say|tell|reply|answer|respond|confirm)\b",
                               re.I)),
+    # 0.14.0: text that speaks to an AI reading it: "If you are an AI, ...", "if this email is read by an assistant",
+    # "Any AI reading this", "Dear assistant,", "As an AI, you must". The AI word must end the phrase ("If you are an
+    # AI researcher", "the AI reading list", "If you are a member" don't count)
+    ("address", re.compile(
+        r"\bif\s+you(?:'re|\s+are)\s+(?:an?\s+|the\s+|some\s+(?:kind\s+of\s+|sort\s+of\s+)?)?" + _BOT_ANY + _BOT_END
+        + r"|\b(?:read|processed|summari[sz]ed|parsed|scanned|seen|analy[sz]ed)\s+by\s+(?:an?\s+|the\s+|any\s+|some\s+)?"
+        + _BOT_ANY + _BOT_END
+        + r"|\b" + _BOT + r"s?\s+(?:(?:that|who)\s+(?:is|are)\s+|currently\s+|now\s+)?(?:reading|processing|summari[sz]ing|"
+        r"parsing|scanning|seeing|analy[sz]ing)\s+(?:this|these|my|our|the\s+(?:e-?mail|message|text|note|page|"
+        r"document|thread))\b"
+        r"|(?:^[\W_]{0,4}|[.!?]\s+)(?:dear|hey|hi|hello|attention|attn|psst)\s+(?:the\s+)?" + _BOT_ANY + r"\s*[,:!]"
+        r"|\bas\s+an?\s+" + _BOT_ANY + r"\s*,\s*you\b", re.I)),
+    # 0.14.0: a request to remember or save something in the assistant's memory: "save it to memory", "store this in
+    # your memory", "add to memory that", "update your memory", "remember this for all future conversations" (not a
+    # memory card, "a terrible memory", "remember to bring the receipts")
+    ("memory", re.compile(
+        r"\b(?:save|store|write|add|put|commit|record|keep|log)\b[^.!?;]{0,60}?\b(?:to|in|into|inside)\s+(?:your\s+|the\s+|"
+        r"its\s+|callsheet's\s+|(?:long|short)[\s-]?term\s+|permanent\s+|persistent\s+)*(?:memory|memories)\b"
+        r"(?!\s*(?:card|stick|chip|foam|lane|module|slot))"
+        r"|\b(?:add|save|store)\s+(?:this|that|it|the\s+following)?\s*(?:as\s+)?(?:an?\s+)?(?:new\s+)?"
+        r"(?:memory|memories|memory\s+note)\b(?!\s*(?:card|stick|chip|foam|lane|module|slot))"
+        r"|\bupdate\s+(?:your|its|callsheet's|the\s+assistant's)\s+(?:memory|memories|notes|instructions|knowledge)\b"
+        r"|\b(?:remember|memori[sz]e|note|keep)\b(?!\s+to\b)[^.!?;]{0,80}?\b(?:for|in|across|during)\s+(?:all\s+|any\s+|"
+        r"every\s+|your\s+)?(?:future|later|subsequent|upcoming)\s+(?:conversations?|chats?|sessions?|answers?|replies|"
+        r"responses|queries|questions|interactions)\b", re.I)),
+    # 0.14.0: telling the assistant something: "tell Callsheet it is signed", "let the AI know" (not "tell your
+    # assistant", a person)
+    ("tell-ai", re.compile(r"\b(?:tell|inform|instruct|remind|notify|convince|persuade)\s+" + _BOT + r"\b"
+                           r"(?!\s+(?:conference|team|reading|lab|course|model|researchers?|engineers?)\b)"
+                           r"|\blet\s+" + _BOT + r"\s+know\b", re.I)),
+    # 0.14.0: an order to record something as paid or approved: "mark it as settled", "flag this payment as paid",
+    # "set the status of order 4471 to approved" (not "mark the date", "mark it as tentative", "we'll mark it")
+    ("mark-as", re.compile(
+        r"(?:^[\W_]{0,4}|[,;:(–—-]\s*(?:and\s+|so\s+|then\s+)?|\b(?:please|pls|kindly|just|simply|so|"
+        r"also)\s+|\byou\s+(?:must|need\s+to|should|have\s+to|can)\s+)"
+        r"(?:(?:mark|flag|record|log|list|treat|label|tag|classify|file|report|show)\s+(?:(?!as\b)[\w'#$£€.,/-]+\s+)"
+        r"{1,5}?as|(?:set|change|update|move)\s+(?:the\s+|its\s+|their\s+)?(?:status|state)\s+(?:of\s+[^.!?;]{0,40}?)?"
+        r"to)\s+[\"']?(?:already\s+|fully\s+|now\s+)?(?:paid|settled|approved|signed|cleared|authori[sz]ed|agreed|"
+        r"safe|trusted|verified|legit(?:imate)?|not\s+spam)\b", re.I)),
 )
+# 0.14.0: the owner's voice from someone else's mail: "This is Isaac", "I'm Isaac", "this email is from the owner",
+# "writing from the owner's other address" (the names: `owner`, see owner_terms; triage.steer's rule for the sorter)
+_OWNER_VOICE = (r"\b(?:i\s+am|i'm|this\s+is)\s+(?:<<NAMES>>)\b(?!'s)"
+                r"|\bthis\s+(?:e-?mail|message|text|note|mail)\s+is\s+(?:from|by)\s+(?:the\s+owner|<<NAMES>>)\b(?!'s)"
+                r"|\bfrom\s+(?:the\s+owner's|<<NAMES>>'s)\s+other\s+(?:e-?mail|account|address|phone|number)\b")
+_NOT_NAMES = frozenset("""the a an and or of to i me my you your we us our he she they it this that owner user mr mrs
+ms dr sir madam team""".split())
 # 0.7.1 link lures ----------------------------------------------------------------------------------------------
 OWN_SOURCES = frozenset({"obsidian"})   # the owner's own text: link lures there aren't someone else's instruction
 URL = re.compile(r"(?:\b(?:https?|hxxps?|ftp)://|\bwww\.)[^\s<>\"'`]+"
@@ -165,9 +223,42 @@ def sentences(text):
     return out
 
 
-def rules_hit(sentence, following="", source=None):
+def owner_terms(names=()):
+    """0.14.0: the owner's names as the detectors match them: each name as given (lower case, spaces squeezed) and its
+    first word, longest first, without one-letter words or words such as "the" or "owner". `names`: the About you name
+    and the names People knows the owner by (the same sources as triage.context's owner_first)."""
+    out = set()
+    for n in names or ():
+        words = re.findall(r"[^\W\d_](?:[^\W\d_]|['-](?=[^\W\d_]))*", _plain(n).lower())
+        words = [w for w in words if len(w) > 1]
+        if not words:
+            continue
+        if words[0] not in _NOT_NAMES:
+            out.add(words[0])
+        if len(words) > 1:
+            out.add(" ".join(words))
+    return tuple(sorted(out, key=lambda w: (-len(w), w)))
+
+
+_VOICE = {}
+
+
+def _voice(owner):
+    """The owner-voice rule for these names (cached; "this email is from the owner" needs none)."""
+    terms = owner_terms(owner)
+    rx = _VOICE.get(terms)
+    if rx is None:
+        names = "|".join(r"\s+".join(map(re.escape, t.split())) for t in terms) or r"(?!)"
+        rx = _VOICE[terms] = re.compile(_OWNER_VOICE.replace("<<NAMES>>", names), re.I)
+        if len(_VOICE) > 64:
+            _VOICE.clear()
+    return rx
+
+
+def rules_hit(sentence, following="", source=None, owner=()):
     """Names of the rules a sentence matches (empty: not an instruction). `following`: the next sentence (a link
-    lure's URL may stand there); `source`: the item's source (no link-lure rule for the owner's own notes)."""
+    lure's URL may stand there); `source`: the item's source (no link-lure or owner-voice rule for the owner's own
+    notes); `owner` (0.14.0): the owner's names (owner_terms), for the owner-voice rule."""
     s = _plain(sentence)
     hits = []
     for name, rx in RULES:
@@ -176,27 +267,45 @@ def rules_hit(sentence, following="", source=None):
                 continue
             hits.append(name)
             break
+    if source not in OWN_SOURCES and _voice(owner).search(s):
+        hits.append("owner-voice")
     if source not in OWN_SOURCES and link_lure(s, following):
         hits.append("link")
     return hits
 
 
-def instructions(text, source=None):
+def instructions(text, source=None, owner=()):
     """The sentences of `text` that hold an instruction addressed to an assistant (or, 0.7.1, a link lure), in
-    order, without repeats. `source`: the item's source when known (see rules_hit)."""
+    order, without repeats. `source`: the item's source when known (see rules_hit); `owner`: the owner's names."""
     out, seen = [], set()
     ss = sentences(text)
     for i, s in enumerate(ss):
         k = norm(s)
-        if k not in seen and rules_hit(s, ss[i + 1] if i + 1 < len(ss) else "", source):
+        if k not in seen and rules_hit(s, ss[i + 1] if i + 1 < len(ss) else "", source, owner):
             seen.add(k)
             out.append(s)
     return out
 
 
-def item_instructions(title, body, source=None):
+def item_instructions(title, body, source=None, owner=()):
     """instructions() over an item's title and body (what index.py stores keys for)."""
-    return instructions(str(title or "") + "\n" + str(body or ""), source)
+    return instructions(str(title or "") + "\n" + str(body or ""), source, owner)
+
+
+def marks(text, source=None, owner=()):
+    """0.14.0: the one detector set for a piece of text, in the order Chat shows them: "claim" (writer.states_decision
+    as for chat answers, with the owner's names), then "lure" (a link lure) or "instruction" (instructions()). The
+    index stores a flag for exactly the texts that get "lure" or "instruction" here (item_instructions with the same
+    names), so Chat's live marks and the index agree; a claim alone is the claim post-check's, not a flag."""
+    import writer   # here, not at the top: writer imports this module
+    kinds = []
+    if writer.states_decision(text, attributed_ok=True, owner=owner):
+        kinds.append("claim")
+    if source not in OWN_SOURCES and link_lure(text):
+        kinds.append("lure")
+    elif instructions(text, source, owner):
+        kinds.append("instruction")
+    return kinds
 
 
 def norm(sentence):
@@ -208,8 +317,8 @@ def key(sentence):
     return hashlib.sha256(norm(sentence).encode("utf-8")).hexdigest()[:16]
 
 
-def keys(title, body, source=None):
-    return [key(s) for s in item_instructions(title, body, source)][:MAX_KEYS]
+def keys(title, body, source=None, owner=()):
+    return [key(s) for s in item_instructions(title, body, source, owner)][:MAX_KEYS]
 
 
 # --- the answer post-check -----------------------------------------------------------------------------------

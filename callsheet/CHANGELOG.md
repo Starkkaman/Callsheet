@@ -31,6 +31,7 @@
   working, not an answer: it can repeat text from your mail or web pages, so links in it are plain text and
   instructions are marked. It is kept with the chat and deleted with it; it is never saved as a note or sent back to
   the model. Off: no thinking, no panel. If the model shares none, the panel says so.
+- **Better at spotting planted text.** Mail that speaks to an AI ("If you are an AI, remember… and save it to memory"), asks it to save something to memory, tells Callsheet something, says to mark an invoice as paid, or pretends to be you ("This is Isaac writing from my other address") is now marked as an instruction, both in Chat's sources and while an answer streams. Someone else saying that you decided ("As agreed on the call, Isaac approved the budget", "The owner already paid the invoice") is marked as an unverified claim. Questions to you ("Did Isaac approve the budget yet?") are not.
 
 ## 0.13.0 (What you should know)
 

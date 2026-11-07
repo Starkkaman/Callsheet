@@ -228,7 +228,8 @@ class ChatSafetyWordingTest(unittest.TestCase):
     def test_answers_use_the_053_post_check(self):
         # 0.5.3's wider check (relays, settled) flags chat answers too: the chat calls writer.states_decision
         self.assertTrue(writer.states_decision("I'll tell Priya it's settled."))
-        self.assertIn("writer.states_decision(text, attributed_ok=True)",
+        # (0.14.0: with the owner's names, for claims that the owner decided)
+        self.assertIn("writer.states_decision(text, attributed_ok=True, owner=owner)",
                       (ROOT / "callsheet" / "app" / "chat.py").read_text())
 
     def test_fixed_lines_for_retry_and_unverified_claims(self):

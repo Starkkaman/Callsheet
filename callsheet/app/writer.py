@@ -885,6 +885,80 @@ def _unattributed(sentence):
     return sentence
 
 
+# 0.14.0: someone else's claim that the owner decided, in any tense: "Isaac approved the budget", "the owner already
+# paid the invoice", "Isaac's signed it", "Isaac will sign tomorrow", "Isaac is paying it today", "paid by Isaac",
+# "as agreed with the owner", "Isaac gave the go-ahead", "we have the owner's approval". The owner is "the owner" or a
+# name from `owner` (inject.owner_terms: the first and full names from Setup and People). Not a question to the owner,
+# with or without its question mark ("Did Isaac approve the budget yet", "Has the owner paid", "Can you confirm the
+# owner..."), nor a request ("Isaac, please approve", "ask Isaac to sign", "Isaac needs to approve"), nor "signed up",
+# "paying attention", "agreed with me", "paid for lunch"; conditions and negations are cut as for every pattern.
+_O_ADV = (r"(?:(?:already|just|now|also|finally|fully|officially|personally|verbally|formally|both|all|himself|herself|"
+          r"themselves|then|since|today|yesterday|earlier|this\s+morning)\s+)*")
+_O_PAST = (r"(?:approved|paid|signed(?:\s+off)?|countersigned|agreed|confirmed|settled|authori[sz]ed|okayed|ok'?d|"
+           r"green-?lit|accepted|released|transferred|wired|decided|said\s+yes)")
+_O_PRES = (r"(?:approves|pays|signs(?:\s+off)?|countersigns|agrees|confirms|settles|authori[sz]es|okays|accepts|"
+           r"releases|transfers|wires|says\s+yes)")
+_O_BARE = (r"(?:approve|pay|sign(?:\s+off)?|countersign|agree|confirm|settle|authori[sz]e|okay|accept|release|"
+           r"transfer|wire|say\s+yes)")
+_O_ING = (r"(?:approving|paying|signing(?:\s+off)?|countersigning|agreeing|confirming|settling|authori[sz]ing|"
+          r"accepting|releasing|transferring|wiring)")
+_O_NOT = (r"(?!\s+(?:up|in|out|attention|tribute|a\s+visit|with\s+(?:me|us|you|him|her|them|that|this|everyone)\b|"
+          r"to\s+(?:join|come|meet|attend|speak|talk|present|host|help|be|go|do|have|take|look|visit|stop)\b|for\s+(?:the\s+)?"
+          r"(?:lunch|dinner|breakfast|coffee|drinks|pizza|round|taxi|cab|parking)\b))")
+_O_GIVE = (r"(?:gave|given|okayed)\s+(?:(?:us|me|them|you|it|this|that|the\s+\w+)\s+)?(?:(?:the|his|her|their|a|an|final|"
+           r"formal|full|official)\s+)*(?:go-?ahead|ok|okay|green\s+light|thumbs[\s-]up|sign-?off|approval|nod|blessing)"
+           r"\b")
+_O_NOUN = r"(?:full\s+|final\s+|formal\s+|written\s+)?(?:approval|sign-?off|go-?ahead|ok|okay|blessing|green\s+light|signature)\b"
+_OWNER_CLAIM_SRC = (
+    r"\b(?P<who><<W>>)\s+" + _O_ADV + r"(?:" + _O_PAST + "|" + _O_PRES + r")\b" + _O_NOT
+    + r"|\b(?P<who2><<W>>)(?:'s|\s+has|\s+have|\s+had)\s+" + _O_ADV + _O_PAST + r"\b" + _O_NOT
+    + r"|\b(?P<who3><<W>>)(?:'ll|\s+will|\s+did|\s+does|\s+(?:is|was|'s)\s+going\s+to)\s+" + _O_ADV + _O_BARE + r"\b"
+    + _O_NOT
+    + r"|\b(?P<who4><<W>>)(?:'s|\s+is|\s+was)\s+" + _O_ADV + _O_ING + r"\b" + _O_NOT
+    + r"|\b(?P<who5><<W>>)(?:'s|\s+has|\s+had)?\s+" + _O_ADV + _O_GIVE
+    + r"|(?<!\bbe\s)(?<!being\s)\b" + _O_PAST + r"\s+by\s+(?P<by><<W>>)\b"
+    + r"|\b(?:agreed|settled)\s+with\s+(?P<with><<W>>)\b"
+    + r"|\b(?:has|have|had|got|received|with)\s+(?P<poss><<W>>)'s\s+" + _O_NOUN)
+# the word before the owner that makes a question or a request: "did Isaac approve", "has the owner paid", "ask Isaac"
+_OWNER_PRE = re.compile(r"(?:did|does|do|has|have|had|is|was|were|will|would|can|could|should|shall|may|might|must|"
+                        r"to|ask|asked|asking|let|tell|for|whether|if|wait|waiting|until|once|when|after|before)$")
+_ASKING = re.compile(r"^\W*(?:can|could|would|will|did|do|does|have|has|is|are|was|were|shall|should)\s+"
+                     r"(?:you|we|i|someone|anyone|somebody)\b")
+_OWNER_RX = {}
+
+
+class _OwnerClaim:
+    """The owner-claim pattern for one set of names, with a search() like a compiled pattern's (see _clause_states)."""
+
+    def __init__(self, terms):
+        names = "|".join(r"\s+".join(map(re.escape, t.split())) for t in terms)
+        who = r"(?:the\s+owner" + ("|" + names if names else "") + r")"
+        self.rx = re.compile(_OWNER_CLAIM_SRC.replace("<<W>>", who))
+
+    def search(self, clause):
+        if _ASKING.search(clause):
+            return None
+        for m in self.rx.finditer(clause):
+            g = next((k for k in ("who", "who2", "who3", "who4", "who5") if m.group(k) is not None), None)
+            if g:
+                pre = re.findall(r"[a-z']+", clause[:m.start(g)])[-1:]
+                if pre and _OWNER_PRE.fullmatch(pre[0]):
+                    continue
+            return m
+        return None
+
+
+def _owner_claims(owner=()):
+    import inject   # the owner's names as every detector matches them
+    terms = inject.owner_terms(owner)
+    p = _OWNER_RX.get(terms)
+    if p is None:
+        if len(_OWNER_RX) > 64:
+            _OWNER_RX.clear()
+        p = _OWNER_RX[terms] = _OwnerClaim(terms)
+    return p
+
+
 def _clause_states(sentence, patterns):
     for clause in re.split(r"[,;:]|\s[-–—]\s|\b(?:but|so|and then)\b", sentence):
         m = _CONDITION.search(clause)
@@ -896,27 +970,30 @@ def _clause_states(sentence, patterns):
     return False
 
 
-def states_decision(text, attributed_ok=False):
+def states_decision(text, attributed_ok=False, owner=()):
     """True when a draft says that something has been approved, paid, released, sent, signed, booked,
     agreed or decided, as a fact or in the first person, or takes a sender's claim as done ("I note the
     contract has been signed", "to confirm the signed contract"). Text in [brackets], questions, conditions
     ("Once you approve, I'll book it.") and requests for a signed or paid document ("Please send me the signed
     copy") don't count. Plain text, so it also reads an incoming message (its "Sent from my phone" and
     "Sent: <date>" lines are skipped). attributed_ok (0.6.0, chat answers only): what the answer reports from a named
-    source with a reporting verb ("An email from Jonas claims the invoice is paid") doesn't count."""
+    source with a reporting verb ("An email from Jonas claims the invoice is paid") doesn't count. 0.14.0: someone's
+    claim that the owner decided ("Isaac approved the budget", "the owner already paid") counts too; `owner`: the
+    owner's names (inject.owner_terms; "the owner" always counts)."""
     if not isinstance(text, str):
         return False
+    decision = _DECISION + (_owner_claims(owner),)
     text = re.sub(r"\[[^\]]*\]", " ", text.replace("’", "'"))
     text = re.sub(r"(?mi)^[\s>]*sent(?:\s*:|\s+from\s+(?!(?:my|our)\s+(?:side|end)\b)).*$", " ", text)
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
         if not sentence.strip() or sentence.rstrip().endswith("?"):
             continue
         if not attributed_ok:
-            if _clause_states(sentence.lower(), _DECISION):
+            if _clause_states(sentence.lower(), decision):
                 return True
             continue
         if _clause_states(sentence.lower(), _FIRST_PERSON) or \
-                _clause_states(_unattributed(sentence).lower(), _DECISION):
+                _clause_states(_unattributed(sentence).lower(), decision):
             return True
     return False
 

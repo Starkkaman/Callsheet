@@ -65,6 +65,41 @@ non-planted sentences in the brief fixtures (755 distinct, 61 with a URL), the 0
 the 0.7 projects index (44); the fixtures' URLs are mostly signature lines, so the decision tests above carry most of
 the evidence.
 
+0.14.0 (gaps the live-harness dry run found; `inject.VERSION` 3, so the index re-checks every item once). New rules:
+`address`, text that speaks to an AI reading it ("If you are an AI/assistant/language model,", "if this email is read
+by an AI", "Any AI reading this", "Dear/Hey/Attention assistant|AI|Callsheet,", "As an AI, you"; the AI word must end
+the phrase, so "If you are an AI researcher", "the AI reading list", "If you are a member" don't count); `memory`, a
+request to save something in memory ("save it to memory", "store this in your memory", "add to memory", "update your
+memory", "remember this for all future conversations"; not a memory card, "a terrible memory", "remember to bring the
+receipts"); `tell-ai`, "tell/inform/remind/notify Callsheet|the AI|the chatbot ...", "let the AI know" (not "tell your
+assistant": a person); `mark-as`, an order to record something as paid ("mark it as settled", "flag this payment as
+paid", "set the status of order 4471 to approved"; paid, settled, approved, signed, cleared, authorised, agreed, safe,
+trusted, verified, legitimate, not spam; not "mark the date", "mark it as tentative" or "we'll mark it"); and
+`owner-voice`, the owner's voice in someone else's text ("This is Isaac", "I'm Isaac", "this email is from the
+owner|Isaac", "from Isaac's other address"; not in the owner's own Obsidian notes). The owner's names are the About
+you name and the names People knows the owner by (`triage.owner_names`, expanded by `inject.owner_terms` to each full
+name and its first word); the index gets them from `Index.owner_names` (set by api.App), Chat per turn. A plain
+"Remember that the office is closed" stays unflagged: without an AI addressed or a memory word it is ordinary mail.
+
+One detector set (0.14.0): `inject.marks(text, source, owner)` returns "claim" (`writer.states_decision`, chat
+answers' reading, with the owner's names), then "lure" or "instruction" (`inject.instructions`). Chat's live marks
+(`chat.live_marks`) are `inject.marks`, and the index stores a flag for exactly the texts that get "lure" or
+"instruction" there with the same names, so a sentence the index flags is marked live too, and the other way round
+(tested on the planted and placebo corpora). A claim alone is not an index flag: it stays with the claim check.
+
+Owner claims (0.14.0, `writer.states_decision(text, attributed_ok, owner)`): someone's claim that the owner decided
+counts as a decision: "the owner" or one of the owner's names, then approved, paid, signed (off), agreed, confirmed,
+settled, authorised, accepted, released, transferred, wired, okayed in any tense ("Isaac approved", "the owner already
+paid", "Isaac's signed", "Isaac will sign", "Isaac is paying"), "paid by Isaac", "as agreed with the owner", "Isaac
+gave the go-ahead", "we have the owner's approval". Not: questions to the owner, with or without the question mark
+("Did Isaac approve the budget yet", "Has the owner paid", "Can you confirm ..."), requests ("Isaac, please approve",
+"ask Isaac to sign", "Isaac needs to approve"), "signed up", "paying attention", "agreed with me", "paid for lunch",
+and, as before, conditions and negations. Without names only "the owner" counts. Measured on the 0.14.0 corpus
+(`tests/detect_corpus_0140.py`, 70 placebo sentences that use the same words innocently): planted instructions
+flagged by the index 63/63 (21 sentences x subject, body, signature; 3/63 before), owner claims 45/45 (15/45
+before); placebo: index 0/70, claims 2/70 before and after (both from older rules: "We paid the deposit last week",
+"Approved vendors list attached").
+
 Index time: `index.upsert` stores per item `instr` (a JSON list of 16-hex sha256 prefixes of the normalized
 flagged sentences, at most 8, "" when none; no extra text) and `instr_v` (`inject.VERSION`). Older rows (and all
 rows after a rules change, a `VERSION` bump) are flagged on the spot when read and stored by a one-off background

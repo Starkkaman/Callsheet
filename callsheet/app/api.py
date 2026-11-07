@@ -1233,6 +1233,8 @@ class App:
             self.index_error = str(e)
             print(f"Callsheet index: {e}", file=sys.stderr, flush=True)
             return
+        # 0.14.0: the owner's names for the index's instruction check (the same names Chat's live marks use)
+        self.index.owner_names = lambda: triage.owner_names(self.store, getattr(self, "people", None))
         self.scanner = index_scan.Scanner(self.store, self.index, self.syncer, clock=self.clock)
         # 0.6.0 chat: one-off planted-instruction flags for rows indexed before the detector (reads compute them
         # on the spot until then)

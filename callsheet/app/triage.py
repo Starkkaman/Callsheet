@@ -454,6 +454,25 @@ class Ctx:
         return with_notes(system_text(self.owner_full or first, first, list(self.aliases) + al), notes, first)
 
 
+def owner_names(store, people=None):
+    """0.14.0: the owner's names for the instruction and claim detectors (inject.owner_terms takes the first and full
+    names from them): the About you name and the names People knows the owner by, the sources of context()'s
+    owner_first. Never from content."""
+    out = []
+    try:
+        full = _name_part(store.settings().get("name"))
+    except Exception:  # noqa: BLE001 (no settings yet: "the owner" still counts)
+        full = ""
+    if full:
+        out.append(full)
+    if people is not None:
+        try:
+            out += sorted(n for n in people.owner_names() if n)
+        except Exception:  # noqa: BLE001
+            pass
+    return tuple(out)
+
+
 def context(store, people=None, today=None):
     """The Ctx for a sync or a pass, from Setup (name, time zone, areas), the connected accounts, VIPs and People."""
     s = store.settings()

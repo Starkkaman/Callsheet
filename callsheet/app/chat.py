@@ -44,6 +44,7 @@ import inject
 import memory
 import net            # 0.11.1: split_url / blocked (parsing only; chat.py never calls Net.get)
 import rules
+import triage         # 0.14.0: owner_names (the owner's names for the detectors; nothing here sorts or calls a model)
 import websearch      # 0.14.0: web search through the owner's SearXNG (all network I/O is in websearch.py/net.py)
 import writer
 from store import Conflict, InputError, NotFound, Store
@@ -1078,6 +1079,7 @@ class Tools:
     def __init__(self, index, tz, areas, fmt="12h", clock=time.time, scope=None, project=None, remember=None,
                  connect=None, web=None):
         self.index, self.tz, self.fmt, self.clock = index, tz, fmt, clock
+        self.owner = ()   # 0.14.0: the owner's names for inject's owner-voice rule (set by Chat)
         # 0.14.0: websearch.Turn when web search is on (Chat only, in the owner's turn), else None: then web_search and
         # read_result aren't offered and a call anyway is ignored and counted (self.ignored_web)
         self.web = web
@@ -1304,7 +1306,7 @@ class Tools:
                 if not any(row.get(f) for f in ("text", "title", "quote")):
                     continue
                 text = ". ".join(str(row.get(f) or "") for f in ("text", "title", "quote"))
-                found = inject.instructions(text)
+                found = inject.instructions(text, owner=self.owner)
                 r = self.index.get(item) if item is not None else None
                 if r is not None:
                     row["item"] = item
@@ -1630,19 +1632,13 @@ _SENT_END = re.compile(r"(?<=[.!?…])[\"')\]”’»]*(?:\s+|$)|\n+")
 _LIVE_CITE = re.compile(r"\s?\[\s*(?:#|id[:\s]*|item[:\s]*|source[:\s]*)?(?:w?\d{1,12})(?:\s*,\s*w?\d{1,12})*\s*\]")
 
 
-def live_marks(sentence):
-    """The detectors' kinds for one sentence (as the model wrote it, links intact: a lure needs its link)."""
-    kinds = []
+def live_marks(sentence, owner=()):
+    """The detectors' kinds for one sentence (as the model wrote it, links intact: a lure needs its link). 0.14.0: the
+    index's detector set (inject.marks), with the owner's names, so a sentence the index flags is marked here too."""
     try:
-        if writer.states_decision(sentence, attributed_ok=True):
-            kinds.append("claim")
-        if inject.link_lure(sentence):
-            kinds.append("lure")
-        elif inject.instructions(sentence):
-            kinds.append("instruction")
+        return inject.marks(sentence, owner=owner)
     except Exception:  # noqa: BLE001 (a detector bug must not stop the stream; the final check still runs)
-        pass
-    return kinds
+        return []
 
 
 class Live:
@@ -1650,9 +1646,9 @@ class Live:
     list swapped in one assignment, so a poll never sees a sentence before its label). `cite` drops [12] / [w3]
     markers (the final answer turns them into sources)."""
 
-    def __init__(self, limit=MAX_ANSWER, cite=True):
+    def __init__(self, limit=MAX_ANSWER, cite=True, owner=()):
         self.sents, self.buf, self.size, self.limit, self.cite = (), "", 0, limit, cite
-        self.cut, self.para, self.chars = False, False, 0
+        self.cut, self.para, self.chars, self.owner = False, False, 0, tuple(owner or ())
 
     def add(self, text):
         if self.cut or not text:
@@ -1694,7 +1690,7 @@ class Live:
             if not shown:
                 return
         rec = {"t": shown, "p": bool(self.para and self.sents)}
-        kinds = live_marks(raw)
+        kinds = live_marks(raw, self.owner)
         if kinds:
             rec["k"] = kinds
         self.size += len(shown)
@@ -2261,9 +2257,10 @@ class Chat:
                 return
             s = load_settings(self.store)
             provider = s["provider"]
+            owner = job["live"].owner = self._owner()   # the live marks use the index's detectors and names
             # 0.14.0 Show thinking (Chat's switch = the provider's thinking setting): on = requested and shown
             if s["claude" if provider == "claude" else "local"]["thinking"]:
-                job["think"] = Live(THINK_MAX, cite=False)
+                job["think"] = Live(THINK_MAX, cite=False, owner=owner)
             settings = self.store.settings()
             tz, fmt = rules.tzinfo(settings), rules.time_format(settings)
             now = dt.datetime.fromtimestamp(self.clock(), tz)
@@ -2278,6 +2275,7 @@ class Chat:
                           scope=sc.get("ids") or [] if sc else None,
                           project={"name": sc.get("name"), "status": sc.get("status")} if sc else None,
                           remember=intent, connect=cintent, web=web)
+            tools.owner = owner
             pre = self._prefetch(tools, sc, question) if sc else None
             if pre:
                 self._step(job, pre[2])
@@ -2310,7 +2308,7 @@ class Chat:
             if not text.strip():  # never a blank answer (and nothing blank goes back as history)
                 raw, text, sources, web_sources = "", NO_ANSWER, [], []
             # the checks read the answer as the model wrote it (the defang note's "not" mustn't hide a claim)
-            warned = writer.states_decision(text, attributed_ok=True)
+            warned = writer.states_decision(text, attributed_ok=True, owner=owner)
             repeats = self._repeats(text, tools.flagged, conv,
                                     list(tools.flagged_text) + (tools.web.flagged if tools.web is not None else []))
             msg = {"role": "assistant", "text": defang(text, keep), "ctx": defang(raw, keep), "sources": sources,
@@ -2472,6 +2470,10 @@ class Chat:
         c.update(turn=turn, pid=pid, expires=exp)
         return c
 
+    def _owner(self):
+        """0.14.0: the owner's names for the detectors (Setup and People, never content)."""
+        return triage.owner_names(self.store, self.people)
+
     def _flagged(self, flagged, conv, extra=()):
         """The flagged instruction sentences of the items returned in this turn or an earlier turn of this chat
         (instr_seen), re-read from the index, plus `extra`."""
@@ -2479,11 +2481,11 @@ class Chat:
         for m in (conv or {}).get("messages", [])[-2 * HISTORY_TURNS:]:
             if m.get("role") == "assistant" and isinstance(m.get("instr_seen"), list):
                 ids.update(i for i in m["instr_seen"] if isinstance(i, int))
-        sentences = []
+        sentences, owner = [], self._owner()
         for i in sorted(ids)[:50]:
             r = self.index.get(i) if self.index is not None else None
             if r is not None:
-                sentences += inject.item_instructions(r.get("title"), r.get("body"), r.get("source"))
+                sentences += inject.item_instructions(r.get("title"), r.get("body"), r.get("source"), owner)
         return sentences + list(extra)
 
     def _repeats(self, text, flagged, conv, extra=()):

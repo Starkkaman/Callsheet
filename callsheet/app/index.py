@@ -168,21 +168,24 @@ def _segments(marked):
     return out
 
 
-def _instr(title, body, source=None):
+def _instr(title, body, source=None, owner=()):
     """The stored flag: a JSON list of the flagged sentences' short hashes, "" when there are none. 0.7.1: `source`
-    (the owner's own Obsidian notes get no link-lure rule, inject.OWN_SOURCES)."""
-    ks = inject.keys(title, body, source)
+    (the owner's own Obsidian notes get no link-lure rule, inject.OWN_SOURCES). 0.14.0: `owner`, the owner's names
+    (inject's owner-voice rule; the same names Chat's live marks use)."""
+    ks = inject.keys(title, body, source, owner)
     return json.dumps(ks) if ks else ""
 
 
-def _flagged(r):
+def _flagged(r, owner=()):
     """0.6.0 chat: does this row hold a planted instruction? The stored flag, or (a row the current rules haven't
-    checked yet, before the backfill reaches it) the rules run on the spot."""
+    checked yet, before the backfill reaches it) the rules run on the spot. `owner`: the names, or a function that
+    returns them (called only when the rules run)."""
     keys = r.keys()
     if "instr_v" in keys and r["instr_v"] == inject.VERSION:
         return bool(r["instr"])
     if "body" in keys:
-        return bool(inject.keys(r["title"], r["body"], r["source"] if "source" in keys else None))
+        return bool(inject.keys(r["title"], r["body"], r["source"] if "source" in keys else None,
+                                owner() if callable(owner) else owner))
     return False
 
 
@@ -192,6 +195,9 @@ class Index:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / DB_NAME
         self.clock = clock
+        # 0.14.0: a function that returns the owner's names (set by api.App: triage.owner_names), for inject's
+        # owner-voice rule; None: "the owner" only
+        self.owner_names = None
         self.lock = threading.RLock()
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         os.close(fd)
@@ -284,6 +290,7 @@ class Index:
     # --- writes -------------------------------------------------------------------------------------------------
     def _upsert(self, items, now):
         n = {"added": 0, "updated": 0, "same": 0, "bad": 0}
+        owner = self._owner()
         for it in items:
             try:
                 row = normalize(it)
@@ -294,7 +301,7 @@ class Index:
             old = self.db.execute("SELECT id, hash, instr_v FROM items WHERE source=? AND account=? AND source_id=?",
                                   (row["source"], row["account"], row["source_id"])).fetchone()
             if old is None or old["hash"] != h or old["instr_v"] != inject.VERSION:
-                instr = _instr(row["title"], row["body"], row["source"])
+                instr = _instr(row["title"], row["body"], row["source"], owner)
             hidden = 1 if isinstance(it, dict) and it.get("hidden_text") is True else 0   # 0.8.4
             if old is None:
                 self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v, hidden) "
@@ -312,6 +319,13 @@ class Index:
                                     (instr, inject.VERSION, old["id"]))
                 n["same"] += 1
         return n
+
+    def _owner(self):
+        """0.14.0: the owner's names (owner_names), () when unset or unreadable."""
+        try:
+            return tuple(self.owner_names() or ()) if self.owner_names is not None else ()
+        except Exception:  # noqa: BLE001 (a settings read must never stop indexing: "the owner" still counts)
+            return ()
 
     def upsert(self, items):
         """Adds or updates items; returns counts {added, updated, same, bad}. Same input, same rows."""
@@ -343,11 +357,12 @@ class Index:
                                        (inject.VERSION, int(batch))).fetchall()
                 if not rows:
                     return done
+                owner = self._owner()
                 self.db.execute("BEGIN IMMEDIATE")
                 try:
                     for r in rows:
                         self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
-                                        (_instr(r["title"], r["body"], r["source"]), inject.VERSION, r["id"]))
+                                        (_instr(r["title"], r["body"], r["source"], owner), inject.VERSION, r["id"]))
                     self.db.execute("COMMIT")
                 except BaseException:
                     self.db.execute("ROLLBACK")
@@ -443,12 +458,11 @@ class Index:
             args.append(float(until))
         return where, args
 
-    @staticmethod
-    def _row(r, with_body=False):
+    def _row(self, r, with_body=False):
         out = {"id": r["id"], "source": r["source"], "account": r["account"], "kind": r["kind"],
                "thread": r["thread"], "title": r["title"], "people": r["people"], "area": r["area"], "ts": r["ts"],
                "date": dt.datetime.fromtimestamp(r["ts"], dt.timezone.utc).isoformat(timespec="seconds"),
-               "url": r["url"], "instructions": _flagged(r)}
+               "url": r["url"], "instructions": _flagged(r, self._owner)}
         if "hidden" in r.keys() and r["hidden"]:   # 0.8.4: an inject-style mark, "Had hidden text"
             out["hidden_text"] = True
         if with_body:
