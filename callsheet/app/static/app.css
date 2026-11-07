@@ -2818,11 +2818,11 @@ html.fa-lock{overflow:hidden}
 .app[data-base=easy] .bv .chsw[aria-checked=true] .th{background:var(--on-sel)}
 .bv .cthink{margin:0 0 8px;border-left:2px solid var(--rule);padding:0 0 0 12px;color:var(--muted)}
 .bv .cthink summary{cursor:pointer;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;min-height:24px;list-style-position:outside}
-.bv .cthink .tl{font-family:var(--font-mono,ui-monospace,monospace);font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase}
-.bv .cthink .tn{font-size:var(--fs-xs)}
-.bv .cthink .tb{max-height:16em;overflow:auto;font-size:var(--fs-sm);overflow-wrap:anywhere}
-.bv .cthink .tb p{margin:4px 0}
-.bv .lans p,.bv .cthink .tb p{overflow-wrap:anywhere}
+.bv .cthink .tkl{font-family:var(--font-mono,ui-monospace,monospace);font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase}
+.bv .cthink .tkn{font-size:var(--fs-xs)}
+.bv .cthink .tkb{max-height:16em;overflow:auto;font-size:var(--fs-sm);overflow-wrap:anywhere}
+.bv .cthink .tkb p{margin:4px 0}
+.bv .lans p,.bv .cthink .tkb p{overflow-wrap:anywhere}
 .bv .lmark{margin-left:2px}
 .bv .lflag{text-decoration:underline dashed var(--alert);text-underline-offset:3px}
 .bv .lstate{margin:2px 0 0;font-size:var(--fs-sm);color:var(--muted)}
@@ -2835,6 +2835,3 @@ html.fa-lock{overflow:hidden}
   .bv .chsw[aria-checked=true] .th{transform:translateX(18px)} .bv .cthink summary{min-height:44px;align-items:center} }
 @media (prefers-reduced-motion:reduce){ .bv .chsw .ch,.bv .chsw .th{transition:none} }
 .app[data-calm] .bv .chsw .ch,.app[data-calm] .bv .chsw .th{transition:none}
-/* the Thinking panel stays quiet in every look: its summary is a plain label, not a key */
-.app .bv .cthink > summary{background:none;box-shadow:none;border:0;padding:0;min-height:24px;border-radius:0;font-weight:400;color:var(--muted)}
-.app .bv .cthink .tb{background:none;box-shadow:none;border:0;padding:0}

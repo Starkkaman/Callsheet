@@ -5963,8 +5963,8 @@
     var openNow = CH.thinkOpen[key] != null ? CH.thinkOpen[key] : !!live;   /* open while it streams, closed after */
     var body = (t.sents && t.sents.length) ? liveParas(t.sents) : [h('p', { class: 'muted' }, live ? 'Thinking…' : 'This model didn’t share its thinking.')];
     if (t.cut) body.push(h('p', { class: 'muted' }, 'Thinking was cut short.'));
-    var sm = h('summary', null, [h('span', { class: 'tl' }, 'Thinking'), h('span', { class: 'tn' }, 'the model’s working, not an answer')]);
-    var d = h('details', { class: 'cthink', open: openNow }, [sm, h('div', { class: 'tb' }, body)]);
+    var sm = h('summary', null, [h('span', { class: 'tkl' }, 'Thinking'), h('span', { class: 'tkn' }, 'the model’s working, not an answer')]);
+    var d = h('details', { class: 'cthink', open: openNow }, [sm, h('div', { class: 'tkb' }, body)]);
     on(sm, 'click', function () { CH.thinkOpen[key] = !d.open; });   /* the owner's own toggle only (not the default) */
     return d;
   }
