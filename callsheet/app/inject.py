@@ -255,10 +255,12 @@ def _voice(owner):
     return rx
 
 
-def rules_hit(sentence, following="", source=None, owner=()):
+def rules_hit(sentence, following="", source=None, owner=(), own=False):
     """Names of the rules a sentence matches (empty: not an instruction). `following`: the next sentence (a link
     lure's URL may stand there); `source`: the item's source (no link-lure or owner-voice rule for the owner's own
-    notes); `owner` (0.14.0): the owner's names (owner_terms), for the owner-voice rule."""
+    notes); `owner` (0.14.0): the owner's names (owner_terms), for the owner-voice rule; `own`: the text is the owner's
+    own (mail he sent, his own Slack or Signal message), where "This is Isaac" is just the owner writing: no owner-voice
+    rule."""
     s = _plain(sentence)
     hits = []
     for name, rx in RULES:
@@ -267,29 +269,30 @@ def rules_hit(sentence, following="", source=None, owner=()):
                 continue
             hits.append(name)
             break
-    if source not in OWN_SOURCES and _voice(owner).search(s):
+    if not own and source not in OWN_SOURCES and _voice(owner).search(s):
         hits.append("owner-voice")
     if source not in OWN_SOURCES and link_lure(s, following):
         hits.append("link")
     return hits
 
 
-def instructions(text, source=None, owner=()):
+def instructions(text, source=None, owner=(), own=False):
     """The sentences of `text` that hold an instruction addressed to an assistant (or, 0.7.1, a link lure), in
-    order, without repeats. `source`: the item's source when known (see rules_hit); `owner`: the owner's names."""
+    order, without repeats. `source`: the item's source when known (see rules_hit); `owner`: the owner's names; `own`:
+    the owner's own text (see rules_hit)."""
     out, seen = [], set()
     ss = sentences(text)
     for i, s in enumerate(ss):
         k = norm(s)
-        if k not in seen and rules_hit(s, ss[i + 1] if i + 1 < len(ss) else "", source, owner):
+        if k not in seen and rules_hit(s, ss[i + 1] if i + 1 < len(ss) else "", source, owner, own):
             seen.add(k)
             out.append(s)
     return out
 
 
-def item_instructions(title, body, source=None, owner=()):
+def item_instructions(title, body, source=None, owner=(), own=False):
     """instructions() over an item's title and body (what index.py stores keys for)."""
-    return instructions(str(title or "") + "\n" + str(body or ""), source, owner)
+    return instructions(str(title or "") + "\n" + str(body or ""), source, owner, own)
 
 
 def marks(text, source=None, owner=()):
@@ -317,8 +320,8 @@ def key(sentence):
     return hashlib.sha256(norm(sentence).encode("utf-8")).hexdigest()[:16]
 
 
-def keys(title, body, source=None, owner=()):
-    return [key(s) for s in item_instructions(title, body, source, owner)][:MAX_KEYS]
+def keys(title, body, source=None, owner=(), own=False):
+    return [key(s) for s in item_instructions(title, body, source, owner, own)][:MAX_KEYS]
 
 
 # --- the answer post-check -----------------------------------------------------------------------------------

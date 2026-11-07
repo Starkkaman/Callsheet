@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS cursors (
 # 0.6.0 chat: planted-instruction flags (inject.py), added in place to existing databases (schema version stays 1):
 # instr = JSON list of short hashes of the flagged sentences ("" = none), instr_v = the inject.VERSION that checked it
 _INSTR_COLUMNS = (("instr", "TEXT NOT NULL DEFAULT ''"), ("instr_v", "INTEGER NOT NULL DEFAULT 0"),
-                  ("hidden", "INTEGER NOT NULL DEFAULT 0"))   # 0.8.4: the HTML part had hidden text
+                  ("hidden", "INTEGER NOT NULL DEFAULT 0"),   # 0.8.4: the HTML part had hidden text
+                  ("own", "INTEGER NOT NULL DEFAULT 0"))      # 0.14.0: the owner's own Slack message (see _own)
 _AU_TRIGGER = """CREATE TRIGGER items_au AFTER UPDATE OF title, people, body ON items BEGIN
   INSERT INTO items_fts (items_fts, rowid, title, people, body) VALUES ('delete', old.id, old.title, old.people, old.body);
   INSERT INTO items_fts (rowid, title, people, body) VALUES (new.id, new.title, new.people, new.body);
@@ -168,11 +169,19 @@ def _segments(marked):
     return out
 
 
-def _instr(title, body, source=None, owner=()):
+def _own(r):
+    """0.14.0: is this item the owner's own text? Mail he sent and his outgoing Signal messages (kind "sent"), and his
+    own Slack messages (the `own` column, from the source's from_owner). There inject's owner-voice rule doesn't run:
+    "This is Isaac from ..." is the owner writing, not someone claiming to be him."""
+    keys = r.keys() if hasattr(r, "keys") else ()
+    return ("kind" in keys and r["kind"] == "sent") or bool("own" in keys and r["own"])
+
+
+def _instr(title, body, source=None, owner=(), own=False):
     """The stored flag: a JSON list of the flagged sentences' short hashes, "" when there are none. 0.7.1: `source`
     (the owner's own Obsidian notes get no link-lure rule, inject.OWN_SOURCES). 0.14.0: `owner`, the owner's names
     (inject's owner-voice rule; the same names Chat's live marks use)."""
-    ks = inject.keys(title, body, source, owner)
+    ks = inject.keys(title, body, source, owner, own)
     return json.dumps(ks) if ks else ""
 
 
@@ -185,7 +194,7 @@ def _flagged(r, owner=()):
         return bool(r["instr"])
     if "body" in keys:
         return bool(inject.keys(r["title"], r["body"], r["source"] if "source" in keys else None,
-                                owner() if callable(owner) else owner))
+                                owner() if callable(owner) else owner, _own(r)))
     return False
 
 
@@ -298,25 +307,27 @@ class Index:
                 n["bad"] += 1
                 continue
             h = _hash(row)
-            old = self.db.execute("SELECT id, hash, instr_v FROM items WHERE source=? AND account=? AND source_id=?",
-                                  (row["source"], row["account"], row["source_id"])).fetchone()
-            if old is None or old["hash"] != h or old["instr_v"] != inject.VERSION:
-                instr = _instr(row["title"], row["body"], row["source"], owner)
+            old = self.db.execute("SELECT id, hash, instr_v, own FROM items WHERE source=? AND account=? AND "
+                                  "source_id=?", (row["source"], row["account"], row["source_id"])).fetchone()
+            own = 1 if isinstance(it, dict) and it.get("from_owner") is True else 0   # 0.14.0
+            recheck = old is not None and (old["instr_v"] != inject.VERSION or old["own"] != own)
+            if old is None or old["hash"] != h or recheck:
+                instr = _instr(row["title"], row["body"], row["source"], owner, own or row["kind"] == "sent")
             hidden = 1 if isinstance(it, dict) and it.get("hidden_text") is True else 0   # 0.8.4
             if old is None:
-                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v, hidden) "
-                                f"VALUES ({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?, ?)",
-                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden])
+                self.db.execute(f"INSERT INTO items ({', '.join(_FIELDS)}, hash, indexed_at, instr, instr_v, hidden, "
+                                f"own) VALUES ({', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?, ?, ?)",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden, own])
                 n["added"] += 1
             elif old["hash"] != h:
                 self.db.execute(f"UPDATE items SET {', '.join(f + '=?' for f in _FIELDS)}, hash=?, indexed_at=?, "
-                                "instr=?, instr_v=?, hidden=? WHERE id=?",
-                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden, old["id"]])
+                                "instr=?, instr_v=?, hidden=?, own=? WHERE id=?",
+                                [row[f] for f in _FIELDS] + [h, now, instr, inject.VERSION, hidden, own, old["id"]])
                 n["updated"] += 1
             else:
-                if old["instr_v"] != inject.VERSION:   # checked by older rules: refresh the flag only
-                    self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
-                                    (instr, inject.VERSION, old["id"]))
+                if recheck:   # checked by older rules (or now known as the owner's own): refresh the flag only
+                    self.db.execute("UPDATE items SET instr=?, instr_v=?, own=? WHERE id=?",
+                                    (instr, inject.VERSION, own, old["id"]))
                 n["same"] += 1
         return n
 
@@ -353,7 +364,7 @@ class Index:
         done = 0
         while True:
             with self.lock:
-                rows = self.db.execute("SELECT id, source, title, body FROM items WHERE instr_v<>? LIMIT ?",
+                rows = self.db.execute("SELECT id, source, kind, own, title, body FROM items WHERE instr_v<>? LIMIT ?",
                                        (inject.VERSION, int(batch))).fetchall()
                 if not rows:
                     return done
@@ -362,7 +373,8 @@ class Index:
                 try:
                     for r in rows:
                         self.db.execute("UPDATE items SET instr=?, instr_v=? WHERE id=?",
-                                        (_instr(r["title"], r["body"], r["source"], owner), inject.VERSION, r["id"]))
+                                        (_instr(r["title"], r["body"], r["source"], owner, _own(r)), inject.VERSION,
+                                         r["id"]))
                     self.db.execute("COMMIT")
                 except BaseException:
                     self.db.execute("ROLLBACK")
@@ -469,6 +481,7 @@ class Index:
             out["snippet"] = r["snippet"]
             out["body"] = r["body"]
             out["source_id"] = r["source_id"]
+            out["own"] = _own(r)   # 0.14.0: the owner's own text (mail he sent, his Slack/Signal messages)
         return out
 
     def search(self, q="", source=None, account=None, area=None, people=None, since=None, until=None, limit=20,

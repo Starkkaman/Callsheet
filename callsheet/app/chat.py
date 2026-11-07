@@ -2485,7 +2485,8 @@ class Chat:
         for i in sorted(ids)[:50]:
             r = self.index.get(i) if self.index is not None else None
             if r is not None:
-                sentences += inject.item_instructions(r.get("title"), r.get("body"), r.get("source"), owner)
+                sentences += inject.item_instructions(r.get("title"), r.get("body"), r.get("source"), owner,
+                                                      bool(r.get("own")))
         return sentences + list(extra)
 
     def _repeats(self, text, flagged, conv, extra=()):

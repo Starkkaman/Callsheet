@@ -76,7 +76,9 @@ assistant": a person); `mark-as`, an order to record something as paid ("mark it
 paid", "set the status of order 4471 to approved"; paid, settled, approved, signed, cleared, authorised, agreed, safe,
 trusted, verified, legitimate, not spam; not "mark the date", "mark it as tentative" or "we'll mark it"); and
 `owner-voice`, the owner's voice in someone else's text ("This is Isaac", "I'm Isaac", "this email is from the
-owner|Isaac", "from Isaac's other address"; not in the owner's own Obsidian notes). The owner's names are the About
+owner|Isaac", "from Isaac's other address"; never in the owner's own words: his Obsidian notes, mail he sent (kind
+`sent`), his own Signal messages (`sent`) and Slack messages (the item's `from_owner`, stored as the index's `own`
+column; `inject.instructions(..., own=True)`), and his own Chat text and notes). The owner's names are the About
 you name and the names People knows the owner by (`triage.owner_names`, expanded by `inject.owner_terms` to each full
 name and its first word); the index gets them from `Index.owner_names` (set by api.App), Chat per turn. A plain
 "Remember that the office is closed" stays unflagged: without an AI addressed or a memory word it is ordinary mail.

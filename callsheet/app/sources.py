@@ -496,7 +496,10 @@ class SlackSource(Source):
                 "thread": f"{cid}:{m.get('thread_ts')}" if m.get("thread_ts") else "", "title": title,
                 "people": people, "area": tgt["area"], "ts": slack._ts(m.get("ts")),
                 "url": rules.slack_link(ws.get("domain"), cid, m["ts"], root),
-                "body": rules.slack_text(m.get("text") or "", {k: {"name": v} for k, v in names.items()})}
+                "body": rules.slack_text(m.get("text") or "", {k: {"name": v} for k, v in names.items()}),
+                # 0.14.0: the owner's own message (the workspace's own user id; not stored as a field: index.py keeps
+                # it as `own`, so inject's owner-voice rule leaves "This is Isaac" in the owner's own words alone)
+                "from_owner": bool(ws.get("user_id")) and m.get("user") == ws.get("user_id")}
 
 
 class _Guard:
