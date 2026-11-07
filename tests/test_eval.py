@@ -82,6 +82,8 @@ class EvalBase(WriterBase):
         self.ev = self.app.evaluator
         self.ev.log = self.logs.append
         today = dt.datetime.now(UTC).date()
+        while today.weekday() >= 5:   # call times default to weekdays: pin the clock to the last weekday
+            today -= dt.timedelta(days=1)
         self.at = lambda h, m=0: dt.datetime.combine(today, dt.time(h, m), tzinfo=UTC).timestamp()  # noqa: E731
         self.ev.clock = lambda: self.at(9)  # far from the default call times (06:30, 12:30, 17:00 UTC)
         # every day a workday, so the check-ins count on weekends too (they are skipped on days off)

@@ -299,6 +299,15 @@ class CutTest(StreamBase):
         _, msg = self.ask("Anything?")
         self.check_cut(msg)
 
+    def test_timeout_mid_stream(self):
+        """The server goes silent after one sentence: the partial text is replaced by the cut note, never left
+        looking complete, and nothing is lost (the owner can ask again)."""
+        with mock.patch.dict(chat.LOCAL_LIMITS, {"timeout": (1, 600)}):
+            chat.update_settings(self.store, {"local": {"timeout": 1}})
+        self.sse.script = [[ev(content="One whole sentence here. "), 0.05, ev(content="And then"), 4.0, DONE]]
+        _, msg = self.ask("Anything?")
+        self.check_cut(msg)
+
     def test_garbage_after_streaming(self):
         rule = sorted(writer.CONTENT_RULES)[0]
         self.sse.script = [answer("One whole sentence here. Two whole sentences here.")]
