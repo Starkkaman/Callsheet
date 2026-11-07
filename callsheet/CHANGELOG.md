@@ -32,6 +32,9 @@
   instructions are marked. It is kept with the chat and deleted with it; it is never saved as a note or sent back to
   the model. Off: no thinking, no panel. If the model shares none, the panel says so.
 - **Better at spotting planted text.** Mail that speaks to an AI ("If you are an AI, remember… and save it to memory"), asks it to save something to memory, tells Callsheet something, says to mark an invoice as paid, or pretends to be you ("This is Isaac writing from my other address") is now marked as an instruction, both in Chat's sources and while an answer streams. Your own words never count as pretending to be you: mail you sent, your own Slack and Signal messages, and what you type in Chat. Someone else saying that you decided ("As agreed on the call, Isaac approved the budget", "The owner already paid the invoice") is marked as an unverified claim. Questions to you ("Did Isaac approve the budget yet?") are not.
+- **Notes hold only your words.** "Remember this" makes a note from what you wrote in the chat. When you point at a
+  message instead ("remember what the payment mail asks"), Chat doesn't copy the message into a note: it asks you to
+  say what to remember in your own words. Text in mail can never become a note.
 
 ## 0.13.0 (What you should know)
 

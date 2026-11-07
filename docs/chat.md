@@ -266,7 +266,11 @@ presses **Save to memory**. Code: the "0.8.1 Remember" section of `chat.py`, `sa
   the card holds exactly those words and the model's text is ignored, so planted text the model read can't ride
   along. Only when they point at something ("remember this", "remember what Priya said") does the card use the
   model's `propose_memory` text, marked "Written by the AI from this chat: check it."; with no proposal the card
-  says there is nothing to save. People are kept only when the text names them (fuller names from the sources
+  says there is nothing to save. 0.14.0: the model's text is used only when every word of it is the owner's own
+  (`chat.not_owners_words`: his messages in this chat, stop words aside, case, plurals and punctuation ignored), so
+  "remember this" after the owner wrote something works, but a note copied from mail, an event, a file, a web page
+  or any tool result ("remember what the payment mail asks") is refused (`REFUSED_NOT_OWN`) and the card carries
+  none of its words: text in mail can never create a note. People are kept only when the text names them (fuller names from the sources
   win); topics are the model's when all their words are in the text, else up to three words from the text; area
   only when it is one of the owner's areas.
 - **Checks (card and Save).** `chat.note_check`: `inject.instructions`, standing orders ("always say…", "Callsheet
