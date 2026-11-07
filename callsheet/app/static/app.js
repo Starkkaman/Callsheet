@@ -5915,21 +5915,10 @@
       h('button', { type: 'button', class: 'act', 'data-cknow': '1' }, 'Get to know me'));
     return h('div', { class: 'cintro' }, kids);
   }
-  function chatChip(s) {
-    var sel = U.open && U.open.kind === 'item' && String(U.open.id) === String(s.id);
-    var name = SRC_NAME[s.source] || s.source || 'Item';
-    var instr = s.instructions === true;  /* 0.6.0: the item holds an instruction someone planted (inject.py) */
-    return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : '') + (instr ? ' instr' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
-      'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') + (instr ? ', contains instructions' : '') }, [
-      ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : '')),
-      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null,
-      /* 0.8.4: the mail's HTML had text a reader wouldn't see (dropped before indexing) */
-      s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
-  }
   /* 0.14.0: a web source's address, only when it is a plain http(s) address without a user name or password (the
      result's own address from SearXNG; links inside answers stay defanged text). Anything else: no link. */
   function webHref(u) {
-    if (typeof u !== 'string' || !/^https?:\/\//i.test(u)) return null;
+    if (typeof u !== 'string') return null;
     try { var x = new URL(u); return (x.protocol === 'https:' || x.protocol === 'http:') && !x.username && !x.password ? x.href : null; }
     catch (e) { return null; }
   }
@@ -5944,6 +5933,17 @@
     if (!href) return h('span', attrs, kids);
     attrs.href = href; attrs.target = '_blank'; attrs.rel = 'noopener noreferrer'; attrs.referrerpolicy = 'no-referrer';
     return h('a', attrs, kids);
+  }
+  function chatChip(s) {
+    var sel = U.open && U.open.kind === 'item' && String(U.open.id) === String(s.id);
+    var name = SRC_NAME[s.source] || s.source || 'Item';
+    var instr = s.instructions === true;  /* 0.6.0: the item holds an instruction someone planted (inject.py) */
+    return h('button', { type: 'button', class: 'schip' + (sel ? ' sel' : '') + (instr ? ' instr' : ''), 'data-open': 'item:' + s.id, title: 'Open: ' + (s.title || name),
+      'aria-label': 'Open ' + name + ': ' + (s.title || '') + (s.who ? ', ' + s.who : '') + (s.date ? ', ' + s.date : '') + (instr ? ', contains instructions' : '') }, [
+      ico(SRC_ICON[s.source] || 'note'), h('span', null, (s.who || s.title || name) + (s.date ? ' · ' + s.date : '')),
+      instr ? h('b', { class: 'imark', 'aria-hidden': 'true' }, 'contains instructions') : null,
+      /* 0.8.4: the mail's HTML had text a reader wouldn't see (dropped before indexing) */
+      s.hidden_text === true ? h('b', { class: 'imark', title: 'Had hidden text' }, 'had hidden text') : null]);
   }
   /* ---------- 0.14.0: the streamed answer and Show thinking. Sentences arrive whole, defanged and with their marks
      (chat.py Live): all text, never a link. The Thinking panel is the model's working, not an answer. ---------- */

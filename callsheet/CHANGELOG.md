@@ -3,8 +3,9 @@
 ## 0.14.0 (Chat can search the web)
 
 - **Web search in Chat.** When a question needs the web, Chat searches it by itself through your own SearXNG on
-  your home network, reads up to two of the pages it finds, and answers with the sites as sources (title and site
-  name). A quiet line under the answer says what it searched for. There is no button to press.
+  your home network, reads up to five of the pages it finds, and answers with the sites as sources: the site's title
+  and name, and a press opens the page in a new tab. A quiet line under the answer says what it searched for. There
+  is no button to press.
 - **Only your words go out.** Chat searches straight away only when every word of the search is a word you wrote in
   that chat. When a search would include anything else (words from your mail, a feed or a web page, an email
   address, a phone number, an amount, an order or account number, a long number, a web address or the name of
@@ -12,13 +13,24 @@
   search those words, or write other words.
 - **Set it up** in Setup › AI › Web search: paste your SearXNG address (like http://192.168.10.157:30053), press
   Check, and turn it on. Off means Chat doesn't search at all.
-- **Limits.** At most 3 searches and 2 pages per question, and a daily limit. When SearXNG is busy (too many
+- **Limits.** At most 5 searches and 5 pages per question, and 100 searches and 100 pages a day (change the daily
+  numbers in Setup › AI › Web search › Advanced). When SearXNG is busy (too many
   searches, or its search engines ask for a CAPTCHA), Chat says "Web search is busy, try again in a few minutes"
   and waits before searching again.
 - **Safe with web pages.** Search results and pages are treated as untrusted text: pages are read as plain text,
   instructions planted in them are marked and never followed, Chat never opens an address the model writes or one
   from your mail, and a page that moved to another site isn't followed. Sites Chat opens see your Home Assistant
   box's internet address, nothing else (see PRIVACY.md).
+- **Answers appear as they are written.** Chat shows its answer sentence by sentence while the model writes it,
+  then a quiet "checking…" while Callsheet checks it, and the checked answer takes its place. Each sentence is checked
+  as it appears: a claim someone made, an instruction or a "click here" link is marked straight away, and links are
+  never clickable while it writes. Stop ends the model's work at once. If the answer breaks off, Chat says so instead
+  of leaving half an answer.
+- **Show thinking.** A switch at the top of Chat. On: the model thinks before it answers (when it can) and you can
+  read its working in a small Thinking panel above the answer, closed once the answer is done. It is the model's
+  working, not an answer: it can repeat text from your mail or web pages, so links in it are plain text and
+  instructions are marked. It is kept with the chat and deleted with it; it is never saved as a note or sent back to
+  the model. Off: no thinking, no panel. If the model shares none, the panel says so.
 
 ## 0.13.0 (What you should know)
 

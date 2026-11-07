@@ -625,6 +625,7 @@
   --focus:#19202e;
   --ink2:#343b4a;--inset:#efeae0;--bubble:#e6dfd0;--kline:#8a8477;--walnut:#6b4428;
   --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#7a5300;--warn-line:#a87a12;
+  --steel:#71819c;--chan:#1c2331;--chan-rule:#2a3244;--thumb:#fbf9f4;
 }
 .app[data-look=jam][data-mode=dark],
 :root[data-theme=dark] .app[data-look=jam][data-mode=auto]{
@@ -643,6 +644,7 @@
   --focus:#ece5d3;
   --ink2:#d2cbb9;--inset:#1b2230;--bubble:#232c3e;--kline:#636e87;--walnut:#6b4428;
   --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#f2c14e;--warn-line:#f2c14e;
+  --steel:#64738d;--chan:#05070b;--chan-rule:#2a3244;--thumb:#ece5d3;
 }
 @media (prefers-color-scheme: dark){
 :root:not([data-theme=light]) .app[data-look=jam][data-mode=auto]{
@@ -661,6 +663,7 @@
   --focus:#ece5d3;
   --ink2:#d2cbb9;--inset:#1b2230;--bubble:#232c3e;--kline:#636e87;--walnut:#6b4428;
   --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#f2c14e;--warn-line:#f2c14e;
+  --steel:#64738d;--chan:#05070b;--chan-rule:#2a3244;--thumb:#ece5d3;
 }
 }
 @media (max-width:700px){
@@ -2799,9 +2802,6 @@ html.fa-lock{overflow:hidden}
 /* 0.14.0: the streamed answer (whole sentences, marks inline), the Thinking panel (the model's working: mono label,
    dim text, closed after the answer) and the Show thinking switch (Jam's channel-reveal switch in settings steel). */
 .app{--steel:var(--sel);--chan:var(--surface-2,var(--rule));--chan-rule:var(--rule);--thumb:var(--surface)}
-.app[data-look=jam]{--steel:#71819c;--chan:#1c2331;--chan-rule:#2a3244;--thumb:#fbf9f4}
-.app[data-look=jam][data-mode=dark],
-:root[data-theme=dark] .app[data-look=jam][data-mode=auto]{--steel:#64738d;--chan:#05070b;--chan-rule:#2a3244;--thumb:#ece5d3}
 .bv .chsw{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:4px 0;margin:0 8px 0 0;font:inherit;
   font-size:var(--fs-sm);color:var(--muted);cursor:pointer;min-height:24px}
 .bv .chsw .ch{position:relative;flex:none;width:36px;height:22px;border-radius:999px;background:var(--chan);
@@ -2813,9 +2813,9 @@ html.fa-lock{overflow:hidden}
 .bv .chsw[aria-checked=true] .cl{color:var(--text)}
 .bv .chsw:focus-visible{outline:none}
 .bv .chsw:focus-visible .ch{outline:2px solid var(--focus,currentColor);outline-offset:2px}
-.app[data-look=easy] .bv .chsw .ch{box-shadow:inset 0 0 0 2px var(--text)}
-.app[data-look=easy] .bv .chsw .th{background:var(--text)}
-.app[data-look=easy] .bv .chsw[aria-checked=true] .th{background:var(--on-sel)}
+.app[data-base=easy] .bv .chsw .ch{box-shadow:inset 0 0 0 2px var(--text)}
+.app[data-base=easy] .bv .chsw .th{background:var(--text)}
+.app[data-base=easy] .bv .chsw[aria-checked=true] .th{background:var(--on-sel)}
 .bv .cthink{margin:0 0 8px;border-left:2px solid var(--rule);padding:0 0 0 12px;color:var(--muted)}
 .bv .cthink summary{cursor:pointer;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;min-height:24px;list-style-position:outside}
 .bv .cthink .tl{font-family:var(--font-mono,ui-monospace,monospace);font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase}
@@ -2835,3 +2835,6 @@ html.fa-lock{overflow:hidden}
   .bv .chsw[aria-checked=true] .th{transform:translateX(18px)} .bv .cthink summary{min-height:44px;align-items:center} }
 @media (prefers-reduced-motion:reduce){ .bv .chsw .ch,.bv .chsw .th{transition:none} }
 .app[data-calm] .bv .chsw .ch,.app[data-calm] .bv .chsw .th{transition:none}
+/* the Thinking panel stays quiet in every look: its summary is a plain label, not a key */
+.app .bv .cthink > summary{background:none;box-shadow:none;border:0;padding:0;min-height:24px;border-radius:0;font-weight:400;color:var(--muted)}
+.app .bv .cthink .tb{background:none;box-shadow:none;border:0;padding:0}

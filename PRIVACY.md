@@ -80,8 +80,14 @@ delivery receipts for messages it receives, and answers the protocol's own sessi
   from your mail or the model). **This is a new kind of contact: any public website in the results, not only sites
   you added. Each site Chat opens sees your Home Assistant box's public internet address** and Callsheet's fixed
   user agent, and nothing else: no cookies, no sign-in, no referrer. Pages are read as text (no images or
-  scripts), at most 1 MB, and are not kept beyond the chat. At most 3 searches and 2 pages per question, and a daily
-  cap; the log keeps counts only, never the words searched. Turn it off in Setup, or remove the address, to stop it.
+  scripts), at most 1 MB, and are not kept beyond the chat. At most 5 searches and 5 pages per question, and 100
+  searches and 100 pages a day (you can lower or raise the daily numbers in Setup); the log keeps counts only, never
+  the words searched. Pressing a web source in an answer opens that page in your own browser, without a referrer. Turn
+  it off in Setup, or remove the address, to stop it.
+- **Show thinking (0.14.0).** With the switch on, the model's reasoning is shown in Chat's Thinking panel. With your
+  local model it stays on your network (it comes from the same model server). With Claude, thinking happens at
+  Anthropic like the rest of the answer. Callsheet keeps the reasoning only with the chat (deleted with it, at most 30
+  days), never saves it as a note and never sends it back to a model.
 
 ## Your control
 - Disconnect an account in Callsheet's setup (Areas): Callsheet deletes its tokens and data and revokes the

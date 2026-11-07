@@ -20,7 +20,6 @@ import json
 import os
 import re
 import sys
-import socket
 import threading
 import time
 import unicodedata
@@ -1258,7 +1257,7 @@ def _closer(resp):
     def close():
         try:
             sock = resp.fp.raw._sock  # noqa: SLF001 (http.client keeps the socket here)
-            sock.shutdown(socket.SHUT_RDWR)
+            sock.shutdown(2)  # SHUT_RDWR, both directions
         except Exception:  # noqa: BLE001 (already closed, or not a socket: nothing to stop)
             pass
     return close

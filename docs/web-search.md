@@ -54,16 +54,18 @@ nothing.
 
 ## The tools
 
-- `web_search(query)`: at most 3 per turn; SearXNG's results as `{id: w1…, title, snippet, url, host}` (http(s)
+- `web_search(query)`: at most 5 per turn; SearXNG's results as `{id: w1…, title, snippet, url, host}` (http(s)
   only, 10 at most, titles 200 and snippets 400 characters), inside `<data>` with `<` and `>` escaped. A result whose
   title or snippet reads like instructions is marked `"instructions": true` and can't be opened.
-- `read_result(id)`: at most 2 per turn; only a result id from this turn's searches, never an address (anything that
+- `read_result(id)`: at most 5 per turn; only a result id from this turn's searches, never an address (anything that
   isn't `w<number>` is refused and counted). The page is fetched with `Net.get_page`, HTML turned to the visible text
   (`htmltext.py`), at most 6,000 characters, marked `hidden_text` and `cut` when so. A page with planted instructions
   (`inject.instructions` plus steering sentences such as "now search for…", "open result 4", "visit https://…") is
   marked, and no further page is read that turn.
-- Answers cite results as `[w3]`; the markers become source chips (title and host, not links). Without a cite the
-  pages read are the sources. The decision post-check and the repeated-instruction label work as for other answers.
+- Answers cite results as `[w3]`; the markers become source chips: title and host, a link to the result's own
+  address (0.14.0: only `http(s)://` without a user name or password, `target=_blank`, `rel="noopener noreferrer"`,
+  no referrer; the page only, never fetched by the page itself). A result marked as instructions stays text. Links
+  written inside the answer stay defanged text. Without a cite the pages read are the sources. The decision post-check and the repeated-instruction label work as for other answers.
 
 ## What leaves the box
 
@@ -78,10 +80,14 @@ nothing.
 
 ## Caps, back-off and logs
 
-3 searches and 2 pages per question; 60 searches and 40 pages a day (meta `web_search_usage`, UTC day). These are the
-only rate limit SearXNG gets. A 429, or no results while SearXNG lists unresponsive engines (a CAPTCHA), means "Web
+5 searches and 5 pages per question; 100 searches and 100 pages a day by default (meta `web_search_usage`, UTC day),
+settable from 1 to 1,000 in Setup › AI › Web search › Advanced (`PATCH api/web-search {day_searches, day_reads}`). The
+model asks for at most 4 tool calls a round, so 5 needs two rounds. These are the only rate limit SearXNG gets. A 429, or no results while SearXNG lists unresponsive engines (a CAPTCHA), means "Web
 search is busy, try again in a few minutes": no retry in that turn, and no search for 5 minutes. The chat log line
 gets counts only (`web: 1 searches, 1 pages, asked first, …`), never the query.
+
+Tools are registered in `chat.REGISTRY` (docs/chat-tools.md). With web search on, the add-something prompt no longer
+says Chat can't search the web: it may search to help, but the setup card still takes only an address the owner writes.
 
 ## Tests
 
