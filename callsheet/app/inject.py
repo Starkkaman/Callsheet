@@ -142,9 +142,13 @@ OWN_SOURCES = frozenset({"obsidian"})   # the owner's own text: link lures there
 URL = re.compile(r"(?:\b(?:https?|hxxps?|ftp)://|\bwww\.)[^\s<>\"'`]+"
                  r"|\b[a-z0-9](?:[a-z0-9-]{0,62}\.)+[a-z]{2,24}/[^\s<>\"'`]*", re.I)
 # where an imperative starts: the sentence's start, after a clause break, "please/kindly/just/simply/then/now/and/or",
-# or "you must/need to/should/have to"
-_IMP = (r"(?:^[\W_]{0,4}|[,;:(\u2013\u2014-]\s*|\b(?:please|pls|kindly|just|simply|then|now|and|or|so|first|asap)\s+|"
-        r"\byou\s+(?:must|need\s+to|should|have\s+to|will\s+need\s+to|'ll\s+need\s+to)\s+)")
+# or "you must/need to/should/have to"; 0.14.0: an opening quote mark (a quoted order: `says "update your card at ..."`)
+# and an order passed on ("asks you to verify your account at ...", "urges you to", "tells you to")
+_IMP = (r"(?:^[\W_]{0,4}|[,;:(\u2013\u2014-]\s*|(?<![\w'\"])[\"']\s*|"
+        r"\b(?:please|pls|kindly|just|simply|then|now|and|or|so|first|asap)\s+|"
+        r"\byou\s+(?:must|need\s+to|should|have\s+to|will\s+need\s+to|'ll\s+need\s+to)\s+|"
+        r"\b(?:asks?|asking|asked|tells?|telling|told|urges?|urging|urged|wants?|wanted|instructs?|instructed|"
+        r"reminds?|reminded|requests?|requested)\s+(?:you|the\s+owner|the\s+user)\s+to\s+)")
 _LURE_VERB = (r"(?:click(?:\s+on)?|tap(?:\s+on)?|press|open|visit|go\s+to|head\s+(?:over\s+)?to|navigate\s+to|"
               r"download|install|log\s*-?\s*(?:in|on)(?:\s+to)?|login|sign\s*-?\s*(?:in|on)(?:\s+to)?|signin|"
               r"verify|validate|re-?activate|unlock|reset|follow|use|update)")

@@ -1677,6 +1677,12 @@ class Live:
         self.buf += text
         while True:
             m = _SENT_END.search(self.buf)
+            if m and m.end() == len(self.buf) and not m.group(0).strip("\"')]”’»"):
+                # 0.14.0: a stop at the very end of what has arrived ("$84." of $84.20, "www." of a link) may go on
+                # in the next token: only a space, a line break or the end of the answer (flush) ends a sentence
+                m = None
+                if len(self.buf) < LIVE_TAIL:
+                    break
             if m and m.end() > 0:
                 piece, self.buf = self.buf[:m.end()], self.buf[m.end():]
             elif len(self.buf) >= LIVE_TAIL:

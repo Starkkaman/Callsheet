@@ -231,6 +231,41 @@ class PartialTextTest(StreamBase):
         self.assertNotIn("live", msg)
         self.assertEqual(self.sse.requests[0]["stream"], True)
 
+    def test_a_stop_at_a_token_boundary_does_not_end_the_sentence(self):
+        """0.14.0 live check C: a model streams "84" "." "20" or "www" "." "pay…" as separate tokens; a "." at the end of
+        what has arrived isn't a sentence end until a space or a line break follows (or the answer ends)."""
+        tokens = ["The", " total", " is", " $", "8", "4", ".", "2", "0", ",", " due", " ", "2", "0", " November", ".",
+                  " Update", " your", " card", " at", " www", ".", "pay-update", ".", "example", "/card", " today", ".",
+                  "\n\n", "Lunch", " is", " at", " ", "1", "2", ".", "3", "0", " today", ".", " Done", "."]
+        live, polls = chat.Live(), []
+        for t in tokens:
+            live.add(t)
+            polls.append([r["t"] for r in live.view()])
+        live.flush()
+        got = [r["t"] for r in live.view()]
+        self.assertEqual(got, ["The total is $84.20, due 20 November.",
+                               chat.defang("Update your card at www.pay-update.example/card today."),
+                               "Lunch is at 12.30 today.", "Done."])
+        self.assertIn("lure", live.view()[1].get("k", []))
+        for poll in polls:   # no poll ever showed a broken-off piece
+            self.assertFalse(set(poll) & {"The total is $84.", "Update your card at www.", "Lunch is at 12."}, poll)
+        self.assertEqual(polls[-1], got[:3])   # the last sentence waited for the end of the answer (flush)
+
+    def test_streamed_split_tokens_end_to_end(self):
+        lure = "Update your card at www.pay-update.example/card today."
+        toks = ["Your", " October", " invoice", " is", " $", "8", "4", ".", "2", "0", ".", " ", "Update", " your",
+                " card", " at", " www", ".", "pay", "-update", ".", "example", "/card", " today", ".", "\n\nThat's all."]
+        self.sse.script = [[x for t in toks for x in (ev(content=t), 0.02)] + [ev(finish="stop"), DONE]]
+        conv = self.chat.ask(None, "Invoices?")
+        snaps, msg = self.watch(self.chat, conv["id"])
+        sents = {r["t"]: r.get("k", []) for s in snaps for r in s.get("live") or []}
+        self.assertNotIn("Your October invoice is $84.", sents)
+        self.assertTrue(any(t.startswith("Your October invoice is $84.20.") for t in sents), sents)
+        lures = [k for t, k in sents.items() if t.startswith("Update your card at")]
+        self.assertTrue(lures and all("lure" in k for k in lures), sents)
+        self.assertEqual(msg["text"].count("$84.20"), 1)
+        self.assertNotIn(lure, msg["text"])   # defanged in the final answer too
+
     def test_tool_round_text_is_not_streamed_as_the_answer(self):
         inv = self.ids["Invoice"]
         tool_round = [ev(content="Let me look that up. "), 0.2,

@@ -47,7 +47,8 @@ instruction to an assistant and stays with the claim check. Measured at 0.6.0: 0
 the synthetic chat index (172 sentences) and in the brief fixtures' message texts (755 distinct sentences).
 
 Link lures (0.7.1, `inject.link_lure`, rule name `link`): an imperative (at the sentence start, after a clause
-break, after please/kindly/just/then/now/and, or after "you must/need to/should/have to") of click, tap, press, open,
+break, after please/kindly/just/then/now/and, after "you must/need to/should/have to", and (0.14.0) after an opening
+quote mark or an order passed on: "asks/tells/urges/wants/reminds you (the owner) to") of click, tap, press, open,
 visit, go/head/navigate to, download, install, log in/on, sign in/on, verify, validate, reactivate, unlock, reset,
 follow, use or update, followed within 60 characters by "here", "this/that/the/following link|url|address|button|
 page" or "below", with a URL (`inject.URL`: a scheme or `www.`, or a bare host with a path) in the same sentence or

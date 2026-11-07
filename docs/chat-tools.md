@@ -42,7 +42,9 @@ existing test module, a real handler and a closed schema.
 - The page polls `GET api/chat/<id>` every 300 ms while an answer streams (1 s otherwise). `pending.live` holds whole
   sentences only (`chat.Live`): each is defanged and run through the claim, instruction and link-lure detectors before
   it is published with its marks, so a sentence never shows without its label (max visible-unlabelled time 0). A run
-  without a sentence end shows once it reaches 240 characters. Citation markers are dropped while streaming.
+  without a sentence end shows once it reaches 240 characters. Citation markers are dropped while streaming. A `.`, `!`
+  or `?` ends a sentence only when a space or line break follows (or the answer ends): models stream `84` `.` `20` and
+  `www` `.` `example` as separate tokens, and the stop alone isn't a sentence end (0.14.0 live check).
 - Only the final answer streams: a reply that turns into a tool call is cleared and shows as a step. The JSON protocol
   doesn't stream answer text.
 - `pending.checking`: the claim post-check runs on the final text; the page shows "checking…" and then swaps the
