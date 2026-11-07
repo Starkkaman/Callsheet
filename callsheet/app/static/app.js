@@ -623,7 +623,7 @@
       nRep ? plural(nRep, 'reply', 'replies') + (nv ? ', ' + nv + ' from VIPs' : '') : 'Nothing waiting']));
     var aside = h('aside', { class: 'glance-w', 'aria-label': 'At a glance' }, [h('h2', { class: 'sub-h' }, 'At a glance'), h('ul', { class: 'glance' }, gl)]);
     return [startCard(), h('div', { class: 'bf' }, [h('article', null, [head, text, briefProjects(), topEl, secSection(), byArea,
-      changedSection(), comingSection(), sortedSection(), feedsSection(), reportsSection()]), aside])];  /* 0.8.0: security, What changed, Coming up, Sorted; 0.10.0 feeds; 0.10.2a reports */
+      changedSection(), comingSection(), knowSection(), sortedSection(), feedsSection(), reportsSection()]), aside])];  /* 0.13.0: What you should know */  /* 0.8.0: security, What changed, Coming up, Sorted; 0.10.0 feeds; 0.10.2a reports */
   }
   function T_replies() {
     if (U.oat) return oatView();  /* 0.9.0 */
@@ -952,6 +952,81 @@
 
   /* ----- Sorted for you: Promos N · Updates N · No reply needed N, each opening its whole list ----- */
   var SORT_STEP = 30;
+  /* ---------- 0.13.0: What you should know (picker.py, docs/picker.md) ----------
+     B.know.groups: Meetings, Money, Alerts, Good to know, Launches, News, Channels, only those with items, in calm
+     panels. Each item says its source; quiet More / Less like this per source (ranks only, never hides; none on security
+     alerts and invites). A kept promo stays in Sorted for you (its mark says so). Items said here are skipped in the
+     feeds and reports lists below (said once). Text only. */
+  function knowShown(kind) {
+    var s = B && B.know && B.know.shown && Array.isArray(B.know.shown[kind]) ? B.know.shown[kind] : [];
+    return s;
+  }
+  function knowItem(x) {
+    var marks = (Array.isArray(x.marks) ? x.marks : []).filter(function (m) { return Array.isArray(m) && m[1]; });
+    var link = x.link_kind ? null : cnLink(x.link);  /* a feed's own link, checked like the feeds list's */
+    var title = x.open ? h('button', { type: 'button', class: 'kw13t kw13b', 'data-open': x.open }, x.title)
+      : (link ? extA('kw13t', link, x.title, x.title + ' (opens the site)') : h('span', { class: 'kw13t' }, x.title));
+    var pref = x.pref && !x.locked ? h('span', { class: 'kw13pf', role: 'group', 'aria-label': 'Show ' + (x.source || 'this source') + ' more or less' },
+      ['more', 'less'].map(function (w) {
+        return h('button', { type: 'button', class: 'tbtn kw13x', 'data-kpref': x.pref, 'data-kway': w, 'data-kid': x.pref_id || '',
+          'aria-pressed': String(x.pref_way === w) }, w === 'more' ? 'More like this' : 'Less like this');
+      })) : null;
+    return h('li', { class: 'kw13r' }, [title,
+      h('span', { class: 'kw13m' }, [h('span', { class: 'muted' }, [x.source || '', x.when ? ' · ' + x.when : '', x.why ? ' · ' + x.why : ''].join('')),
+        marks.length ? h('span', { class: 'mks' }, marks.map(function (m) {
+          return mk8(m[0] === 'instructions' ? 'lure' : m[0] === 'steer' ? 'unverified' : '', m[1]); })) : null]),
+      pref]);
+  }
+  function knowSection() {
+    var k = B && B.know && typeof B.know === 'object' ? B.know : null;
+    var gs = k && Array.isArray(k.groups) ? k.groups.filter(function (g) { return g && Array.isArray(g.items) && g.items.length; }) : [];
+    if (!gs.length) return null;
+    return h('section', { class: 's8 kw13', 'aria-labelledby': 'kw13-h' }, [
+      h('h2', { class: 'sub-h', id: 'kw13-h' }, 'What you should know'),
+      h('div', { class: 'kw13g' }, gs.map(function (g) {
+        var gid = 'kw13-' + g.id;
+        return h('div', { class: 'kw13p', role: 'group', 'aria-labelledby': gid }, [
+          h('h3', { class: 'kw13n', id: gid }, g.name),
+          h('ul', { class: 'kw13l' }, g.items.map(knowItem)),
+          g.more ? h('p', { class: 'muted kw13more' }, 'and ' + g.more + ' more in the lists below.') : null]);
+      }))]);
+  }
+  /* More / Less like this: the toast has Undo (like Done and Hide), back to the choice before (none, more or less) */
+  var KPREF_SAID = { more: 'Shown higher from now on.', less: 'Shown lower from now on.', none: 'Back to normal.' };
+  function kprefSel(target, way) { return '[data-kpref="' + cssq(target) + '"][data-kway="' + way + '"]'; }
+  function kprefSet(target, way, id) {  /* way: more | less | none (forget the choice with id) */
+    return way === 'none' ? api('DELETE', 'api/picker/prefs/' + encodeURIComponent(id)).then(function () { return null; })
+      : api('POST', 'api/picker/prefs', { target: target, way: way }).then(function (r) { return r && r.pref ? r.pref.id : null; });
+  }
+  function kprefUndo(u) {
+    U.toast = null; renderLayer();
+    mutate(function () {
+      return kprefSet(u.target, u.prev, u.pid).then(function () { return refetch(); }).then(function () {
+        showToast('Back as it was.', u.label || '');
+        renderBrief(kprefSel(u.target, u.prev === 'none' ? u.way : u.prev));
+      });
+    }).catch(function (e) { renderBrief(); failToast(e); });
+  }
+  document.addEventListener('click', function (e) {
+    if (ui.view !== 'brief' || !B) return;
+    var t = e.target.closest ? e.target.closest('button[data-kpref]') : null;
+    if (!t || t.disabled) return;
+    var d = t.dataset, again = t.getAttribute('aria-pressed') === 'true' && d.kid;
+    var on = t.parentNode ? t.parentNode.querySelector('button[aria-pressed="true"]') : null;
+    var prev = on && on.dataset.kid ? on.dataset.kway : 'none', way = again ? 'none' : d.kway;
+    var label = (t.parentNode && t.parentNode.getAttribute('aria-label') || '').replace(/^Show | more or less$/g, '');
+    t.disabled = true;
+    mutate(function () {
+      return kprefSet(d.kpref, way, d.kid).then(function (nid) {
+        /* undo: forget a new choice, or set the one before again */
+        var u = { kind: 'kpref', target: d.kpref, way: d.kway, prev: prev, label: label,
+          pid: prev === 'none' ? nid : null };
+        showToast(KPREF_SAID[way], (label ? label + ' · ' : '') + 'Nothing is hidden.', u);
+        return refetch().then(function () { renderBrief('[data-undo]'); });
+      });
+    }).catch(function (e) { renderBrief(); failToast(e); }).then(function () { t.disabled = false; });
+  });
+
   function sortedSection() {
     var bs = B && Array.isArray(B.sorted) ? B.sorted.filter(function (b) { return b && b.key; }) : [];
     if (!bs.length || !bs.some(function (b) { return (parseInt(b.n, 10) || 0) > 0; })) return null;
@@ -1898,6 +1973,7 @@
       else if (u.kind === 'horizon') hzMark(u.key, 'undo');  /* 0.8.0 */
       else if (u.kind === 'memory') chatUndoNote(u);  /* 0.8.1: a note saved from a chat Save card */
       else if (u.kind === 'srfix') srUnfix(u);  /* 0.8.4 */
+      else if (u.kind === 'kpref') kprefUndo(u);  /* 0.13.0: More / Less like this */
     }
     else if (d.toastx) { U.toast = null; renderLayer(); }
     /* 0.8.0 */
@@ -6685,6 +6761,21 @@
   }
 
   /* What to watch for: stored for the coming rundown (0.10.2); each topic Always tell me, If it's big or Never */
+  /* 0.13.0: More / Less like this choices (picker_prefs), each with Forget */
+  function cnPrefs(v) {
+    var ps = v && Array.isArray(v.picker_prefs) ? v.picker_prefs : [];
+    if (!ps.length) return null;
+    return h('div', { class: 'cnprefs' }, [h('h4', { class: 'cnsub', id: 'cn-pf-h' }, 'Shown more or less'),
+      h('ul', { class: 'cnintl', 'aria-labelledby': 'cn-pf-h' }, ps.map(function (p) {
+        var b = h('button', { type: 'button', class: 'tbtn' , 'aria-label': 'Forget ' + p.label }, 'Forget');
+        on(b, 'click', function () {
+          b.disabled = true;
+          mutate(function () { return api('DELETE', 'api/picker/prefs/' + encodeURIComponent(p.id)).then(function () { return cnAgain(); }); })
+            .catch(failToast).then(function () { b.disabled = false; });
+        });
+        return h('li', { class: 'cnint' }, [h('span', { class: 'cnintt' }, p.label + (p.way === 'more' ? ' · more' : ' · less')), b]);
+      }))]);
+  }
   function cnInterests(v) {
     var err = errBox(), ints = v.interests || [], levels = v.levels || [];
     var rows = ints.map(function (it) {
@@ -6704,8 +6795,9 @@
     on(inp, 'input', function () { CN.intText = inp.value; });
     var addB = h('button', { type: 'submit', class: 'btn', 'data-fk': 'cn-int-add', disabled: ints.length >= (v.max_interests || 20) }, 'Add');
     return h('div', { class: 'cnints' }, [h('h3', { class: 'cnsub', id: 'cn-int-h' }, 'What to watch for'),
-      h('p', { class: 'note' }, 'Topics for the coming rundown, so it knows what to mention. Nothing uses this list yet.'),
+      h('p', { class: 'note' }, 'Callsheet mentions what matches under What you should know on Today.'),
       rows.length ? h('ul', { class: 'cnintl', 'aria-labelledby': 'cn-int-h' }, rows) : null,
+      cnPrefs(v),
       on(h('form', { class: 'cnform', novalidate: '', 'aria-label': 'Add something to watch for' }, [
         h('label', { class: 'label', for: 'cn-int' }, 'Something to watch for'),
         h('div', { class: 'cnfld' }, [inp, addB]), err]), 'submit', function (e) {
@@ -6736,7 +6828,8 @@
   /* the Briefing: From your channels and feeds (B.feeds, only when the owner has connectors and something is new) */
   function feedsSection() {
     var f = B && B.feeds && typeof B.feeds === 'object' ? B.feeds : null;
-    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title; }) : [];
+    var said = knowShown('feeds');
+    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title && said.indexOf(x.id) < 0; }) : [];
     if (!items.length) return null;
     return h('section', { class: 's8 fd10', 'aria-labelledby': 'fd10-h' }, [
       h('h2', { class: 'sub-h', id: 'fd10-h' }, ['From your channels and feeds ', h('span', { class: 'n' }, 'last ' + (parseInt(f.hours, 10) || 48) + ' hours')]),
@@ -6965,7 +7058,8 @@
   /* the Briefing: From your reports (B.reports: unexpired, newest first, a few per source; text only, no links) */
   function reportsSection() {
     var f = B && B.reports && typeof B.reports === 'object' ? B.reports : null;
-    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title; }) : [];
+    var said = knowShown('reports');
+    var items = f && Array.isArray(f.items) ? f.items.filter(function (x) { return x && x.title && said.indexOf(x.id) < 0; }) : [];
     if (!items.length) return null;
     return h('section', { class: 's8 fd10 rp10', 'aria-labelledby': 'rp10-h' }, [
       h('h2', { class: 'sub-h', id: 'rp10-h' }, 'From your reports'),

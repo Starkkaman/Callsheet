@@ -123,6 +123,7 @@ SLOW_FACTOR = 3.0          # the night job yields when its batches take 3x the m
 CF_SHRINK_S = 15 * 60      # 0.12.0: after the server said its context was full, half-size batches this long
 READER_BODY = 8000         # 0.12.0: a live mail body kept in memory for the reader (it reads up to 4,000 after quotes)
 READ_AFTER = ("empty", "done", "waiting", "cap", "budget")   # 0.12.0: sorter reasons after which the reader runs
+PICK_AFTER = ("off", "empty", "done", "waiting", "cap")   # 0.13.0: reader reasons after which the picker runs
 # 0.9.0: two night windows by default, 22:00-01:00 and 04:00-06:00 (the owner's server runs a security audit around
 # 01:00-04:00); both belong to the same night (a night runs noon to noon). The night job resumes from its cursor
 # every night until it has read `days` back (5 h at 21-36 cards a minute is ~6,300-10,800 cards a night; a busy
@@ -1509,6 +1510,7 @@ class Sorter:
         self._thread = None
         self.last_run = None
         self.reader = None                  # 0.12.0: reader.Reader (api.App sets it); runs after the sorter's pass
+        self.picker = None                  # 0.13.0: picker.Picker (api.App sets it); runs after the reader's pass
         self._shrink_until = 0.0            # 0.12.0: smaller batches until then (after a ContextFull)
 
     # settings ------------------------------------------------------------------------------------------------------
@@ -1784,6 +1786,11 @@ class Sorter:
                             self.reader.catch_up(src)
                         except Exception as e:  # noqa: BLE001 (reading never stops sorting)
                             self.log(f"Callsheet reader: an item wasn't queued ({type(e).__name__})")
+                    if self.picker is not None and old[1] != "rules":
+                        try:   # 0.13.0: a sorted-out promo or update the picker hasn't looked at yet
+                            self.picker.catch_up(src)
+                        except Exception as e:  # noqa: BLE001 (picking never stops sorting)
+                            self.log(f"Callsheet picker: an item wasn't queued ({type(e).__name__})")
                     if old[1] != "rules":
                         continue
                 if not self.pending.put(src, origin, now_ts):
@@ -1889,6 +1896,11 @@ class Sorter:
                     self.reader.enqueue(src, merged[cid].get("group"))
                 except Exception as e:  # noqa: BLE001 (reading never stops sorting)
                     self.log(f"Callsheet reader: an item wasn't queued ({type(e).__name__})")
+            if self.picker is not None:   # 0.13.0: sorted-out promos and updates go to the picker (it stays sorted)
+                try:
+                    self.picker.enqueue(src, merged[cid].get("group"))
+                except Exception as e:  # noqa: BLE001 (picking never stops sorting)
+                    self.log(f"Callsheet picker: an item wasn't queued ({type(e).__name__})")
         usage = res.get("usage") if isinstance(res, dict) and isinstance(res.get("usage"), dict) else {}
         timings = res.get("timings") if isinstance(res, dict) and isinstance(res.get("timings"), dict) else {}
         return len(cards), secs, fb, {"in": usage.get("prompt_tokens") or 0, "out": usage.get("completion_tokens") or 0,
@@ -2220,14 +2232,23 @@ class Sorter:
 
     def read_after(self, reason):
         """0.12.0: the reader goes after the sorter, one after the other on slot 1: only when the sorter's pass left
-        nothing it could do now (its queue empty or waiting for text, or its day cap), never when it yielded."""
-        if self.reader is None or reason not in READ_AFTER:
+        nothing it could do now (its queue empty or waiting for text, or its day cap), never when it yielded.
+        0.13.0: the picker goes after the reader the same way (the reader done, waiting, capped or off)."""
+        if reason not in READ_AFTER:
             return None
-        try:
-            return self.reader.run_pass()
-        except Exception as e:  # noqa: BLE001 (the loop keeps going; type only)
-            self.log(f"Callsheet reader: a pass failed ({type(e).__name__})")
-            return None
+        got = None
+        if self.reader is not None:
+            try:
+                got = self.reader.run_pass()
+            except Exception as e:  # noqa: BLE001 (the loop keeps going; type only)
+                self.log(f"Callsheet reader: a pass failed ({type(e).__name__})")
+                return None
+        if self.picker is not None and (self.reader is None or got in PICK_AFTER):
+            try:
+                self.picker.run_pass()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Callsheet picker: a pass failed ({type(e).__name__})")
+        return got
 
     def prune(self):
         if self.reader is not None:   # 0.12.0: the reader's results live 7 days
@@ -2235,6 +2256,11 @@ class Sorter:
                 self.reader.prune()
             except Exception as e:  # noqa: BLE001
                 self.log(f"Callsheet reader: prune failed ({type(e).__name__})")
+        if self.picker is not None:   # 0.13.0: the picker's results live 7 days
+            try:
+                self.picker.prune()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Callsheet picker: prune failed ({type(e).__name__})")
         return self.labels.prune(self.clock() - KEEP_DAYS * 86400)
 
     def start_thread(self):

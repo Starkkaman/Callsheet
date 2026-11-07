@@ -20,6 +20,26 @@
   from your mail, and a page that moved to another site isn't followed. Sites Chat opens see your Home Assistant
   box's internet address, nothing else (see PRIVACY.md).
 
+## 0.13.0 (What you should know)
+
+Today now has a short **What you should know** list: the things that don't need you but are worth a glance, in calm
+panels by kind: Meetings, Money, Alerts, Good to know, Launches, News and Channels. Only groups with something in them
+show up.
+
+- It uses your **What to watch for** list (Setup › Connections › Connectors) and each source's **When to tell you**
+  choice. Always tell me: mentioned. If it's important: mentioned when it matches something you watch for. Only in
+  the list: never mentioned. A topic set to Never is never mentioned, whatever else says yes.
+- Your local AI model only answers from fixed choices (which topic, how close, what kind, big or not). It writes no
+  text. Callsheet's own rules decide what is mentioned. Deals are mentioned only when the topic says deals.
+- Each item says where it came from. **More like this** and **Less like this** move a source up or down. Nothing is
+  ever hidden, and security alerts and invites always show. The message after each press has **Undo**. Your choices
+  are listed in Setup with Forget.
+- A promo it mentions stays in **Sorted for you**. Something said here isn't repeated in the feeds or reports lists.
+- A message, feed item or report that asks to be shown first, or says it matches your interests, is checked: those
+  lines are never read by the model, and the item is marked and shown last. You still see the whole message. Ordinary
+  "this is urgent, please prioritise" lines are not touched, and nothing in Needs you moves.
+- It runs after the reader, one request at a time, and waits for Chat. It keeps each answer for 7 days.
+
 ## 0.12.3 (Notifications open Callsheet again)
 
 - Tapping a Callsheet notification opened an error page ("Unable to connect to Home Assistant") since Home Assistant
