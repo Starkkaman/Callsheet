@@ -49,7 +49,8 @@ class QueueInTheDatabase(Q):
         self.sorter.collect_sync([(t84.thread("1", f"{SECRET} <x@new.example>", f"About {SECRET}", f"Hi {SECRET}?"),
                                    OWNER, "work", "acc1")])
         cols = [r[1] for r in self.store.db.execute("PRAGMA table_info(triage_queue)")]
-        self.assertEqual(cols, ["key", "src", "origin", "ix", "dup", "hash", "ts", "queued"])
+        self.assertEqual(cols, ["key", "src", "origin", "ix", "dup", "hash", "ts", "queued",
+                                "preempted"])   # 0.14.4: how many times Chat cut a request with it (a count)
         blob = json.dumps([list(r) for r in self.store.db.execute("SELECT * FROM triage_queue")])
         self.assertNotIn(SECRET, blob)
         self.assertNotIn("x@new.example", blob)

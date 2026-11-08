@@ -2766,8 +2766,10 @@ class Chat:
             try:
                 timing.clear()
                 st["first_at"], r0 = None, self.monotonic()
+                # 0.14.4: preempt: a background request in flight (sorter, reader, picker) is cut; never a brief
                 res = writer._post(base, key, body, opts, log, self.monotonic,  # noqa: SLF001 (holds LOCAL_LOCK)
-                                   notify=self._notify(job), timing=timing, stream=self._sink(job, st))
+                                   notify=self._notify(job), timing=timing, stream=self._sink(job, st),
+                                   preempt=True)
                 job["sent_at"], job["abort"] = None, None
                 self._timing(timing, stats)
                 self._req_stats(job, res, timing, st, r0)

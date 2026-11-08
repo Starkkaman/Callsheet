@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.4 (Chat interrupts background work)
+
+- **Chat answers without waiting for background work.** When you ask a question while Callsheet is sorting, reading
+  or picking with your local model, that background request stops at once and your question goes first, usually
+  within a second. The emails and items it was working on stay in line and are done again later; nothing is lost or
+  saved twice.
+- **The brief is never interrupted.** While a brief is being written, Chat waits for it and says so ("Writing the
+  brief…"), as before.
+- **Busy days catch up at night.** An email or item that keeps being interrupted (three times) waits for the night
+  windows, when it is done without interruptions.
+- **Better time estimates.** Callsheet now plans each background request for the longer answers your model gives,
+  not the typical one, so requests stay near 8 seconds by day.
+- "Copy the numbers" and the logs count how many background requests gave way to Chat (numbers only).
+
 ## 0.14.3 (Chat goes first)
 
 - **Chat no longer waits behind background work.** While you are chatting with your local model (a question waiting

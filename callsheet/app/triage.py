@@ -115,6 +115,11 @@ PERF_MODELS = 8            # the measured pace is kept for this many models
 NOTES_KEEP = 1
 PREFILL_OVER_S = 25.0
 FIT_KEYS = ("requests", "split", "moved", "alone", "clip_notes", "clip_context", "clip_tasks", "over")
+# 0.14.4 (test lead, binding): Chat preempts a background request in flight (writer.preempt_background); the request's
+# items stay queued and count as "preempted" (per kind and day, counts only). An item preempted PREEMPT_NIGHT times or
+# more waits for the night windows (it is skipped by daytime passes; counted "night_only" when it gets there).
+PREEMPT_NIGHT = 3
+QUEUE_TABLES = {"sorter": "triage_queue", "reader": "reader_queue", "picker": "picker_queue"}
 RUN_S = 180                # an incremental run: at most 3 minutes of model time
 END_BEFORE_S = 10 * 60     # ... ending at least 10 minutes before a call time
 AFTER_CALL_S = 10 * 60     # ... and starting no sooner than 10 minutes after one (the brief writer goes first)
@@ -1296,6 +1301,7 @@ class Labels:
             if "notes" not in cols:   # 0.9.1, additive: the ids of the owner's notes the model read for this card
                 store.db.execute("ALTER TABLE triage_labels ADD COLUMN notes TEXT NOT NULL DEFAULT '[]'")
             store.db.execute("CREATE INDEX IF NOT EXISTS triage_labels_dup ON triage_labels (dup)")
+        preempt_col(store, "triage_queue")
 
     @property
     def db(self):
@@ -1454,7 +1460,8 @@ class Queue:
                 self.db.execute("DELETE FROM triage_queue WHERE dup=? AND key<>? AND origin='index'", (dup, key))
             self.db.execute("INSERT INTO triage_queue (key, src, origin, ix, dup, hash, ts, queued) VALUES "
                             "(?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET src=excluded.src, origin=excluded.origin, "
-                            "ix=excluded.ix, dup=excluded.dup, hash=excluded.hash, ts=excluded.ts, queued=excluded.queued",
+                            "ix=excluded.ix, dup=excluded.dup, hash=excluded.hash, ts=excluded.ts, queued=excluded.queued, "
+                            "preempted=CASE WHEN triage_queue.hash=excluded.hash THEN triage_queue.preempted ELSE 0 END",
                             (key, src["ch"] if src.get("ch") in SRC else "mail", origin, ix, dup,
                              re.sub(r"[^0-9a-f]", "", str(src.get("hash")))[:16] or "0", float(src.get("ts") or 0),
                              float(now)))
@@ -1469,7 +1476,8 @@ class Queue:
     def rows(self, limit=200, offset=0):
         with self.store.lock:
             return [dict(r) for r in self.db.execute(
-                "SELECT key, src, origin, ix, hash, ts, queued FROM triage_queue ORDER BY ts DESC, queued DESC, key "
+                "SELECT key, src, origin, ix, hash, ts, queued, preempted FROM triage_queue ORDER BY ts DESC, "
+                "queued DESC, key "
                 "LIMIT ? OFFSET ?", (int(limit), int(offset)))]
 
     def remove(self, key, hash_=None):
@@ -1578,6 +1586,19 @@ def _vals_add(store, key, model, value):
     models.pop(str(model), None)
     models[str(model)] = xs[-writer.PREFILL_KEEP:]
     store._set_meta(key, {"models": dict(list(models.items())[-PERF_MODELS:])})  # noqa: SLF001
+
+
+def preempt_col(store, table):
+    """0.14.4, additive: the queue's `preempted` column (how many times Chat cut a request with this item)."""
+    with store.lock:
+        cols = {r[1] for r in store.db.execute(f"PRAGMA table_info({table})")}
+        if "preempted" not in cols:
+            store.db.execute(f"ALTER TABLE {table} ADD COLUMN preempted INTEGER NOT NULL DEFAULT 0")
+
+
+def night_only(row, night):
+    """0.14.4: an item Chat cut PREEMPT_NIGHT times or more waits for the night windows."""
+    return not night and int((row or {}).get("preempted") or 0) >= PREEMPT_NIGHT
 
 
 def _hhmm(v):
@@ -1856,14 +1877,26 @@ class Sorter:
         if post_fn is not None:
             if writer.chat_active(base):
                 raise Busy("chat")
-            res = post_fn(body, timeout)
+            try:
+                res = post_fn(body, timeout)
+            except writer.Busy as e:   # (a test's fake server cut by Chat)
+                if str(e) == writer.PREEMPTED:
+                    self.count_preempt(kind)
+                raise
             writer.learn_prefill(base, model, body, res)
         else:
             def notify(event):
                 if event == "lock":   # Chat or the brief writer has the server: background work yields (Chat first)
                     raise Busy("The model server is busy.")
-            res = writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
-                               notify=notify, budget=self.budget() if budget is None else budget)
+            # 0.14.4: streamed, so Chat can cut it (llama-server stops a streamed request when the client goes)
+            sbody = dict(body, stream=True, stream_options={"include_usage": True})
+            try:
+                res = writer._post(base, key, sbody, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
+                                   notify=notify, budget=self.budget() if budget is None else budget)
+            except writer.Busy as e:
+                if str(e) == writer.PREEMPTED:
+                    self.count_preempt(kind)
+                raise
         try:
             if units:
                 self.learn_out(kind, units, res, model)
@@ -1888,8 +1921,9 @@ class Sorter:
             m = pace(_vals_get(self.store, "prefill_scale", s["model"]))
             scale = min(writer.TOKEN_SCALE[1], max(writer.TOKEN_SCALE[0], m)) if m else 1.0
         gen = writer.gen_rate(base, s["model"]) or pace(_vals_get(self.store, "gen_perf", s["model"]))
-        out = {k: round(writer.out_rate(base, s["model"], k) or pace(_vals_get(self.store, f"out_{k}", s["model"]))
-                        or d, 1) for k, d in writer.OUT_TOKENS.items()}
+        out = {k: round(writer.out_rate(base, s["model"], k)   # 0.14.4: the 80th percentile (writer.upper)
+                        or writer.upper(_vals_get(self.store, f"out_{k}", s["model"])) or d, 1)
+               for k, d in writer.OUT_TOKENS.items()}
         cap_s = self.cap_s(s, now)
         return {"tps": round(tps, 1) if tps else None, "measured": bool(tps), "scale": round(scale, 3),
                 "cap_s": cap_s, "default_tps": writer.PREFILL_TPS_DEFAULT,
@@ -1926,6 +1960,56 @@ class Sorter:
         """0.14.3: Chat is active on the background's server (writer.chat_active): background work starts nothing."""
         return writer.chat_active(self._server()[0])
 
+    # 0.14.4: Chat preempts background work ---------------------------------------------------------------------------
+    def night_now(self, s=None):
+        """Inside one of the night windows now (where items cut by Chat too often are read)."""
+        try:
+            return self.night_of(self._now(), s or self.settings()) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def count_preempt(self, kind):
+        """One `kind` request cut by Chat (counted per day and kind; numbers only)."""
+        try:
+            d = self._bg_day()
+            self._kind_day(d, kind)["preempted"] += 1
+            self.store._set_meta("bg_day", d)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 (counting never breaks the work)
+            pass
+
+    def mark_preempted(self, kind, keys):
+        """The items of a `kind` request Chat cut: they stay queued with one more cut each; one cut PREEMPT_NIGHT times
+        waits for the night windows (counted "night_only"). Logs counts only. Returns how many went to the night."""
+        table, keys = QUEUE_TABLES[kind], [k for k in dict.fromkeys(keys or ()) if isinstance(k, str)]
+        if not keys:
+            return 0
+        with self.store.lock:
+            for k in keys:
+                self.store.db.execute(f"UPDATE {table} SET preempted=preempted+1 WHERE key=?", (k,))
+            q = ",".join("?" * len(keys))
+            night = self.store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE preempted=? AND key IN ({q})",
+                                          [PREEMPT_NIGHT] + keys).fetchone()[0]
+        d = self._bg_day()
+        k = self._kind_day(d, kind)
+        k["night_only"] += night
+        self.store._set_meta("bg_day", d)  # noqa: SLF001
+        self.log(f"Callsheet {'sorting' if kind == 'sorter' else kind}: a request gave way to Chat, {len(keys)} "
+                 f"{'items' if len(keys) != 1 else 'item'} still queued ({k['preempted']} preempted today"
+                 + (f", {night} now wait for the night" if night else "") + ")")
+        return night
+
+    def night_waiting(self):
+        """{kind: items waiting for the night windows} (numbers only)."""
+        out = {}
+        for kind, table in QUEUE_TABLES.items():
+            try:
+                with self.store.lock:
+                    out[kind] = self.store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE preempted>=?",
+                                                      (PREEMPT_NIGHT,)).fetchone()[0]
+            except Exception:  # noqa: BLE001 (a table not made yet)
+                out[kind] = 0
+        return out
+
     def fits(self, body, cap, ptok):
         """(over the in-flight budget, over the prefill cap): a request's two limits."""
         return writer.estimate_tokens(body) > cap, writer.prompt_tokens(body) > ptok
@@ -1941,7 +2025,7 @@ class Sorter:
         k = d["kinds"].setdefault(kind, {})
         for f in FIT_KEYS:
             k.setdefault(f, 0)
-        for f in ("est_max_s", "prefill_max_s", "prefill_s", "tokens_max"):
+        for f in ("est_max_s", "prefill_max_s", "prefill_s", "tokens_max", "preempted", "night_only"):
             k.setdefault(f, 0)
         return k
 
@@ -1985,7 +2069,8 @@ class Sorter:
         (counts, sizes and seconds only)."""
         s = self.settings()
         d = self._bg_day()
-        return {"model": s["model"], "prefill": self.prefill(s), "today": d["kinds"]}
+        return {"model": s["model"], "prefill": self.prefill(s), "today": d["kinds"],
+                "preempt": dict(writer.preempt_view(), night_waiting=self.night_waiting())}
 
     def _post(self, body, timeout=TIMEOUT_S):
         """One request. timeout: the room left in the run (a batch never runs past the budget). The sorter never
@@ -2211,6 +2296,10 @@ class Sorter:
         try:
             res = self._post(body, timeout)
             self.learn_out("sorter", len(cards), res, s["model"])   # 0.14.3: output tokens per card
+        except writer.Busy as e:   # 0.14.4: cut by Chat: every card stays queued, nothing stored
+            if str(e) == writer.PREEMPTED:
+                self.mark_preempted("sorter", [keys[c["id"]]["key"] for c in cards])
+            raise
         except writer.ModelGarbage as e:   # 0.8.5: one unusable answer (the health check passed): rules for these
             self.log(f"Callsheet sorting: a batch's answer wasn't usable ({e.rule}); rules labels for its "
                      f"{len(cards)} cards")
@@ -2345,12 +2434,14 @@ class Sorter:
     def _take(self, n):
         """Up to n queued items with their text, newest first. Items whose text is gone (a live read before a
         restart) wait for the next sync; after STALE_S they leave the queue (their rules labels stay)."""
-        take, off, now = [], 0, self.clock()
+        take, off, now, night = [], 0, self.clock(), self.night_now()
         while len(take) < n:
             rows = self.pending.rows(200, off)
             if not rows:
                 break
             for row in rows:
+                if night_only(row, night):   # 0.14.4: cut by Chat too often: the night windows read it
+                    continue
                 src = self._hydrate(row)
                 if src is not None:
                     take.append(src)
@@ -2430,7 +2521,7 @@ class Sorter:
                     reason = "context_full"
                     break
                 if isinstance(e, writer.Busy):
-                    reason = "chat" if str(e) == "chat" else "yield"
+                    reason = str(e) if str(e) in ("chat", writer.PREEMPTED) else "yield"
                     break
                 if isinstance(e, writer.ServerFault):   # 0.8.5: no more batches this run; the rules' labels stay
                     self.log(f"Callsheet sorting: the local model isn't healthy ({e.rule}); rules-only labels this "

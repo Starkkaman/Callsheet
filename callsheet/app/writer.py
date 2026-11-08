@@ -1103,7 +1103,32 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+class _HookOpen:
+    """0.14.4: the connection tells this thread's background request its socket as soon as it is connected, so Chat
+    can close it before the server's answer starts (mid-prefill) as well as while it streams (_bind_sock)."""
+
+    def do_open(self, http_class, req, **kw):
+        def connection(*a, **k):
+            conn = http_class(*a, **k)
+            connect = conn.connect
+
+            def hooked():
+                connect()
+                _bind_sock(conn.sock)
+            conn.connect = hooked
+            return conn
+        return super().do_open(connection, req, **kw)
+
+
+class _HookHTTPHandler(_HookOpen, urllib.request.HTTPHandler):
+    pass
+
+
+class _HookHTTPSHandler(_HookOpen, urllib.request.HTTPSHandler):
+    pass
+
+
+_opener = urllib.request.build_opener(_NoRedirect, _HookHTTPHandler, _HookHTTPSHandler)
 
 
 def _error_body(e):
@@ -1966,12 +1991,24 @@ def learn_output(base, model, kind, units, res):
     return per
 
 
+OUT_Q = 0.8   # 0.14.4: the expected output per unit is the 80th percentile of the last answers, not the median
+
+
+def upper(xs, q=OUT_Q):
+    """0.14.4: the q-th value (nearest rank) of a measured list, else None: an answer's length varies, and a cap set
+    by the median would be broken by every second request."""
+    xs = sorted(x for x in xs or () if isinstance(x, (int, float)) and not isinstance(x, bool))
+    if not xs:
+        return None
+    return xs[min(len(xs) - 1, max(0, int(-(-q * len(xs) // 1)) - 1))]
+
+
 def out_rate(base, model, kind):
-    """The measured median output tokens per unit for this kind, or None."""
+    """The measured output tokens per unit for this kind (0.14.4: upper(), the 80th percentile), or None."""
     with _PREFILL_LOCK:
         rec = _PREFILL.get(_pkey(base, model))
         xs = ((rec or {}).get("out") or {}).get(kind)
-        return _median(xs) if xs else None
+        return upper(xs) if xs else None
 
 
 def request_secs(body, tps, scale=1.0, out_tokens=0, gen_tps=None):
@@ -2044,6 +2081,110 @@ def chat_forget(base=None):
             _CHAT.pop(_ckey(base), None)
 
 
+# --- 0.14.4: Chat preempts background work (test lead, binding) --------------------------------------------------------
+# While a background request (the sorter's, the reader's or the picker's; never the brief writer's, never Chat's own)
+# holds LOCAL_LOCK, a Chat turn that needs the model cancels it at once: preempt_background() marks the request and
+# shuts its socket (the HTTP connection to llama-server), so the server stops prefilling or generating, and the
+# background caller gets Busy("preempted"): its item stays queued, is retried later, counts as "preempted", and is
+# never half stored. Background requests stream (stream: true), which llama-server cancels on a client disconnect;
+# the socket is known from connect() on (_HookOpen), so a request still in its prefill (no answer bytes yet)
+# is cut too. Memory only.
+PREEMPTED = "preempted"
+PREEMPT_WAIT_S = 1.0          # Chat waits this long for the cut request to let the lock go (before its notes)
+_BG_RUNS = set()
+_BG_LOCK = threading.Lock()
+_BG_TLS = threading.local()
+_PREEMPT = {"n": 0, "acquire_s": []}
+
+
+class _BgRun:
+    """One background request in flight (registered while it holds LOCAL_LOCK)."""
+
+    def __init__(self, timeout=None):
+        self.preempted = False
+        self.sock = None
+        self.deadline = None if not timeout else time.monotonic() + float(timeout) + 1.0
+        self._lock = threading.Lock()
+
+    def bind(self, sock):
+        with self._lock:
+            self.sock = sock
+            cut = self.preempted
+        if cut:
+            _shut(sock)
+
+    def cancel(self):
+        with self._lock:
+            if self.preempted:
+                return False
+            self.preempted = True
+            sock = self.sock
+        if sock is not None:
+            _shut(sock)
+        return True
+
+    def check(self):
+        if self.preempted:
+            raise Busy(PREEMPTED)
+
+    def sink(self, kind, payload):
+        """The stream sink of a background request: stops reading when Chat cut it, or past its time."""
+        self.check()
+        if self.deadline is not None and kind != "open" and time.monotonic() > self.deadline:
+            raise LocalTimeout("The local model didn't answer in time.")
+
+    def sleep(self, secs):
+        """_sleep in short steps, ending early when Chat cut the request (the wait before a retry)."""
+        left = float(secs)
+        while left > 0 and not self.preempted:
+            _sleep(min(0.2, left))
+            left -= 0.2
+        self.check()
+
+
+def _shut(sock):
+    try:
+        sock.shutdown(2)   # SHUT_RDWR: the blocked read returns and the server sees the client go
+    except Exception:  # noqa: BLE001 (already closed)
+        pass
+
+
+def _bind_sock(sock):
+    run = getattr(_BG_TLS, "run", None)
+    if run is not None:
+        run.bind(sock)
+
+
+def preempt_background():
+    """Chat needs the model: cancel every background request in flight (at most one: LOCAL_LOCK). Returns how many."""
+    with _BG_LOCK:
+        runs = list(_BG_RUNS)
+    n = sum(1 for r in runs if r.cancel())
+    if n:
+        with _BG_LOCK:
+            _PREEMPT["n"] += n
+    return n
+
+
+def background_in_flight():
+    with _BG_LOCK:
+        return len(_BG_RUNS)
+
+
+def preempt_view():
+    """{n, acquire_s_max, acquire_s_last}: background requests Chat cut since the start and how long Chat then
+    waited for the model (numbers only)."""
+    with _BG_LOCK:
+        xs = list(_PREEMPT["acquire_s"])
+        return {"n": _PREEMPT["n"], "acquire_s_max": max(xs) if xs else None, "acquire_s_last": xs[-1] if xs else None}
+
+
+def reset_preempt():
+    with _BG_LOCK:
+        _BG_RUNS.clear()
+        _PREEMPT.update(n=0, acquire_s=[])
+
+
 _INFLIGHT = {"tokens": 0, "n": 0, "peak": 0, "refused": 0}
 _INFLIGHT_LOCK = threading.Lock()
 
@@ -2108,7 +2249,8 @@ def inflight_room(limit=INFLIGHT_MAX):
 LOCAL_LOCK = threading.Lock()
 
 
-def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None, stream=None, background=None):
+def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None, stream=None, background=None,
+          preempt=False):
     """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK.
     0.6.2 (chat): `notify(event)` (optional) hears "lock" while another Callsheet request holds LOCAL_LOCK (called
     again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
@@ -2126,7 +2268,11 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     are the same, and the checks run on the whole answer when it is complete.
     0.14.3: `background` (default: a request with a `budget`, i.e. the sorter's, the reader's and the picker's) is
     refused with Busy("chat") while Chat is active on this server (chat_active), before LOCAL_LOCK and again once it
-    is held, so a chat question waits for at most the one background request already in flight."""
+    is held, so a chat question waits for at most the one background request already in flight.
+    0.14.4: a background request is registered while it holds LOCAL_LOCK; `preempt` (Chat) cancels it when the lock
+    is taken (preempt_background: its connection is shut, it raises Busy("preempted"), nothing of it is learned or
+    returned) and takes the lock within about a second. A background body with "stream" true is read as a stream
+    (llama-server stops a streamed request when the client goes). The brief writer is never registered: never cut."""
     model = body.get("model") if isinstance(body, dict) else None
     if _in_backoff(base, model):  # 0.8.5: an unhealthy server gets nothing until its next health check is due
         raise ServerFault("backoff")
@@ -2134,16 +2280,32 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     if bg and chat_active(base):
         raise Busy("chat")
     w0 = clock()
-    if notify is None:
-        LOCAL_LOCK.acquire()
-    elif not LOCAL_LOCK.acquire(blocking=False):
-        while True:
-            notify("lock")
-            if LOCAL_LOCK.acquire(timeout=0.2):
-                break
+    if not LOCAL_LOCK.acquire(blocking=False):
+        cut_at = None
+        if preempt and preempt_background():   # 0.14.4: Chat first, now: the background request in flight ends
+            cut_at = time.monotonic()
+            got = LOCAL_LOCK.acquire(timeout=PREEMPT_WAIT_S)
+        else:
+            got = False
+        while not got:
+            if notify is not None:
+                notify("lock")
+            if preempt and preempt_background() and cut_at is None:   # (one that took the lock meanwhile)
+                cut_at = time.monotonic()
+            got = LOCAL_LOCK.acquire(timeout=0.2)
+        if cut_at is not None:
+            with _BG_LOCK:
+                _PREEMPT["acquire_s"] = (_PREEMPT["acquire_s"] + [round(time.monotonic() - cut_at, 3)])[-PREFILL_KEEP:]
     if bg and chat_active(base):   # Chat started while this one waited: it goes first
         LOCAL_LOCK.release()
         raise Busy("chat")
+    run = None
+    if bg:
+        run = _BgRun(opts.get("timeout") if isinstance(opts, dict) else None)
+        with _BG_LOCK:
+            _BG_RUNS.add(run)
+        if stream is None and isinstance(body, dict) and body.get("stream"):
+            stream = run.sink
     try:
         if timing is not None:
             timing["lock_s"] = round(clock() - w0, 1)
@@ -2156,18 +2318,34 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
             with inflight(estimate_tokens(body), budget):
                 if notify:
                     notify("sent")
+                if run is not None:
+                    run.check()
+                    _BG_TLS.run = run   # its socket, as soon as it connects (_bind_sock)
                 try:
-                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing,
-                                 stream=stream)
-                except _Loading:
-                    if log:
-                        log(f"Callsheet writer: the local model server was loading the model; trying again in "
-                            f"{LOAD_WAIT} s")
-                    if notify:
-                        notify("loading")
-                    _sleep(LOAD_WAIT)
-                    res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"], timing=timing,
-                                 stream=stream)
+                    try:
+                        res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"],
+                                     timing=timing, stream=stream)
+                    except _Loading:
+                        if run is not None:
+                            run.check()
+                        if log:
+                            log(f"Callsheet writer: the local model server was loading the model; trying again in "
+                                f"{LOAD_WAIT} s")
+                        if notify:
+                            notify("loading")
+                        if run is not None:
+                            run.sleep(LOAD_WAIT)
+                        else:
+                            _sleep(LOAD_WAIT)
+                        res = _local("POST", base, "/chat/completions", key, body, timeout=opts["timeout"],
+                                     timing=timing, stream=stream)
+                except Exception:
+                    if run is not None and run.preempted:   # cut by Chat: whatever the broken read raised
+                        raise Busy(PREEMPTED) from None
+                    raise
+                finally:
+                    if run is not None:
+                        _BG_TLS.run = None
             rule = fault_of(res)
             if rule in CONTENT_RULES:  # 0.8.5: text in a message can provoke these: probe at once before blaming
                 pr = _probe(base, key, model, body.get("id_slot") if isinstance(body, dict) else None,
@@ -2183,11 +2361,19 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
                 _mark_unhealthy(base, key, model, e.rule, body.get("id_slot") if isinstance(body, dict) else None,
                                 log)
             raise
+        except Busy as e:
+            if log:
+                log(f"Callsheet writer: a background request gave way to Chat after {clock() - t0:.1f}s"
+                    if str(e) == PREEMPTED else f"Callsheet writer: local request failed, {clock() - t0:.1f}s")
+            raise
         except WriterError:
             if log:
                 log(f"Callsheet writer: local request failed, {clock() - t0:.1f}s")
             raise
     finally:
+        if run is not None:
+            with _BG_LOCK:
+                _BG_RUNS.discard(run)
         LOCAL_LOCK.release()
     _log_answer(log, res, clock() - t0)
     try:   # 0.14.2: every local answer teaches this server and model's prefill pace (numbers only)

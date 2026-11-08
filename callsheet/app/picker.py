@@ -519,6 +519,7 @@ class Picker:
         self._fit = collections.Counter()   # 0.14.2: what fitting the prefill cap did (counts only)
         with store.lock:
             store.db.executescript(_SCHEMA)
+        triage.preempt_col(store, "picker_queue")   # 0.14.4
 
     @property
     def db(self):
@@ -590,7 +591,8 @@ class Picker:
             self.db.execute("INSERT INTO picker_queue (key, hash, origin, ix, ts, queued, tries) VALUES (?,?,?,?,?,?,0) "
                             "ON CONFLICT(key) DO UPDATE SET hash=excluded.hash, ix=excluded.ix, ts=excluded.ts, "
                             "queued=excluded.queued, tries=CASE WHEN picker_queue.hash=excluded.hash THEN "
-                            "picker_queue.tries ELSE 0 END", (key, hash_, origin, ix, float(ts or 0), self.clock()))
+                            "picker_queue.tries ELSE 0 END, preempted=CASE WHEN picker_queue.hash=excluded.hash THEN "
+                            "picker_queue.preempted ELSE 0 END", (key, hash_, origin, ix, float(ts or 0), self.clock()))
             self.db.execute("DELETE FROM picker_queue WHERE key IN (SELECT key FROM picker_queue ORDER BY ts DESC, "
                             "queued DESC LIMIT -1 OFFSET ?)", (MAX_PENDING,))
 
@@ -853,7 +855,7 @@ class Picker:
 
     def _take(self, n, skip):
         """Up to n queued cards with their text, newest first; a card whose text is gone waits (STALE_S at most)."""
-        out, off, now = [], 0, self.clock()
+        out, off, now, night = [], 0, self.clock(), self.sorter.night_now()
         tctx = self._tctx
         while len(out) < n:
             with self.store.lock:
@@ -862,7 +864,7 @@ class Picker:
             if not rows:
                 break
             for row in rows:
-                if row["key"] in skip or len(out) >= n:
+                if row["key"] in skip or len(out) >= n or triage.night_only(row, night):   # 0.14.4: at night
                     continue
                 try:
                     c = self._card_of_mail(row, tctx) if row["origin"] in ("promo", "update") else \
@@ -936,6 +938,10 @@ class Picker:
         try:
             res = self._post(body, timeout)
             self.sorter.learn_out("picker", len(send), res, s["model"])   # 0.14.3: output tokens per card
+        except writer.Busy as e:   # 0.14.4: cut by Chat: every card stays queued, nothing stored
+            if str(e) == writer.PREEMPTED:
+                self.sorter.mark_preempted("picker", [c["key"] for c in send])
+            raise
         except writer.ModelGarbage:
             res = None
         secs = self.monotonic() - t0
@@ -1056,8 +1062,8 @@ class Picker:
                     continue
                 reason = "context_full"
                 break
-            except writer.Busy as e:
-                reason = "chat" if str(e) == "chat" else "yield"
+            except writer.Busy as e:   # 0.14.4: also "preempted" (cut by Chat: still queued)
+                reason = str(e) if str(e) in ("chat", writer.PREEMPTED) else "yield"
                 break
             except writer.ServerFault as e:
                 self.log(f"Callsheet picker: the local model isn't healthy ({e.rule}); {n} batches, "

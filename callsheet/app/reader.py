@@ -1093,6 +1093,7 @@ class Reader:
         self._fit = collections.Counter()   # 0.14.2: what fitting the prefill cap did (counts only)
         with store.lock:
             store.db.executescript(_SCHEMA)
+        triage.preempt_col(store, "reader_queue")   # 0.14.4
 
     @property
     def db(self):
@@ -1159,7 +1160,8 @@ class Reader:
             self.db.execute("INSERT INTO reader_queue (key, hash, origin, ix, acc, msg, ts, queued, tries) VALUES "
                             "(?,?,?,?,?,?,?,?,0) ON CONFLICT(key) DO UPDATE SET hash=excluded.hash, ix=excluded.ix, "
                             "acc=excluded.acc, msg=excluded.msg, ts=excluded.ts, queued=excluded.queued, tries=CASE WHEN "
-                            "reader_queue.hash=excluded.hash THEN reader_queue.tries ELSE 0 END",
+                            "reader_queue.hash=excluded.hash THEN reader_queue.tries ELSE 0 END, preempted=CASE WHEN "
+                            "reader_queue.hash=excluded.hash THEN reader_queue.preempted ELSE 0 END",
                             (key, th, "index" if ix is not None else "sync", ix,
                              re.sub(r"[^\w.@+-]", "", str(src.get("acc") or ""))[:80],
                              re.sub(r"[^\w-]", "", str(src.get("msg") or ""))[:40],
@@ -1231,13 +1233,13 @@ class Reader:
     def _next(self, skip=()):
         """The newest queued item with its text; items whose text is gone wait for the next sync (STALE_S at most).
         skip: keys already tried in this run (an unusable answer is tried again on a later run, not at once)."""
-        off, now = 0, self.clock()
+        off, now, night = 0, self.clock(), self.sorter.night_now()
         while True:
             rows = self._rows(200, off)
             if not rows:
                 return None, None
             for row in rows:
-                if row["key"] in skip:
+                if row["key"] in skip or triage.night_only(row, night):   # 0.14.4: cut by Chat too often: at night
                     continue
                 src = self._hydrate(row)
                 if src is not None:
@@ -1536,6 +1538,10 @@ class Reader:
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
+        except writer.Busy as e:   # 0.14.4: cut by Chat: the item stays queued, nothing stored
+            if str(e) == writer.PREEMPTED:
+                self.sorter.mark_preempted("reader", [src["key"]])
+            raise
         except writer.ModelGarbage:
             res = None
         secs = self.monotonic() - t0
@@ -1647,8 +1653,8 @@ class Reader:
                     continue
                 reason = "context_full"
                 break
-            except writer.Busy as e:
-                reason = "chat" if str(e) == "chat" else "yield"
+            except writer.Busy as e:   # 0.14.4: also "preempted" (cut by Chat: still queued)
+                reason = str(e) if str(e) in ("chat", writer.PREEMPTED) else "yield"
                 break
             except writer.ServerFault as e:
                 self.log(f"Callsheet reader: the local model isn't healthy ({e.rule}); {n} read, "

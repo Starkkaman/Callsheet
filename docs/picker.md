@@ -64,7 +64,7 @@ Undo (the Done / Hide pattern): Undo forgets a new choice, or sets the choice be
 As the reader: blocked windows 06:16-06:45, 12:16-12:45, 16:46-17:15 and 01:00-04:00 (owner's time zone), the
 sorter's call guard and careful guard, Chat first (`writer.LOCAL_LOCK`, `Busy`), each request inside the in-flight
 budget (80% of the model's context, `Sorter.budget`; a batch that would not fit loses cards from the end; 0.14.1; 0.14.2: also kept to about 20 s of measured prefill, the same way as the sorter, see sorting.md), ContextFull waited out once (10 s) and retried at half size, a second time ends the
-run with every card still queued. Day caps: 400 cards, 15 GPU minutes. 0.14.3: the cap is the whole request's expected time, prefill plus the cards' learned output at the measured output pace, about 8 s by day and 20 s at night (`Sorter.time_cap(s, "picker", n)`); while Chat is active the pass returns `chat` before its next batch.
+run with every card still queued. Day caps: 400 cards, 15 GPU minutes. 0.14.3: the cap is the whole request's expected time, prefill plus the cards' learned output at the measured output pace, about 8 s by day and 20 s at night (`Sorter.time_cap(s, "picker", n)`); while Chat is active the pass returns `chat` before its next batch. 0.14.4: a Chat question cuts a picker request in flight (`Busy("preempted")`, see sorting.md): every card stays queued (`picker_queue.preempted`; a card cut 3 times is picked only in the night windows), nothing is stored, the pass returns `preempted`.
 
 ## Storage and logs
 `picker_items` (enums and the owner's stored interest id; 7 days), `picker_queue` (references), `picker_prefs`.

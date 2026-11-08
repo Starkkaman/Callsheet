@@ -150,7 +150,12 @@ goes with its own note again (`_history(..., note=(tz, fmt))`), so a follow-up r
 model server can reuse it; on a hybrid/recurrent model such as Qwen3.5 llama.cpp can only reuse an exact prefix or a
 context checkpoint). Chat first (0.14.3): `Chat.ask` marks the local server active (`writer.chat_touch`) and a turn
 being answered holds it (`chat_begin`/`chat_end`); background requests to that server start nothing until Chat has
-been idle `writer.CHAT_IDLE_S` = 90 s (see sorting.md). Chat on Claude marks nothing; `Chat.close` forgets the marks. The
+been idle `writer.CHAT_IDLE_S` = 90 s (see sorting.md). Chat on Claude marks nothing; `Chat.close` forgets the marks.
+0.14.4, Chat preempts background work: Chat's request goes through `writer._post(..., preempt=True)`; when
+`LOCAL_LOCK` is held by a background request (sorter, reader or picker) that request is cut at once
+(`writer.preempt_background` shuts its connection, mid-prefill or mid-generation; llama-server stops a streamed
+request when its client goes) and Chat takes the lock within about a second (`PREEMPT_WAIT_S` = 1 s before the
+waiting notes). The brief writer is never cut: Chat waits for it with the brief note. The
 Claude API path is unchanged. Per turn, Callsheet keeps (memory only, the last 50) the first request's prompt tokens,
 `cache_n`, `prompt_n`, prefill ms, whether it was cached, the time to the first token (from the question and from
 sending it), whether a brief was being written and the history's shape; one log line per local turn ("Callsheet

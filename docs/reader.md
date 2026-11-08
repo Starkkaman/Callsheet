@@ -113,6 +113,9 @@ After the answer (`parse`, then `check`):
 - 0.14.3: the cap is the request's expected total time (prefill and the reader's learned output per item at the
   measured output pace): about 8 s by day, 20 s at night (`Sorter.time_cap(s, "reader", 1)`); while Chat is active
   the pass returns `chat` before its next item (see sorting.md, Chat first).
+- 0.14.4: a Chat question cuts a reader request in flight (`Busy("preempted")`, see sorting.md): the item stays queued
+  (`reader_queue.preempted` counts the cuts; an item cut 3 times is read only in the night windows), the pass returns
+  `preempted`, nothing is stored, and the request counts as `preempted` for the day (counts only).
 - Prefill cap (0.14.2, `reader.fit`): a request is also kept to about 20 s of prefill at the model's measured pace
   (`Sorter.prefill`, see sorting.md). The item's own text stays whole (up to 4,000 characters); only low-value context
   is clipped, in this order: each project's open tasks after the first (`clip_tasks`), the context entries after the
