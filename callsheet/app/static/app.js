@@ -3443,18 +3443,36 @@
         return first.then(function () { return val ? api('POST', 'api/web-search/check') : api('GET', 'api/web-search'); });
       }, function (r) { WS.v = r; WS.res = r.result || null; WS.draft = null; renderSetup('[data-fk="ws-check"]'); });
     });
+    /* 0.14.5: the switch is never disabled (disabled, it said nothing and did nothing) and its row names the setting,
+       not the state (the switch already reads Off / On). Off: one PATCH. On: on at once when an address is saved and
+       its last Check passed; else the address (the saved one, or the one typed in the field, which is saved) is
+       checked first and web search turns on only when the Check passes. An empty field gets the focus and
+       "Add your SearXNG address first." */
     var s = sw(v.on, 'Web search', function () {
-      run([check, s], err, function () { return api('PATCH', 'api/web-search', { on: !v.on }); },
-        function (r) { WS.v = r; renderSetup('[data-fk="ws-on"]'); });
+      var val = url.value.trim();
+      if (!v.on && !v.base_url && !val) {
+        err.textContent = 'Add your SearXNG address first.';
+        url.focus();
+        return;
+      }
+      function checkThenOn() {
+        return api('POST', 'api/web-search/check').then(function (r) {
+          return r.result && r.result.ok ? api('PATCH', 'api/web-search', { on: true }).then(function (x) { return Object.assign(x, { result: r.result }); }) : r;
+        });
+      }
+      run([check, s], err, function () {
+        if (v.on) return api('PATCH', 'api/web-search', { on: false });
+        if (v.base_url && (!val || val === v.base_url)) return v.check_ok ? api('PATCH', 'api/web-search', { on: true }) : checkThenOn();
+        return api('PATCH', 'api/web-search', { base_url: val }).then(checkThenOn);
+      }, function (r) { WS.v = r; WS.res = r.result || null; WS.draft = null; renderSetup('[data-fk="ws-on"]'); });
     });
     s.setAttribute('data-fk', 'ws-on');
-    if (!v.base_url) s.disabled = true;
     var res = WS.res, meta = [];
     if (v.added) meta.push('Added ' + fmtDay(v.added));
     if (res) meta.push(res.text);
     else if (v.checked) meta.push(v.check_ok ? 'Checked ' + fmtDay(v.checked) : 'The last Check didn’t work');
     return h('section', { class: 'where aiweb', 'aria-labelledby': 'ai-web-h' }, [head,
-      h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, v.on ? 'Chat can search the web' : 'Off')]),
+      h('div', { class: 'swrow' }, [s, h('span', { 'aria-hidden': 'true' }, 'Chat can search the web')]),
       h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ws-url' }, 'Your SearXNG address'), h('div', { class: 'inrow wsrow' }, [url, check])]),
       meta.length ? h('p', { class: 'muted wsmeta' + (res && !res.ok ? ' bad' : ''), role: 'status' }, meta.join(' · ')) : null, err,
       h('p', { class: 'note' }, 'Chat searches only with words you wrote, and asks first when a search would include anything else.'),

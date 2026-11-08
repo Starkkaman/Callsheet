@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.5 (The web search switch works)
+
+- **One clear switch for web search.** Setup › AI › Web search showed "Off" twice and pressing it did nothing. Now
+  the switch reads Off or On, and the words next to it say what it does: "Chat can search the web".
+- **On always answers.** With no SearXNG address yet, pressing On puts you in the address box and says "Add your
+  SearXNG address first." With an address typed in, On saves it, checks it, and turns web search on only when the
+  check works; if it doesn't, the switch stays Off and shows why.
+- The light text in the address box is only an example; it isn't saved until you Check it or press On.
+
 ## 0.14.4 (Chat interrupts background work)
 
 - **Chat answers without waiting for background work.** When you ask a question while Callsheet is sorting, reading
