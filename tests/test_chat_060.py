@@ -160,7 +160,10 @@ class LocalNativeTest(Base):
         conv, msg = self.ask("And now?", cid=conv["id"])
         self.assertEqual([m["role"] for m in conv["messages"]], ["user", "assistant", "user", "assistant"])
         msgs = self.bodies()[-1]["messages"]
-        self.assertEqual([m["content"] for m in msgs[1:]], ["First question?", "Nothing about that.", "And now?" + "\n\n[Callsheet: the time now is 10 am.]"])
+        # 0.14.3: the earlier question goes with the time note it was sent with (the prompt repeats the last one)
+        self.assertEqual([m["content"] for m in msgs[1:]], ["First question?" + "\n\n[Callsheet: the time now is 10 am.]",
+                                                            "Nothing about that.",
+                                                            "And now?" + "\n\n[Callsheet: the time now is 10 am.]"])
 
     def test_max_rounds_then_forced_answer(self):
         self.local.messages = [tool_msg(call(f"c{i}", "stats", {})) for i in range(chat.MAX_ROUNDS)] + \

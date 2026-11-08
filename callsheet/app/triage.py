@@ -1844,15 +1844,20 @@ class Sorter:
         """The background work's in-flight budget (sorter, reader, picker): 80% of the model's context."""
         return writer.budget_for(self.ctx_size(s)[0])
 
-    def post_bg(self, body, timeout, post_fn=None, budget=None, kind="sorter"):
+    def post_bg(self, body, timeout, post_fn=None, budget=None, kind="sorter", units=None):
         """0.14.1: one background request (the sorter's, the reader's or the picker's): through `post_fn` (tests) or
         writer._post under the in-flight budget (80% of the model's context). 0.14.2: the answer's prefill timings
         teach the model's pace (writer._post learns from every local answer; a test's post_fn stands in for it) and
-        the request's size and measured prefill are counted for `kind` (numbers only)."""
+        the request's size and measured prefill are counted for `kind` (numbers only). 0.14.3: the answer's output
+        pace and its output tokens per unit (`units`: the cards or items it answers) are learned too; while Chat is
+        active on this server nothing is sent (Busy("chat"), see writer.chat_active)."""
         base, key = self._server()
+        model = body.get("model") if isinstance(body, dict) else None
         if post_fn is not None:
+            if writer.chat_active(base):
+                raise Busy("chat")
             res = post_fn(body, timeout)
-            writer.learn_prefill(base, body.get("model") if isinstance(body, dict) else None, body, res)
+            writer.learn_prefill(base, model, body, res)
         else:
             def notify(event):
                 if event == "lock":   # Chat or the brief writer has the server: background work yields (Chat first)
@@ -1860,16 +1865,21 @@ class Sorter:
             res = writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
                                notify=notify, budget=self.budget() if budget is None else budget)
         try:
+            if units:
+                self.learn_out(kind, units, res, model)
             self._note_request(kind, body, res)
         except Exception as e:  # noqa: BLE001 (counting never breaks the work)
             self.log(f"Callsheet sorting: a request wasn't counted ({type(e).__name__})")
         return res
 
     # 0.14.2: the prompt's time (prefill) ---------------------------------------------------------------------------------
-    def prefill(self, s=None):
-        """{tps, measured, scale, cap_s, cap_tokens}: the background model's prefill pace (what writer learned from the
-        server's timings this session, else what this store measured before, else writer.PREFILL_TPS_DEFAULT), the
-        token estimate's correction and how many estimated prompt tokens fit in writer.PREFILL_CAP_S."""
+    def prefill(self, s=None, now=None):
+        """{tps, measured, scale, cap_s, cap_tokens, gen_tps, out}: the background model's prefill pace (what writer
+        learned from the server's timings this session, else what this store measured before, else
+        writer.PREFILL_TPS_DEFAULT), the token estimate's correction, 0.14.3: the output pace (gen_tps, None until
+        measured: writer.GEN_TPS_DEFAULT is used), the expected output tokens per unit and kind, the request time cap
+        now (cap_s: writer.BG_DAY_S, writer.BG_NIGHT_S in a night window) and the estimated prompt tokens one sorter
+        card's request may have inside it (cap_tokens)."""
         s = s or self.settings()
         base = self._server()[0]
         tps = writer.prefill_rate(base, s["model"]) or pace(_vals_get(self.store, "prefill_perf", s["model"]))
@@ -1877,9 +1887,44 @@ class Sorter:
         if scale == 1.0:
             m = pace(_vals_get(self.store, "prefill_scale", s["model"]))
             scale = min(writer.TOKEN_SCALE[1], max(writer.TOKEN_SCALE[0], m)) if m else 1.0
+        gen = writer.gen_rate(base, s["model"]) or pace(_vals_get(self.store, "gen_perf", s["model"]))
+        out = {k: round(writer.out_rate(base, s["model"], k) or pace(_vals_get(self.store, f"out_{k}", s["model"]))
+                        or d, 1) for k, d in writer.OUT_TOKENS.items()}
+        cap_s = self.cap_s(s, now)
         return {"tps": round(tps, 1) if tps else None, "measured": bool(tps), "scale": round(scale, 3),
-                "cap_s": writer.PREFILL_CAP_S, "default_tps": writer.PREFILL_TPS_DEFAULT,
-                "cap_tokens": writer.cap_tokens(tps, scale)}
+                "cap_s": cap_s, "default_tps": writer.PREFILL_TPS_DEFAULT,
+                "gen_tps": round(gen, 2) if gen else None, "default_gen_tps": writer.GEN_TPS_DEFAULT, "out": out,
+                "cap_tokens": writer.cap_tokens(tps, scale, cap_s, out["sorter"] if gen else 0, gen)}
+
+    def cap_s(self, s=None, now=None):
+        """0.14.3: one background request's time cap now: writer.BG_NIGHT_S inside a night window, else BG_DAY_S."""
+        s = s or self.settings()
+        return writer.BG_NIGHT_S if self.night_of(now or self._now(), s) is not None else writer.BG_DAY_S
+
+    def time_cap(self, s, kind, units, pf=None):
+        """0.14.3: the estimated prompt tokens a `kind` request answering `units` cards or items may have so that its
+        prefill and its expected output take about cap_s (at least writer.PREFILL_FLOOR_S of prefill). Until this
+        model's output pace is measured (any local answer teaches it) the prefill alone counts: the first batch is
+        FIRST_BATCH cards anyway."""
+        pf = pf or self.prefill(s)
+        out = max(1, units) * pf["out"].get(kind, 0) if pf.get("gen_tps") else 0   # once the output pace is known
+        return writer.cap_tokens(pf["tps"], pf["scale"], pf["cap_s"], out, pf.get("gen_tps"), floor=units <= 1)
+
+    def learn_out(self, kind, units, res, model=None):
+        """0.14.3: an answer's output tokens per card or item for `kind` (writer.learn_output; kept in callsheet.db for
+        the next start). Never fails the work."""
+        try:
+            model = model or self.settings()["model"]
+            per = writer.learn_output(self._server()[0], model, kind, units, res)
+            if per is not None:
+                _vals_add(self.store, f"out_{kind}", model, per)
+            return per
+        except Exception:  # noqa: BLE001
+            return None
+
+    def chat_first(self):
+        """0.14.3: Chat is active on the background's server (writer.chat_active): background work starts nothing."""
+        return writer.chat_active(self._server()[0])
 
     def fits(self, body, cap, ptok):
         """(over the in-flight budget, over the prefill cap): a request's two limits."""
@@ -1932,6 +1977,8 @@ class Sorter:
             _vals_add(self.store, "prefill_perf", s["model"], smp["tps"])
         if smp and smp.get("scale"):
             _vals_add(self.store, "prefill_scale", s["model"], smp["scale"])
+        if smp and smp.get("gen"):
+            _vals_add(self.store, "gen_perf", s["model"], smp["gen"])
 
     def bg_numbers(self):
         """0.14.2 "Copy the numbers": the background model's prefill pace and cap, and today's requests per kind
@@ -1985,8 +2032,10 @@ class Sorter:
         """0.14.1: as many cards as take about TARGET_S at the model's measured pace (size_for), at most `night_batch`
         (12) inside a night window, else `batch` (6). 0.12.0: half that for CF_SHRINK_S after the server said its
         context was full (a smaller batch next time)."""
-        cap = int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
-        n = size_for(pace(self._perf(s["model"])), cap)
+        night = self.night_of(now or self._now(), s) is not None
+        cap = int(s["night_batch"] if night else s["batch"])
+        # 0.14.3: about one request's time cap (BG_DAY_S by day, BG_NIGHT_S at night), not TARGET_S
+        n = size_for(pace(self._perf(s["model"])), cap, writer.BG_NIGHT_S if night else writer.BG_DAY_S)
         return max(1, n // 2) if self.clock() < self._shrink_until else n
 
     def capacity(self, s=None, d=None):
@@ -2131,14 +2180,15 @@ class Sorter:
             cards.append(dict({"id": cid}, **card))
             metas[cid], keys[cid] = meta, src
             self._remember(src["key"], meta, card.get("area"))
-        cap, ptok = self.budget(s), self.prefill(s)["cap_tokens"]
+        cap, pf = self.budget(s), self.prefill(s)
         fit, keep = collections.Counter(), None
         while True:   # 0.14.2: also inside the prefill cap: cards first (split), then the notes beyond the most relevant
             notes, nids = self._notes_for(cards, metas)
             if keep is not None and len(notes) > keep:
                 fit["clip_notes"], notes = len(notes) - keep, notes[:keep]
             body = request_body(s["model"], cards, ctx.system(notes), ctx.today, ctx.tz_name)
-            mem, slow = self.fits(body, cap, ptok)
+            # 0.14.3: the whole request's expected time: prefill and these cards' expected output
+            mem, slow = self.fits(body, cap, self.time_cap(s, "sorter", len(cards), pf))
             if not (mem or slow):
                 break
             if len(cards) > 1:
@@ -2160,6 +2210,7 @@ class Sorter:
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
+            self.learn_out("sorter", len(cards), res, s["model"])   # 0.14.3: output tokens per card
         except writer.ModelGarbage as e:   # 0.8.5: one unusable answer (the health check passed): rules for these
             self.log(f"Callsheet sorting: a batch's answer wasn't usable ({e.rule}); rules labels for its "
                      f"{len(cards)} cards")
@@ -2322,6 +2373,8 @@ class Sorter:
             return "no_server"
         if self._post_fn is None and writer.in_backoff(self._server()[0], s["model"]):
             return "unhealthy"   # 0.8.5: the local model isn't healthy: the rules' labels stay, nothing is sent
+        if self.chat_first():
+            return "chat"   # 0.14.3: Chat is active: nothing new until it has been idle writer.CHAT_IDLE_S
         room, why = self.call_guard()
         if why:
             return why
@@ -2361,6 +2414,9 @@ class Sorter:
             if batches and writer.LOCAL_LOCK.locked():   # Chat or the writer wants the server: yield
                 reason = "yield"
                 break
+            if self.chat_first():   # 0.14.3: a chat question came: no new request
+                reason = "chat"
+                break
             with self.plock:
                 take = self._take(max(1, min(size, d_left(s, d))))   # newest first
             if not take:
@@ -2374,7 +2430,7 @@ class Sorter:
                     reason = "context_full"
                     break
                 if isinstance(e, writer.Busy):
-                    reason = "yield"
+                    reason = "chat" if str(e) == "chat" else "yield"
                     break
                 if isinstance(e, writer.ServerFault):   # 0.8.5: no more batches this run; the rules' labels stay
                     self.log(f"Callsheet sorting: the local model isn't healthy ({e.rule}); rules-only labels this "
@@ -2450,7 +2506,8 @@ class Sorter:
         room, why = self.call_guard(now)
         if why:
             return why
-        if writer.LOCAL_LOCK.locked() or (self.scanner is not None and getattr(self.scanner, "busy", lambda: False)()):
+        if writer.LOCAL_LOCK.locked() or self.chat_first() or (
+                self.scanner is not None and getattr(self.scanner, "busy", lambda: False)()):
             st["paused"] = "busy"
             self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
             return "busy"

@@ -899,7 +899,7 @@ class Picker:
             return 0, 0.0, None
         local = {f"i{n}": it["id"] for n, it in enumerate(ints, 1)}
         topics = [{"id": lid, "topic": next(i["text"] for i in ints if i["id"] == sid)} for lid, sid in local.items()]
-        cap, ptok = self.sorter.budget(s), self.sorter.prefill(s)["cap_tokens"]
+        cap, pf = self.sorter.budget(s), self.sorter.prefill(s)
         fit, keep = collections.Counter(), None
         # 0.14.1: one request always fits the in-flight budget; 0.14.2: and the prefill cap (triage.NOTES_KEEP): cards
         # come off the end (they stay queued for the next batch), then a single card's notes beyond the most relevant
@@ -916,7 +916,8 @@ class Picker:
             body = request_body(s["model"], system_text(self._tctx.first),
                                 user_message(data, topics, notes, self._tctx.today), [c["id"] for c in send],
                                 list(local))
-            mem, slow = self.sorter.fits(body, cap, ptok)
+            # 0.14.3: the whole request's expected time: prefill and these cards' expected output
+            mem, slow = self.sorter.fits(body, cap, self.sorter.time_cap(s, "picker", len(send), pf))
             if not (mem or slow):
                 break
             if len(send) > 1:
@@ -934,6 +935,7 @@ class Picker:
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
+            self.sorter.learn_out("picker", len(send), res, s["model"])   # 0.14.3: output tokens per card
         except writer.ModelGarbage:
             res = None
         secs = self.monotonic() - t0
@@ -987,6 +989,8 @@ class Picker:
             return why
         if writer.LOCAL_LOCK.locked():
             return "yield"
+        if self.sorter.chat_first():   # 0.14.3: Chat is active: nothing new until it has been idle
+            return "chat"
         st = self.settings()
         room = min(room, reader.seconds_to_window(now, st["blocked"] + st["audit"]) - 60)
         if room < triage.MIN_RUN_S:
@@ -1028,6 +1032,9 @@ class Picker:
             if n and writer.LOCAL_LOCK.locked():   # Chat first
                 reason = "yield"
                 break
+            if self.sorter.chat_first():   # 0.14.3: a chat question came: no new request
+                reason = "chat"
+                break
             if self.blocked(self.sorter._now()):  # noqa: SLF001
                 reason = "blocked"
                 break
@@ -1049,8 +1056,8 @@ class Picker:
                     continue
                 reason = "context_full"
                 break
-            except writer.Busy:
-                reason = "yield"
+            except writer.Busy as e:
+                reason = "chat" if str(e) == "chat" else "yield"
                 break
             except writer.ServerFault as e:
                 self.log(f"Callsheet picker: the local model isn't healthy ({e.rule}); {n} batches, "

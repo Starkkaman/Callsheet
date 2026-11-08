@@ -1839,14 +1839,18 @@ def prefill_sample(body, res):
     usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
     pn, pm, cn = _num(tm.get("prompt_n")), tm.get("prompt_ms"), _num(tm.get("cache_n"))
     pm = float(pm) if isinstance(pm, (int, float)) and not isinstance(pm, bool) and pm > 0 else None
+    gn, gm = _num(tm.get("predicted_n")), tm.get("predicted_ms")   # 0.14.3: the output's pace too
+    gm = float(gm) if isinstance(gm, (int, float)) and not isinstance(gm, bool) and gm > 0 else None
     total = _num(usage.get("prompt_tokens"))
     est = prompt_tokens(body)
     tps = round(pn / (pm / 1000), 1) if pn and pm and pn >= PREFILL_MIN_N else None
     scale = round(total / est, 3) if total and est >= 200 and total >= 100 else None
-    if tps is None and scale is None and pn is None:
+    gen = round(gn / (gm / 1000), 2) if gn and gm and gn >= GEN_MIN_N else None
+    out = _num(usage.get("completion_tokens")) or gn
+    if tps is None and scale is None and pn is None and gen is None:
         return None
     return {"tps": tps, "scale": scale, "prompt_n": pn, "prompt_ms": round(pm) if pm else None, "cache_n": cn,
-            "prompt": total}
+            "prompt": total, "gen": gen, "out": out, "predicted_ms": round(gm) if gm else None}
 
 
 def _pkey(base, model):
@@ -1857,13 +1861,13 @@ def learn_prefill(base, model, body, res):
     """Remember one answer's prefill pace for this server and model (writer._post does it for every local answer).
     Returns prefill_sample's dict or None."""
     smp = prefill_sample(body, res)
-    if smp is None or (smp["tps"] is None and smp["scale"] is None):
+    if smp is None or (smp["tps"] is None and smp["scale"] is None and smp["gen"] is None):
         return smp
     with _PREFILL_LOCK:
         rec = _PREFILL.setdefault(_pkey(base, model), {"tps": [], "scale": []})
-        for k in ("tps", "scale"):
+        for k in ("tps", "scale", "gen"):
             if smp[k] is not None:
-                rec[k] = (rec[k] + [smp[k]])[-PREFILL_KEEP:]
+                rec[k] = (rec.get(k, []) + [smp[k]])[-PREFILL_KEEP:]
     return smp
 
 
@@ -1890,9 +1894,15 @@ def token_scale(base, model):
     return min(TOKEN_SCALE[1], max(TOKEN_SCALE[0], m)) if m else 1.0
 
 
-def cap_tokens(tps, scale=1.0, cap_s=PREFILL_CAP_S):
-    """How many estimated prompt tokens (prompt_tokens) take about cap_s of prefill at `tps` (default pace when None)."""
-    return int(cap_s * (tps or PREFILL_TPS_DEFAULT) / max(TOKEN_SCALE[0], scale or 1.0))
+def cap_tokens(tps, scale=1.0, cap_s=None, out_tokens=0, gen_tps=None, floor=True):
+    """How many estimated prompt tokens (prompt_tokens) take about cap_s of prefill at `tps` (default pace when None).
+    0.14.3: cap_s is the whole request's time (BG_DAY_S when None): the expected output (`out_tokens` at `gen_tps`,
+    GEN_TPS_DEFAULT when None) comes off it first; at least PREFILL_FLOOR_S of prefill is left with `floor` (the
+    smallest request, one card or item, still goes: counted "alone" by the fitting when it is over), else nothing."""
+    cap_s = BG_DAY_S if cap_s is None else cap_s
+    left = cap_s - (out_tokens or 0) / (gen_tps or GEN_TPS_DEFAULT)
+    left = max(left, min(cap_s, PREFILL_FLOOR_S)) if floor else max(0.0, left)
+    return int(left * (tps or PREFILL_TPS_DEFAULT) / max(TOKEN_SCALE[0], scale or 1.0))
 
 
 def prefill_secs(body, tps, scale=1.0):
@@ -1903,7 +1913,9 @@ def prefill_secs(body, tps, scale=1.0):
 def prefill_view():
     """{model: {tps, scale, n}} for "Copy the numbers" (numbers and the model name only)."""
     with _PREFILL_LOCK:
-        return {f"{k[1]}": {"tps": _median(v["tps"]), "scale": _median(v["scale"]), "n": len(v["tps"])}
+        return {f"{k[1]}": {"tps": _median(v["tps"]), "scale": _median(v["scale"]), "n": len(v["tps"]),
+                            "gen_tps": _median(v.get("gen") or []),
+                            "out": {kd: _median(xs) for kd, xs in (v.get("out") or {}).items()}}
                 for k, v in _PREFILL.items()}
 
 
@@ -1911,6 +1923,125 @@ def reset_prefill():
     """Forget the measured paces (tests)."""
     with _PREFILL_LOCK:
         _PREFILL.clear()
+
+
+# --- 0.14.3: the whole request's time, and Chat first (test lead, binding) -------------------------------------------
+# A background request (sorter, reader, picker) holds the one resident model for its prefill AND its output, so the cap
+# is on the expected total: prefill (estimated prompt tokens at the measured prefill pace) plus the expected output
+# (learned output tokens per card or item, at the measured generation pace: timings.predicted_n / predicted_ms, the
+# median of the last PREFILL_KEEP answers that wrote at least GEN_MIN_N tokens; GEN_TPS_DEFAULT until then). About
+# BG_DAY_S a request by day, BG_NIGHT_S inside the sorter's night windows. OUT_TOKENS: the expected output per unit
+# (a sorter card, a reader item, a picker card) until measured.
+GEN_TPS_DEFAULT = 12.0
+GEN_MIN_N = 32
+BG_DAY_S = 8.0
+BG_NIGHT_S = 20.0
+PREFILL_FLOOR_S = 2.0
+OUT_TOKENS = {"sorter": 150, "reader": 250, "picker": 40}
+OUT_MIN = 16
+
+
+def gen_rate(base, model):
+    """The measured median output tokens per second for this server and model, or None (not measured yet)."""
+    with _PREFILL_LOCK:
+        rec = _PREFILL.get(_pkey(base, model))
+        return _median(rec["gen"]) if rec and rec.get("gen") else None
+
+
+def learn_output(base, model, kind, units, res):
+    """0.14.3: one background answer's output tokens per unit (usage.completion_tokens or timings.predicted_n over the
+    cards or items it answered), remembered per server, model and kind. Returns the value or None."""
+    if not isinstance(res, dict) or not units or units < 1:
+        return None
+    usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+    tm = res.get("timings") if isinstance(res.get("timings"), dict) else {}
+    n = _num(usage.get("completion_tokens")) or _num(tm.get("predicted_n"))
+    if not n or n < OUT_MIN:
+        return None
+    per = round(n / units, 1)
+    with _PREFILL_LOCK:
+        rec = _PREFILL.setdefault(_pkey(base, model), {"tps": [], "scale": []})
+        out = rec.setdefault("out", {})
+        out[kind] = (out.get(kind, []) + [per])[-PREFILL_KEEP:]
+    return per
+
+
+def out_rate(base, model, kind):
+    """The measured median output tokens per unit for this kind, or None."""
+    with _PREFILL_LOCK:
+        rec = _PREFILL.get(_pkey(base, model))
+        xs = ((rec or {}).get("out") or {}).get(kind)
+        return _median(xs) if xs else None
+
+
+def request_secs(body, tps, scale=1.0, out_tokens=0, gen_tps=None):
+    """0.14.3: a request's expected seconds: prefill_secs plus out_tokens at gen_tps (GEN_TPS_DEFAULT when None)."""
+    return round(prefill_secs(body, tps, scale) + (out_tokens or 0) / (gen_tps or GEN_TPS_DEFAULT), 1)
+
+
+# Chat first: while the owner is chatting with the local model (a question waiting or being answered, or one answered
+# less than CHAT_IDLE_S ago), background requests to that server start nothing new: writer._post refuses them with
+# Busy("chat") before taking LOCAL_LOCK (and again once it has it), and the background passes stop before their next
+# request. A chat question then waits for at most the one background request already in flight. Memory only.
+CHAT_IDLE_S = 90.0
+_CHAT = {}
+_CHAT_LOCK = threading.Lock()
+_chat_clock = time.monotonic
+
+
+def _ckey(base):
+    return str(base or "").strip().rstrip("/").lower()
+
+
+def chat_touch(base):
+    """A chat question for this server was asked (or answered): the idle time starts again."""
+    with _CHAT_LOCK:
+        rec = _CHAT.setdefault(_ckey(base), {"n": 0, "at": 0.0})
+        rec["at"] = _chat_clock()
+
+
+def chat_begin(base):
+    """A chat turn is being answered on this server (chat_end when done)."""
+    with _CHAT_LOCK:
+        rec = _CHAT.setdefault(_ckey(base), {"n": 0, "at": 0.0})
+        rec["n"] += 1
+        rec["at"] = _chat_clock()
+
+
+def chat_end(base):
+    with _CHAT_LOCK:
+        rec = _CHAT.setdefault(_ckey(base), {"n": 0, "at": 0.0})
+        rec["n"] = max(0, rec["n"] - 1)
+        rec["at"] = _chat_clock()
+
+
+def chat_active(base):
+    """True while a chat turn on this server is waiting or being answered, or ended less than CHAT_IDLE_S ago."""
+    if not _ckey(base):
+        return False
+    with _CHAT_LOCK:
+        rec = _CHAT.get(_ckey(base))
+        return bool(rec) and (rec["n"] > 0 or _chat_clock() - rec["at"] < CHAT_IDLE_S)
+
+
+def chat_idle_in(base):
+    """Seconds until background work may start again on this server (0 when it may now)."""
+    with _CHAT_LOCK:
+        rec = _CHAT.get(_ckey(base))
+        if not rec:
+            return 0.0
+        if rec["n"] > 0:
+            return CHAT_IDLE_S
+        return round(max(0.0, CHAT_IDLE_S - (_chat_clock() - rec["at"])), 1)
+
+
+def chat_forget(base=None):
+    """Forget this server's chat activity (all when None): Chat.close and tests."""
+    with _CHAT_LOCK:
+        if base is None:
+            _CHAT.clear()
+        else:
+            _CHAT.pop(_ckey(base), None)
 
 
 _INFLIGHT = {"tokens": 0, "n": 0, "peak": 0, "refused": 0}
@@ -1977,7 +2108,7 @@ def inflight_room(limit=INFLIGHT_MAX):
 LOCAL_LOCK = threading.Lock()
 
 
-def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None, stream=None):
+def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=None, stream=None, background=None):
     """POST /chat/completions with one retry, 10 s later, while the server is loading the model. Holds LOCAL_LOCK.
     0.6.2 (chat): `notify(event)` (optional) hears "lock" while another Callsheet request holds LOCAL_LOCK (called
     again about every 0.2 s while it waits; it may raise to give up, e.g. Stop), "sent" when the request goes out
@@ -1992,10 +2123,16 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     ContextFull("budget") when it would take the total over. HTTP 500 "Context size has been exceeded" raises
     ContextFull("server"): busy, never retried here, never a fault.
     0.14.0: `stream` (chat only) streams the answer (see _local); the lock, the in-flight count and the fault checks
-    are the same, and the checks run on the whole answer when it is complete."""
+    are the same, and the checks run on the whole answer when it is complete.
+    0.14.3: `background` (default: a request with a `budget`, i.e. the sorter's, the reader's and the picker's) is
+    refused with Busy("chat") while Chat is active on this server (chat_active), before LOCAL_LOCK and again once it
+    is held, so a chat question waits for at most the one background request already in flight."""
     model = body.get("model") if isinstance(body, dict) else None
     if _in_backoff(base, model):  # 0.8.5: an unhealthy server gets nothing until its next health check is due
         raise ServerFault("backoff")
+    bg = budget is not None if background is None else bool(background)
+    if bg and chat_active(base):
+        raise Busy("chat")
     w0 = clock()
     if notify is None:
         LOCAL_LOCK.acquire()
@@ -2004,6 +2141,9 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
             notify("lock")
             if LOCAL_LOCK.acquire(timeout=0.2):
                 break
+    if bg and chat_active(base):   # Chat started while this one waited: it goes first
+        LOCAL_LOCK.release()
+        raise Busy("chat")
     try:
         if timing is not None:
             timing["lock_s"] = round(clock() - w0, 1)

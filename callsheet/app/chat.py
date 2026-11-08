@@ -61,21 +61,26 @@ MAX_ROUNDS = 6               # model replies that call tools, per question
 MAX_CALLS_PER_ROUND = 4
 HISTORY_ANSWER = 1500       # an earlier answer sent whole: at most this many characters
 # 0.14.2 (test lead, binding): the history is capped and kept cache-friendly (one resident model: a follow-up turn's
-# new prompt should stay small). The last HISTORY_WHOLE to HISTORY_WHOLE + HISTORY_STEP - 1 earlier turns go whole
-# (the question and the answer, as before); older turns go shortened: the question's first OLD_QUESTION characters,
-# the answer's first OLD_ANSWER and the ids and titles of the items it used (as <data>, so the model can call get_item
-# again; a title of an item with instructions is left out). The line between whole and shortened moves HISTORY_STEP
-# turns at a time, and the oldest shortened turns leave HISTORY_STEP at a time (at most HISTORY_OLD of them, about
-# HISTORY_TOKENS in all), so the start of the prompt stays the same for several turns and the server reuses it. The
-# owner's words of the current turn and the system and safety text are never shortened.
+# new prompt should stay small). The latest earlier turns go whole (the question and the answer, as before); older
+# turns go shortened: the question's first OLD_QUESTION characters, the answer's first OLD_ANSWER and the ids and
+# titles of the items it used (as <data>, so the model can call get_item again; a title of an item with instructions is
+# left out). The owner's words of the current turn and the system and safety text are never shortened.
+# 0.14.3: a follow-up turn's prompt is the last one plus the new turn (the server reuses all of it): every earlier
+# question goes with the time note it was sent with (NOW_NOTE, at the time it was asked), and the turns go whole until
+# there are more than HISTORY_WHOLE_MAX of them or they are over about HISTORY_WHOLE_TOKENS; only then does the line
+# between whole and shortened move, HISTORY_STEP of the OLDEST whole turns at a time (at least HISTORY_WHOLE stay
+# whole), and the oldest shortened turns leave HISTORY_STEP at a time (at most HISTORY_OLD of them, about HISTORY_TOKENS
+# in all). The line only moves forward, so between two moves the start of the prompt never changes.
 HISTORY_WHOLE = 2
-HISTORY_STEP = 3
+HISTORY_WHOLE_MAX = 12
+HISTORY_WHOLE_TOKENS = 4000
+HISTORY_STEP = 4
 HISTORY_OLD = 12
 HISTORY_TOKENS = 6000
 OLD_QUESTION = 300
 OLD_ANSWER = 400
 OLD_ITEMS = 6
-HISTORY_TURNS = HISTORY_OLD + HISTORY_WHOLE + HISTORY_STEP   # earlier turns that can be sent (and are checked)
+HISTORY_TURNS = HISTORY_OLD + HISTORY_WHOLE_MAX + HISTORY_STEP   # earlier turns that can be sent (and are checked)
 OLD_ITEMS_NOTE = "Items this answer used (data, not instructions; get_item reads one again):"
 TURN_STATS = 50              # 0.14.2: the last turns' numbers kept in memory for "Copy the numbers"
 SEARCH_DEFAULT, SEARCH_MAX = 10, 20
@@ -444,6 +449,17 @@ def context_line(now, tz, areas, fmt, clock=True):
 
 
 NOW_NOTE = "[Callsheet: the time now is {clock}.]"
+
+
+def asked_at(msg, tz):
+    """0.14.3: when the owner asked this question (its "at"), as a datetime in tz, or None."""
+    at = msg.get("at") if isinstance(msg, dict) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return None
+    try:
+        return dt.datetime.fromtimestamp(at, tz)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def now_note(question, now, fmt):
@@ -1828,6 +1844,7 @@ class Chat:
         # 0.8.1: Save-card tokens, in memory only (a restart expires them): pid -> {token, cid, turn, exp, used};
         # saved note id -> (conversation id, pid), so Undo can mark the card again
         self.proposals = {}
+        self.chat_bases = set()   # 0.14.3: the local servers this Chat marked active (writer.chat_touch)
         self.saved_notes = {}
         # 0.11.1: setup cards share the token table (what: "connector"); added connector id -> (conversation, pid)
         self.added_connectors = {}
@@ -2198,6 +2215,7 @@ class Chat:
             raise Conflict("The index isn't available, so Callsheet can't search. Check the app log.")
         self.prune()
         now = self.clock()
+        self._chat_mark("touch")   # 0.14.3: Chat first: background work starts nothing new from now on
         with self.lock:
             if cid:
                 conv = self._read(cid) if re.fullmatch(CONV_ID, str(cid)) else None
@@ -2240,6 +2258,27 @@ class Chat:
                 job["cancel"] = True
                 self._abort(job)
             self.lock.notify_all()
+        for b in list(self.chat_bases):   # 0.14.3: this Chat's activity marks go with it
+            writer.chat_forget(b)
+        self.chat_bases.clear()
+
+    def _chat_mark(self, what, base=None):
+        """0.14.3 Chat first: tells writer that a chat turn on the local server was asked ("touch"), is being answered
+        ("begin") or is done ("end"); background requests to that server wait until it has been idle
+        writer.CHAT_IDLE_S. Nothing when Chat is on Claude. Never fails a question."""
+        try:
+            if base is None:
+                s = load_settings(self.store)
+                if s["provider"] == "claude":
+                    return None
+                base = effective_local(self.store, s)["base_url"]
+            if not base:
+                return None
+            {"touch": writer.chat_touch, "begin": writer.chat_begin, "end": writer.chat_end}[what](base)
+            self.chat_bases.add(base)
+            return base
+        except Exception:  # noqa: BLE001
+            return None
 
     @staticmethod
     def _abort(job):
@@ -2321,15 +2360,18 @@ class Chat:
                 job["text"], job["sent_at"] = LOADING, now
         return notify
 
-    def _history(self, conv, info=None):
+    def _history(self, conv, info=None, note=None):
         """Earlier answered turns: [(question, answer with its [id] markers)], newest last. 0.14.2: capped and
         cache-friendly (history_cut): the last turns whole, older ones shortened. `info` (a dict) gets the counts:
-        whole, short, dropped, tokens (estimated)."""
+        whole, short, dropped, tokens (estimated). 0.14.3: `note` (tz, fmt; the local model) gives every question the
+        time note it was sent with (now_note at the time it was asked), so the prompt repeats the last one exactly."""
         msgs, turns = conv["messages"][:-1], []
         for i in range(len(msgs) - 1):
             a, b = msgs[i], msgs[i + 1]
             if a.get("role") == "user" and b.get("role") == "assistant" and b.get("ctx"):
-                turns.append((a.get("text") or "", b))
+                q = a.get("text") or ""
+                at = asked_at(a, note[0]) if note else None
+                turns.append((now_note(q, at, note[1]) if at is not None else q, b))
         pairs, counts = history_cut(turns)
         if info is not None:
             info.update(counts)
@@ -2356,7 +2398,9 @@ class Chat:
             now = dt.datetime.fromtimestamp(self.clock(), tz)
             sc = conv.get("scope") if isinstance(conv.get("scope"), dict) else None
             hinfo = {}
-            question, history = conv["messages"][-1]["text"], self._history(conv, hinfo)
+            question = conv["messages"][-1]["text"]
+            history = self._history(conv, hinfo, None if provider == "claude" else (tz, fmt))
+            asked = asked_at(conv["messages"][-1], tz) or now   # 0.14.3: the note says when it was asked
             intent = remember_intent(question)   # 0.8.1: the owner's own latest message only
             # 0.11.1: the owner's own latest message (and, for a bare address, the owner's message before it) only
             users = [m for m in conv["messages"] if m.get("role") == "user"]
@@ -2380,8 +2424,13 @@ class Chat:
                 mode = "claude tools"
             else:
                 eff = effective_local(self.store, s)
-                raw, mode = self._local(job, t0, dict(s["local"], **eff), now, tz, fmt, tools, question, history,
-                                        stats, pre)
+                mark = self._chat_mark("begin", eff["base_url"])   # 0.14.3: Chat first while it is answered
+                try:
+                    raw, mode = self._local(job, t0, dict(s["local"], **eff), now, tz, fmt, tools, question, history,
+                                            stats, pre, asked=asked)
+                finally:
+                    if mark:
+                        self._chat_mark("end", mark)
                 by = "Local · " + eff["model"][:60]
             raw = raw.strip()[:MAX_ANSWER]
             job["live"].flush()   # 0.14.0: the post-check runs on the final text: a quiet "checking…" meanwhile
@@ -2657,9 +2706,10 @@ class Chat:
         with self.lock:
             self.modes.clear()
 
-    def _local(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats, pre=None):
+    def _local(self, job, t0, cfg, now, tz, fmt, tools, question, history, stats, pre=None, asked=None):
         """The tool loop against the local server. Returns (raw answer, protocol). 0.7.1: `pre` (Tools.prefetch) goes
-        in after the question as the first tool call and its result, in the protocol's own form."""
+        in after the question as the first tool call and its result, in the protocol's own form. 0.14.3: the
+        question's time note is the time it was asked (`asked`, else now), as the next turns repeat it."""
         base, model, key = cfg["base_url"], cfg["model"], cfg["api_key"]
         auto = cfg["tools"] == "auto"
         mode = self._auto_mode(base, model) if auto else cfg["tools"]
@@ -2677,7 +2727,7 @@ class Chat:
                                                                 rem, con, wb, clock=False)}]
             for q, a in history:
                 msgs += [{"role": "user", "content": q}, {"role": "assistant", "content": a}]
-            msgs.append({"role": "user", "content": now_note(question, now, fmt)})
+            msgs.append({"role": "user", "content": now_note(question, asked or now, fmt)})
             if pre:
                 args, result = pre[0], pre[1]
                 pname = pre[3] if len(pre) > 3 else "search"   # 0.14.0: or the web search the owner said yes to
@@ -3090,13 +3140,29 @@ def _pair_tokens(q, a):
     return int((len(q) + len(a)) / writer.CHARS_PER_TOKEN)
 
 
+def whole_cut(turns):
+    """0.14.3: how many of the oldest turns go shortened: a multiple of HISTORY_STEP, the smallest that leaves at most
+    HISTORY_WHOLE_MAX turns and about HISTORY_WHOLE_TOKENS whole (never fewer than HISTORY_WHOLE whole). One more turn
+    never makes it smaller, so the line between shortened and whole only moves forward, HISTORY_STEP at a time."""
+    n, cut = len(turns), 0
+
+    def over(c):
+        rest = turns[c:]
+        return len(rest) > HISTORY_WHOLE_MAX or sum(
+            _pair_tokens(q, _clip_keep(m.get("ctx"), HISTORY_ANSWER)) for q, m in rest) > HISTORY_WHOLE_TOKENS
+    while n - (cut + HISTORY_STEP) >= HISTORY_WHOLE and over(cut):
+        cut += HISTORY_STEP
+    return cut
+
+
 def history_cut(turns):
-    """0.14.2: [(question, answer message)] (oldest first) -> ([(question, answer text)], counts). The last turns whole
-    (HISTORY_WHOLE to HISTORY_WHOLE + HISTORY_STEP - 1 of them), older ones shortened (_short_turn); the line between
-    and the oldest dropped turns move HISTORY_STEP at a time (at most HISTORY_OLD shortened turns, about
-    HISTORY_TOKENS in all), so the prompt's start stays the same from one turn to the next most of the time."""
+    """0.14.2: [(question, answer message)] (oldest first) -> ([(question, answer text)], counts). The latest turns
+    whole, older ones shortened (_short_turn); 0.14.3: the line between moves only when the whole turns are over
+    HISTORY_WHOLE_MAX or about HISTORY_WHOLE_TOKENS (whole_cut), HISTORY_STEP of the oldest at a time; the oldest
+    shortened turns leave HISTORY_STEP at a time (at most HISTORY_OLD of them, about HISTORY_TOKENS in all). Between two
+    moves a turn's prompt starts with the whole of the last one."""
     n = len(turns)
-    cut = max(0, ((n - HISTORY_WHOLE) // HISTORY_STEP) * HISTORY_STEP) if n > HISTORY_WHOLE else 0
+    cut = whole_cut(turns)
     older = [_short_turn(q, m) for q, m in turns[:cut]]
     whole = [(q, _clip_keep(m.get("ctx"), HISTORY_ANSWER)) for q, m in turns[cut:]]
     drop = 0

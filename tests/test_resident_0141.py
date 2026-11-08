@@ -284,6 +284,7 @@ class Fits(Base):
 
     def test_a_32k_pool_fits_full_batches(self):
         t84.paced(self.store, 1.0)
+        self.sorter.time_cap = lambda *a, **k: 10 ** 9   # 0.14.3: the time cap isn't the subject here
         self.sorter.update_settings({"ctx_size": 32768})
         self.sorter.collect_sync(self.threads(12, text=self.LONG))
         self.sorter.run_pass()
@@ -388,8 +389,7 @@ class SizingRuns(Base):
         self.sorter.collect_sync(self.threads(10))
         self.run_all()
         self.assertEqual(post.sizes()[0], triage.FIRST_BATCH)                  # unmeasured: a short first batch
-        self.assertEqual(set(post.sizes()), {2})
-        self.assertLessEqual(max(post.sizes()) * SWIFT_CARD_S, triage.TARGET_S)   # Chat waits <= ~20 s behind one
+        self.assertEqual(set(post.sizes()[1:]), {1})                           # 0.14.3: 8 s by day: one card
         self.assertAlmostEqual(triage.pace(self.sorter._perf(SWIFT)), SWIFT_CARD_S)  # noqa: SLF001
 
     def test_gemma_by_day_grows_to_the_cap(self):
@@ -397,8 +397,8 @@ class SizingRuns(Base):
         self.use(triage.GEMMA, post=post)
         self.sorter.collect_sync(self.threads(20))
         self.run_all()
-        self.assertEqual(post.sizes(), [2, 6, 6, 6])
-        self.assertLessEqual(6 * GEMMA_CARD_S, triage.TARGET_S)
+        self.assertEqual(post.sizes(), [2, 3, 3, 3, 3, 3, 3])                 # 0.14.3: 3 x 2.3 s <= 8 s by day
+        self.assertLessEqual(3 * GEMMA_CARD_S, writer.BG_DAY_S)
 
     def test_night_sizes(self):
         self.sorter.update_settings({"backfill": {"on": False}})
@@ -418,9 +418,9 @@ class SizingRuns(Base):
         t84.paced(self.store, GEMMA_CARD_S, triage.GEMMA)
         t84.paced(self.store, SWIFT_CARD_S, SWIFT)
         s = self.sorter.settings()
-        self.assertEqual(self.sorter.batch_size(s), 6)
+        self.assertEqual(self.sorter.batch_size(s), 3)                     # 0.14.3: 8 s by day
         self.use(SWIFT)
-        self.assertEqual(self.sorter.batch_size(self.sorter.settings()), 2)
+        self.assertEqual(self.sorter.batch_size(self.sorter.settings()), 1)
         self.use("brand-new-model")
         self.assertEqual(self.sorter.batch_size(self.sorter.settings()), triage.FIRST_BATCH)
 

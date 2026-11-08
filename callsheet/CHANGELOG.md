@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.3 (Chat goes first)
+
+- **Chat no longer waits behind background work.** While you are chatting with your local model (a question waiting
+  or being answered, or one answered in the last 90 seconds), sorting, reading and picking start nothing new; they
+  carry on once Chat has been quiet for 90 seconds. A question waits for at most the one request already running.
+- **Shorter background requests.** Callsheet now also times how fast your model writes, and how much it writes per
+  email or item, and keeps every background request to about 8 seconds in all by day (reading and writing), 20 seconds
+  in the night windows. Nothing is left out: the rest go in the next requests.
+- **Follow-up questions start faster.** Each follow-up sends the earlier conversation exactly as it was sent before,
+  times included, so the model server can reuse all of it. Turns stay whole until the conversation gets long (more
+  than 12 turns or about 4,000 tokens); only then do the oldest turns get shorter, a few at a time.
+
 ## 0.14.2 (background work that never makes Chat wait long)
 
 - **No background request takes more than about 20 seconds to read.** Callsheet times how fast your model reads a

@@ -343,6 +343,7 @@ class ChatProposal(r81.Base):
         sorter.collect_sync([(t84.thread("p1", "Priya Nair <priya@acme.example>", "Budget call",
                                          "Hi, can we move the budget call to Thursday?", auth=PASS),
                               OWNER, self.work, "acc1")])
+        writer.chat_forget()   # 0.14.3: the chat just now would hold background work for 90 s (not the subject)
         sorter.run_pass()
         self.assertTrue(post.calls)
         system = post.calls[0][0]["messages"][0]["content"]

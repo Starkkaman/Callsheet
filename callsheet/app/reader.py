@@ -1371,7 +1371,7 @@ class Reader:
         """One request: Chat or the brief writer holding the server makes the reader yield (Chat first); inside the
         in-flight budget (0.14.1: 80% of the model's context, Sorter.budget). An answer cut at max_tokens is counted."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        res = self.sorter.post_bg(body, timeout, self._post_fn, kind="reader")
+        res = self.sorter.post_bg(body, timeout, self._post_fn, kind="reader", units=1)
         if writer.finished_long(res):
             self.lengths += 1
         return res
@@ -1528,7 +1528,7 @@ class Reader:
         payload = {"item": data, "context": [e["data"] for e in entries if e["data"] is not None]}
         system = system_text(tctx.owner_full or tctx.first, tctx.first)
         body, sids, cids, fitc = fit(payload, notes, system, s["model"], tctx, cids, info["sids"],
-                                     self.sorter.budget(s), self.sorter.prefill(s)["cap_tokens"])
+                                     self.sorter.budget(s), self.sorter.time_cap(s, "reader", 1))
         if len(cids) < len(entries):   # 0.14.2: low-value context clipped to read in time (counted, never logged)
             entries = [e for e in entries if e["id"] in cids]
         self.sorter.fit_add("reader", fitc)
@@ -1583,6 +1583,8 @@ class Reader:
             return why
         if writer.LOCAL_LOCK.locked():
             return "yield"
+        if self.sorter.chat_first():   # 0.14.3: Chat is active: nothing new until it has been idle
+            return "chat"
         st = self.settings()
         room = min(room, seconds_to_window(now, st["blocked"] + st["audit"]) - 60)
         if room < triage.MIN_RUN_S:
@@ -1622,6 +1624,9 @@ class Reader:
             if n and writer.LOCAL_LOCK.locked():   # Chat first
                 reason = "yield"
                 break
+            if self.sorter.chat_first():   # 0.14.3: a chat question came: no new request
+                reason = "chat"
+                break
             if self.blocked(self.sorter._now()):  # noqa: SLF001
                 reason = "blocked"
                 break
@@ -1642,8 +1647,8 @@ class Reader:
                     continue
                 reason = "context_full"
                 break
-            except writer.Busy:
-                reason = "yield"
+            except writer.Busy as e:
+                reason = "chat" if str(e) == "chat" else "yield"
                 break
             except writer.ServerFault as e:
                 self.log(f"Callsheet reader: the local model isn't healthy ({e.rule}); {n} read, "
