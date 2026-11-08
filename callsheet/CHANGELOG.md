@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.1 (one model for everything)
+
+- **Any model can stay loaded for background work.** Sorting, reading and picking use the model you chose in
+  Setup › AI › Sorting, whatever it is, on its own slot next to Chat. Gemma is still the default for new installs.
+- **Chat and background work can share one model.** When Chat uses the same model, Setup says "Chat and background
+  work share one model: no waiting for a swap."
+- **Batches size themselves.** Callsheet measures how long each model takes per item and sends as many items at a
+  time as take about 20 seconds (never more than before). A slower model sends smaller batches, so Chat never waits
+  long behind one. The sorting status says about how many emails an hour the model gets through.
+- **Fits the model's memory.** Background work stays under 80% of the model's context size. Callsheet asks your model
+  server for it; when the server doesn't say, set "Context size" in Setup › AI › Advanced (32,768 if you don't).
+  A request that would not fit is made smaller before it is sent.
+- **Thinking stays off** for background work with every model, and answers that run out of room are counted.
+
 ## 0.14.0 (Chat can search the web)
 
 - **Web search in Chat.** When a question needs the web, Chat searches it by itself through your own SearXNG on

@@ -156,6 +156,19 @@ def model_label(store, s=None):
     return "Local · " + eff["model"][:60] if eff["model"] else "Local model"
 
 
+def shares_background(store, s=None):
+    """0.14.1: Chat (local) asks the same server and model as the background work (sorter, reader, picker: the writer's
+    server, the sorter's model), so the two share one resident model and Chat never waits for a swap."""
+    s = s or load_settings(store)
+    if s["provider"] != "local":
+        return False
+    eff = effective_local(store, s)
+    bg = triage.background_model(store)
+    base = (store.writer_config().get("local") or {}).get("base_url") or ""
+    return bool(bg and eff["model"] == bg and eff["base_url"] and
+                eff["base_url"].rstrip("/") == base.rstrip("/"))
+
+
 def public_settings(store):
     s = load_settings(store)
     eff = effective_local(store, s)
@@ -164,6 +177,7 @@ def public_settings(store):
     loc = s["local"]
     return {"provider": s["provider"],
             "local": {"same_as_writer": eff["same_as_writer"], "base_url": eff["base_url"], "model": eff["model"],
+                      "shares_background": shares_background(store, s),
                       "key_hint": None if eff["same_as_writer"] else (("…" + loc["api_key"][-4:]) if loc["api_key"] else None),
                       "thinking": loc["thinking"], "max_tokens": loc["max_tokens"], "timeout": loc["timeout"],
                       "tools": loc["tools"], "id_slot": loc["id_slot"],

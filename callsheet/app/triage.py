@@ -2,8 +2,10 @@
 the night backfill, the "Check the sorting" counts and the owner's corrections. docs/sorting.md has the design.
 
 Model-agnostic: the model is a setting (Gemma by default); every request goes to the owner's local model server (the
-writer's address) with id_slot 1 for Gemma (0.9.0; Chat keeps slot 0), under writer.LOCAL_LOCK, one batch at a time
-(BATCH = 6 cards by day, NIGHT_BATCH = 12 in the night windows). Triage never goes to Claude.
+writer's address) with id_slot 1 for the configured background model, whatever its name (0.14.1; Chat keeps slot 0),
+under writer.LOCAL_LOCK, one batch at a time. 0.14.1: a batch is sized from the model's measured seconds per card so it
+takes about TARGET_S (at most `batch` = 6 cards by day, `night_batch` = 12 in the night windows), and the in-flight
+budget is 80% of the model's context (writer.budget_for). Triage never goes to Claude.
 
 The rules (binding, tests in tests/test_sorting_084.py):
 - The model sees only cards: compact JSON built by Callsheet, inside the escaped <data> block (writer._block_json).
@@ -90,12 +92,20 @@ KEY = re.compile(r"[0-9a-f]{16}")
 MODEL = re.compile(r"[\w.:/+@-]{1,120}")
 
 # --- settings and the budget ----------------------------------------------------------------------------------------
-GEMMA = "gemma-4-26b-a4b-it-qat-q4_0"   # the default: resident on the owner's server (no swaps)
-# 0.9.0 (the test lead): the sorter's llama.cpp slot. Gemma (resident) serves Chat on slot 0 and the sorter on slot 1;
-# the Careful (Swift) brief also uses slot 1, so the sorter pauses around it (`careful_guard`). Other models: slot 0.
+GEMMA = "gemma-4-26b-a4b-it-qat-q4_0"   # the default model for new installs (nothing else may assume it)
+# 0.9.0 (the test lead): the sorter's llama.cpp slot. The resident model serves Chat on slot 0 and the background work
+# (sorter, reader, picker) on slot 1; the Careful brief also uses slot 1, so the sorter pauses around it
+# (`careful_guard`). 0.14.1: slot 1 goes to the configured background model (the sorter's model setting), whatever its
+# name; when Chat uses the same model they share it without swaps.
 SLOT = 1
-BATCH = 6                  # daytime batch: a batch takes ~15 s, so Chat or Home Assistant never waits more than ~30 s
-NIGHT_BATCH = 12           # inside the night windows (nobody is waiting)
+BATCH = 6                  # daytime batch, at most (0.14.1: sized by TARGET_S below it)
+NIGHT_BATCH = 12           # inside the night windows, at most
+# 0.14.1 (one resident model): a batch takes about TARGET_S at the model's measured median seconds per card (per
+# model, the last 50 batches), from 1 card up to `batch` / `night_batch`, so Chat waits at most about that long behind
+# one. A model with no measurement yet starts at FIRST_BATCH cards (a slow model's first batch stays short).
+TARGET_S = 20
+FIRST_BATCH = 2
+PERF_MODELS = 8            # the measured pace is kept for this many models
 RUN_S = 180                # an incremental run: at most 3 minutes of model time
 END_BEFORE_S = 10 * 60     # ... ending at least 10 minutes before a call time
 AFTER_CALL_S = 10 * 60     # ... and starting no sooner than 10 minutes after one (the brief writer goes first)
@@ -310,15 +320,16 @@ def build_schema(cards):
             "properties": {c["id"]: card_schema(sorted(c["s"], key=lambda k: int(k[1:]))) for c in cards}}
 
 
-def slot_for(model):
-    """0.9.0: the sorter's llama.cpp slot: SLOT (1) for Gemma, the resident model (Chat keeps slot 0); 0 for any other
-    model."""
-    return SLOT if str(model) == GEMMA else 0
+def slot_for(model, background=None):
+    """The background work's llama.cpp slot: SLOT (1) for the configured background model (the sorter's model setting),
+    whatever its name; 0 for any other model. Chat keeps slot 0. `background` None: `model` is the configured one (the
+    sorter, the reader and the picker only ever ask the sorter's model)."""
+    return SLOT if background is None or str(model) == str(background) else 0
 
 
 def request_body(model, cards, system, today, tz_name):
-    """The /chat/completions body: strict json_schema, thinking off, temperature 0, id_slot `slot_for(model)` (0.9.0:
-    1 for Gemma, so Chat keeps slot 0)."""
+    """The /chat/completions body: strict json_schema, thinking off (enable_thinking false for every model, Qwen
+    family included), temperature 0, id_slot `slot_for(model)` (1: the background model's slot; Chat keeps 0)."""
     kwargs = {"enable_thinking": False}
     for part, extra in PROFILES:
         if part in str(model).lower():
@@ -1469,7 +1480,64 @@ def default_settings():
     0.9.0 install's shadow week on once."""
     return {"mode": "on", "model": GEMMA, "batch": BATCH, "night_batch": NIGHT_BATCH, "day_cards": DAY_CARDS,
             "day_gpu_min": DAY_GPU_MIN, "backfill": dict(BACKFILL, windows=[list(w) for w in WINDOWS]),
-            "shadow_since": None, "on_since": None}
+            "shadow_since": None, "on_since": None, "ctx_sizes": {}}
+
+
+def background_model(store):
+    """0.14.1: the configured background model (the sorter's model setting; the reader and the picker use it too), or
+    None while sorting is off."""
+    saved = store._get_meta("sorting", None)  # noqa: SLF001
+    saved = saved if isinstance(saved, dict) else {}
+    if saved.get("mode", default_settings()["mode"]) == "off":
+        return None
+    m = saved.get("model")
+    return m if isinstance(m, str) and MODEL.fullmatch(m) else GEMMA
+
+
+def _ctx_sizes(v):
+    """0.14.1: the owner's per-model "Context size" ({model: tokens}), only valid entries."""
+    if not isinstance(v, dict):
+        return {}
+    lo, hi = writer.CTX_LIMITS
+    return {str(m): n for m, n in list(v.items())[-PERF_MODELS:] if isinstance(m, str) and MODEL.fullmatch(m)
+            and isinstance(n, int) and not isinstance(n, bool) and lo <= n <= hi}
+
+
+def size_for(card_s, cap, target=None):
+    """0.14.1: a batch's size: as many cards as take about `target` (TARGET_S) at `card_s` seconds a card, from 1 to
+    `cap`; FIRST_BATCH (at most cap) while the model's pace isn't measured yet (card_s None)."""
+    cap = max(1, int(cap))
+    if not card_s or card_s <= 0:
+        return min(cap, FIRST_BATCH)
+    return max(1, min(cap, int((TARGET_S if target is None else target) / card_s)))
+
+
+def perf_get(store, key, model):
+    """0.14.1: a model's measured seconds per card (the last 50 batches) from meta `key` ({"models": {model: [...]}}).
+    A list from before 0.14.1 ({"card_s": [...]}, one list for every model) counts for the model set now."""
+    p = store._get_meta(key, {}) or {}  # noqa: SLF001
+    p = p if isinstance(p, dict) else {}
+    models = p.get("models") if isinstance(p.get("models"), dict) else None
+    xs = models.get(str(model)) if models is not None else p.get("card_s")
+    return [float(x) for x in xs or [] if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0][-50:]
+
+
+def perf_add(store, key, model, secs, cards):
+    """Add one batch (seconds for `cards` cards) to the model's measured pace; keeps PERF_MODELS models."""
+    p = store._get_meta(key, {}) or {}  # noqa: SLF001
+    p = p if isinstance(p, dict) else {}
+    models = dict(p["models"]) if isinstance(p.get("models"), dict) else {}
+    if not models and p.get("card_s"):   # the list from before 0.14.1 belongs to the model set now
+        models[str(model)] = perf_get(store, key, model)
+    xs = perf_get(store, key, model) + [round(secs / max(1, cards), 3)]
+    models.pop(str(model), None)
+    models[str(model)] = xs[-50:]
+    store._set_meta(key, {"models": dict(list(models.items())[-PERF_MODELS:])})  # noqa: SLF001
+
+
+def pace(xs):
+    """The median seconds per card of a measured list, else None."""
+    return statistics.median(xs) if xs else None
 
 
 def _hhmm(v):
@@ -1506,8 +1574,9 @@ class InputError(ValueError):
 
 class Sorter:
     def __init__(self, store, syncer=None, index=None, people=None, clock=time.time, monotonic=time.monotonic,
-                 post=None, log=_stderr, scanner=None, memory=None):
+                 post=None, log=_stderr, scanner=None, memory=None, models=None):
         self.store = store
+        self._models_fn = models            # 0.14.1: fetch(base, key) -> GET /models (tests); else the server's
         self._memory = memory               # 0.9.1: the owner's notes (memory.Memory); else the syncer's
         self.syncer = syncer
         self.index = index
@@ -1531,6 +1600,7 @@ class Sorter:
         self.reader = None                  # 0.12.0: reader.Reader (api.App sets it); runs after the sorter's pass
         self.picker = None                  # 0.13.0: picker.Picker (api.App sets it); runs after the reader's pass
         self._shrink_until = 0.0            # 0.12.0: smaller batches until then (after a ContextFull)
+        self.lengths = 0                    # 0.14.1: the sorter's answers that stopped at max_tokens (finish "length")
 
     # settings ------------------------------------------------------------------------------------------------------
     def settings(self):
@@ -1538,7 +1608,7 @@ class Sorter:
         saved = self.store._get_meta("sorting", None)  # noqa: SLF001
         if isinstance(saved, dict):
             for k in ("mode", "model", "batch", "night_batch", "day_cards", "day_gpu_min", "shadow_since", "on_since",
-                      "v091", "notice"):
+                      "v091", "notice", "ctx_sizes"):
                 if k in saved:
                     s[k] = saved[k]
             if isinstance(saved.get("backfill"), dict):
@@ -1554,6 +1624,7 @@ class Sorter:
             s["mode"] = default_settings()["mode"]
         if not isinstance(s["model"], str) or not MODEL.fullmatch(s["model"]):
             s["model"] = GEMMA
+        s["ctx_sizes"] = _ctx_sizes(s.get("ctx_sizes"))
         if not s.get("shadow_since"):   # the shadow week starts with the first labels (stored then: reads write nothing)
             s["shadow_since"] = self._today().isoformat()
             s["_unsaved"] = True
@@ -1597,7 +1668,14 @@ class Sorter:
         if not isinstance(patch, dict):
             raise InputError("Send a JSON object.")
         s = self.settings()
+        ctx_size = None
         for k, v in patch.items():
+            if k == "ctx_size":   # 0.14.1: the model's context size (applied below, to the model this patch leaves)
+                lo, hi = writer.CTX_LIMITS
+                if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+                    raise InputError(f"Pick a context size from {lo:,} to {hi:,} tokens.")
+                ctx_size = (v,)
+                continue
             if k == "mode":
                 if v not in MODES:
                     raise InputError("Pick Off, Shadow week or On.")
@@ -1644,6 +1722,12 @@ class Sorter:
                 s["backfill"] = b
             else:
                 raise InputError("Unknown setting.")
+        if ctx_size is not None:
+            sizes = dict(s["ctx_sizes"])
+            sizes.pop(s["model"], None)
+            if ctx_size[0] is not None:
+                sizes[s["model"]] = ctx_size[0]
+            s["ctx_sizes"] = _ctx_sizes(sizes)
         self._save_settings(s)
         return self.view()
 
@@ -1699,19 +1783,47 @@ class Sorter:
         loc = (self.store.writer_config().get("local") or {})
         return loc.get("base_url") or "", loc.get("api_key") or ""
 
+    # 0.14.1: the model's context and the in-flight budget ------------------------------------------------------------
+    def ctx_size(self, s=None, ask=True):
+        """(tokens, source): the background model's context: what the server's GET /models says for it ("server"),
+        else the owner's "Context size" for that model ("setting"), else writer.CTX_DEFAULT ("default"). ask False:
+        no request (the page), only what the server said last."""
+        s = s or self.settings()
+        base, key = self._server()
+        n = None
+        if base and (self._models_fn is not None or self._post_fn is None):
+            n = writer.server_ctx(base, key, s["model"], self._models_fn, self.monotonic) if ask else \
+                writer.cached_ctx(base, s["model"])
+        if n:
+            return n, "server"
+        n = s["ctx_sizes"].get(s["model"])
+        return (n, "setting") if n else (writer.CTX_DEFAULT, "default")
+
+    def budget(self, s=None):
+        """The background work's in-flight budget (sorter, reader, picker): 80% of the model's context."""
+        return writer.budget_for(self.ctx_size(s)[0])
+
+    def post_bg(self, body, timeout, post_fn=None, budget=None):
+        """0.14.1: one background request (the sorter's, the reader's or the picker's): through `post_fn` (tests) or
+        writer._post under the in-flight budget (80% of the model's context)."""
+        if post_fn is not None:
+            return post_fn(body, timeout)
+        base, key = self._server()
+
+        def notify(event):
+            if event == "lock":   # Chat or the brief writer has the server: background work yields (Chat first)
+                raise Busy("The model server is busy.")
+        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
+                            notify=notify, budget=self.budget() if budget is None else budget)
+
     def _post(self, body, timeout=TIMEOUT_S):
         """One request. timeout: the room left in the run (a batch never runs past the budget). The sorter never
         waits behind Chat or the brief writer: when LOCAL_LOCK is taken it gives up (Busy)."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        if self._post_fn is not None:
-            return self._post_fn(body, timeout)
-        base, key = self._server()
-
-        def notify(event):
-            if event == "lock":
-                raise Busy("The model server is busy.")
-        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic, notify=notify,  # noqa: SLF001
-                            budget=writer.INFLIGHT_MAX)   # 0.12.0: the in-flight budget (design 2.9a)
+        res = self.post_bg(body, timeout, self._post_fn)
+        if writer.finished_long(res):   # 0.14.1: counted; handled as before (an unusable answer: rules labels)
+            self.lengths += 1
+        return res
 
     # day counters ------------------------------------------------------------------------------------------------------
     def _day(self):
@@ -1733,25 +1845,41 @@ class Sorter:
             return
         _stderr(f"Callsheet sorting: {day}: rules placed {n} row(s) in Needs you the model called not needs_reply")
 
-    def _perf(self):
-        """The last 50 batches' seconds per card (0.9.0: per card, as day and night batches differ in size)."""
-        p = self.store._get_meta("sorting_perf", {}) or {}  # noqa: SLF001
-        return [float(x) for x in p.get("card_s") or [] if isinstance(x, (int, float)) and x > 0][-50:]
+    def _perf(self, model=None):
+        """The last 50 batches' seconds per card (0.9.0: per card, as day and night batches differ in size; 0.14.1:
+        per model, the sorter's model setting unless named)."""
+        return perf_get(self.store, "sorting_perf", model or self.settings()["model"])
 
-    def _add_perf(self, secs, cards):
-        xs = self._perf() + [round(secs / max(1, cards), 3)]
-        self.store._set_meta("sorting_perf", {"card_s": xs[-50:]})  # noqa: SLF001
+    def _add_perf(self, secs, cards, model=None):
+        perf_add(self.store, "sorting_perf", model or self.settings()["model"], secs, cards)
 
     def _est(self, n=BATCH):
-        """A batch of n cards' planning time: the measured median per card, else EST_CARD_S."""
-        xs = self._perf()
-        return (statistics.median(xs) if xs else EST_CARD_S) * n
+        """A batch of n cards' planning time: the model's measured median per card, else EST_CARD_S."""
+        return (pace(self._perf()) or EST_CARD_S) * n
 
     def batch_size(self, s, now=None):
-        """0.9.0: `night_batch` (12) inside a night window, else `batch` (6; Chat never waits long). 0.12.0: half that
-        for CF_SHRINK_S after the server said its context was full (a smaller batch next time)."""
-        n = int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
+        """0.14.1: as many cards as take about TARGET_S at the model's measured pace (size_for), at most `night_batch`
+        (12) inside a night window, else `batch` (6). 0.12.0: half that for CF_SHRINK_S after the server said its
+        context was full (a smaller batch next time)."""
+        cap = int(s["night_batch"] if self.night_of(now or self._now(), s) is not None else s["batch"])
+        n = size_for(pace(self._perf(s["model"])), cap)
         return max(1, n // 2) if self.clock() < self._shrink_until else n
+
+    def capacity(self, s=None, d=None):
+        """0.14.1: the measured pace on the background model and what it allows: seconds per card, cards an hour and a
+        day (inside the day caps), the batch sizes it picks, the model's context and the in-flight budget."""
+        s = s or self.settings()
+        d = d or self._day()
+        card_s = pace(self._perf(s["model"]))
+        ctx, src = self.ctx_size(s, ask=False)
+        out = {"model": s["model"], "card_s": round(card_s, 2) if card_s else None, "per_hour": None, "per_day": None,
+               "batch": size_for(card_s, s["batch"]), "night_batch": size_for(card_s, s["night_batch"]),
+               "ctx": ctx, "ctx_from": src, "budget": writer.budget_for(ctx), "lengths": int(d.get("length") or 0)}
+        if card_s:
+            hour = 3600 / card_s
+            out["per_hour"] = int(round(hour, -1)) if hour >= 100 else max(1, int(round(hour)))
+            out["per_day"] = int(min(s["day_cards"], s["day_gpu_min"] * 60 / card_s))
+        return out
 
     # collecting ----------------------------------------------------------------------------------------------------------
     def _remember(self, key, meta, area):
@@ -1868,7 +1996,9 @@ class Sorter:
 
     # one batch ---------------------------------------------------------------------------------------------------------
     def _batch(self, srcs, ctx, s, timeout=TIMEOUT_S):
-        """Build, ask, merge, store. Returns (cards, seconds, fallback count, usage). Raises writer.WriterError."""
+        """Build, ask, merge, store. Returns (cards, seconds, fallback count, usage). Raises writer.WriterError.
+        0.14.1: a request always fits the in-flight budget: cards come off the end until it does (they stay queued;
+        `cards` says how many went)."""
         cards, metas, keys = [], {}, {}
         self._fill_bodies(srcs)
         for i, src in enumerate(srcs, 1):
@@ -1877,10 +2007,17 @@ class Sorter:
             cards.append(dict({"id": cid}, **card))
             metas[cid], keys[cid] = meta, src
             self._remember(src["key"], meta, card.get("area"))
-        notes, nids = self._notes_for(cards, metas)
+        cap = self.budget(s)
+        while True:
+            notes, nids = self._notes_for(cards, metas)
+            body = request_body(s["model"], cards, ctx.system(notes), ctx.today, ctx.tz_name)
+            if len(cards) <= 1 or writer.estimate_tokens(body) <= cap:
+                break
+            cid = cards.pop()["id"]
+            metas.pop(cid)
+            keys.pop(cid)
         per_card = {cid: [nids[n["note"]] for n in notes if cid in n.get("applies_to", ()) and nids.get(n["note"])]
                     for cid in metas}
-        body = request_body(s["model"], cards, ctx.system(notes), ctx.today, ctx.tz_name)
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
@@ -2065,8 +2202,9 @@ class Sorter:
         n = batches = fb = 0
         tot = {"in": 0, "out": 0, "prompt_ms": 0, "predicted_ms": 0}
         reason = "done"
-        size = self.batch_size(s)
+        len0 = self.lengths
         while self.pending:
+            size = self.batch_size(s)   # 0.14.1: again before every batch (the first one measures the pace)
             est = self._est(size)
             if self.monotonic() - t0 + est > room:
                 reason = "budget"
@@ -2111,16 +2249,18 @@ class Sorter:
                 tot[k] += u[k] if isinstance(u[k], (int, float)) else 0
             d["cards"] += c
             d["gpu_s"] = round(d["gpu_s"] + secs, 1)
-            self._add_perf(secs, c)
+            self._add_perf(secs, c, s["model"])
         d["runs"] += 1
         d["fallback"] += fb
+        d["length"] = int(d.get("length") or 0) + self.lengths - len0   # 0.14.1: answers cut at max_tokens
         self.store._set_meta("sorting_day", d)  # noqa: SLF001
         el = max(self.monotonic() - t0, 0.001)
         self.last_run = {"at": self.clock(), "cards": n, "reason": reason}
         if batches:
             self.log(f"Callsheet sorting: {n} cards, {batches} batches, {fb} rules only, {tot['in']} in / "
                      f"{tot['out']} out tokens, {tot['prompt_ms']:.0f} ms prompt, {tot['predicted_ms']:.0f} ms output, "
-                     f"{n / el * 60:.0f} cards/min, {len(self.pending)} waiting ({reason})")
+                     f"{n / el * 60:.0f} cards/min, {len(self.pending)} waiting ({reason})"
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
         return reason
 
     # the night backfill ------------------------------------------------------------------------------------------------
@@ -2181,7 +2321,7 @@ class Sorter:
             if nk not in nights:
                 nights.append(nk)
                 st["nights"] = nights
-            rows = self.index.triage_rows(min_ts=st["since"], before=st.get("cursor"), limit=int(s["night_batch"]))
+            rows = self.index.triage_rows(min_ts=st["since"], before=st.get("cursor"), limit=self.batch_size(s, now))
             if not rows:
                 st["state"] = "done"
                 self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
@@ -2196,8 +2336,12 @@ class Sorter:
             st["paused"] = None
             if todo:
                 med = self._est(1)
+                len0, secs, left, t0 = self.lengths, 0.0, list(todo), self.monotonic()
                 try:
-                    _, secs, _, _ = self._batch(todo, ctx, s, room)
+                    while left:   # 0.14.1: one request unless the budget trimmed it (then the rest, back to back)
+                        c, sec, _, _ = self._batch(left, ctx, s, max(5, room - (self.monotonic() - t0)))
+                        secs, left = secs + sec, left[max(1, c):]
+                        self._add_perf(sec, max(1, c), s["model"])   # 0.14.1: the night measures the pace too
                 except writer.Busy as e:   # 0.12.0: also ContextFull (busy, the same rows next time)
                     if isinstance(e, writer.ContextFull):
                         self._shrink_until = self.clock() + CF_SHRINK_S
@@ -2216,6 +2360,11 @@ class Sorter:
                     st["paused"] = "server"
                     self.store._set_meta("sorting_backfill", st)  # noqa: SLF001
                     return "server"
+                finally:
+                    if self.lengths > len0:   # 0.14.1: answers cut at max tokens (counted, handled as before)
+                        d = self._day()
+                        d["length"] = int(d.get("length") or 0) + self.lengths - len0
+                        self.store._set_meta("sorting_day", d)  # noqa: SLF001
                 recent = (list(st.get("recent") or []) + [round(secs / len(todo), 3)])[-5:]   # per card
                 st["recent"] = recent
                 if len(recent) >= 3 and statistics.median(recent) > SLOW_FACTOR * med:
@@ -2237,7 +2386,7 @@ class Sorter:
             t0, ran = self.monotonic(), False
             r = self.backfill_step()
             # 0.9.0: batches back to back for up to NIGHT_RUN_S (not one per 30 s tick), at the model's own pace
-            while r == "ran" and self.monotonic() - t0 + self._est(int(s["night_batch"])) <= NIGHT_RUN_S and \
+            while r == "ran" and self.monotonic() - t0 + self._est(self.batch_size(s)) <= NIGHT_RUN_S and \
                     not self._stop.is_set():
                 ran = True
                 r = self.backfill_step()
@@ -2446,6 +2595,7 @@ class Sorter:
                                                         "rules_only": d["fallback"],
                                                         "rescued": self.labels.rescued(1).get(self._today().isoformat(), 0)},
                 "capped": self._caps(s, d), "server": bool(self._post_fn is not None or self._server()[0]),
+                "capacity": self.capacity(s, d),   # 0.14.1: the pace on this model and what it allows
                 "night": {"state": bf.get("state") or "waiting", "done": int(bf.get("done_n") or 0),
                           "total": int(bf.get("total") or 0), "nights": len(bf.get("nights") or []),
                           "paused": bf.get("paused") if bf.get("paused") in ("busy", "loading", "slow", "server")
@@ -2457,7 +2607,9 @@ class Sorter:
         bf = dict(s["backfill"], start=s["backfill"]["windows"][0][0], end=s["backfill"]["windows"][0][1])
         # (start, end: the first night window, for the page's two time fields; `windows` has them all)
         return {"settings": dict({k: s[k] for k in ("mode", "model", "batch", "night_batch", "day_cards",
-                                                    "day_gpu_min")}, backfill=bf),
+                                                    "day_gpu_min")}, backfill=bf,
+                                 ctx_size=s["ctx_sizes"].get(s["model"]), ctx_default=writer.CTX_DEFAULT,
+                                 ctx_limits=list(writer.CTX_LIMITS)),
                 "shadow_day": self.shadow_day(s), "shadow_days": SHADOW_DAYS, "status": self.status(),
                 "check": {"items": items, "done": done, "per_day": CHECK_PER_DAY,
                           "names": KIND_NAMES}, "counts": self.counts(), "fixes": list(FIXES),

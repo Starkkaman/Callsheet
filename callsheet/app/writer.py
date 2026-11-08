@@ -1670,12 +1670,129 @@ def reset_health():
 
 
 # --- 0.12.0: Callsheet's own in-flight budget on the shared server (design 2.9a; test lead, binding) -------------------
-# The server (np 2, one unified context of 65,536 tokens) answers HTTP 500 "Context size has been exceeded" when the
-# requests in flight need more than that. Callsheet counts what its own requests hold (the prompt estimated from its
-# characters, CHARS_PER_TOKEN, plus max_tokens) while they are in flight, and the background work (the sorter and the
-# reader) never takes the total over INFLIGHT_MAX, leaving room for Chat and Home Assistant. Chat is counted but never
+# The server (np 2, one unified context pool) answers HTTP 500 "Context size has been exceeded" when the requests in
+# flight need more than that. Callsheet counts what its own requests hold (the prompt estimated from its characters,
+# CHARS_PER_TOKEN, plus max_tokens) while they are in flight, and the background work (the sorter, the reader and the
+# picker) never takes the total over the budget, leaving room for Chat and Home Assistant. Chat is counted but never
 # refused (Chat goes first). Numbers only; memory only.
-INFLIGHT_MAX = 56_000
+# 0.14.1: the budget follows the background model's context: BUDGET_SHARE (80%) of it (65,536 -> 52,428; 32,768 ->
+# 26,214). The context comes from the server's GET /models entry for that model (`--ctx-size` in its args, or a context
+# number in its status; `server_ctx`, cached CTX_TTL_S), else the owner's per-model "Context size" setting, else
+# CTX_DEFAULT. A single background request is also kept inside the budget (the callers trim a batch to fit).
+CTX_DEFAULT = 32768
+CTX_LIMITS = (4096, 1_048_576)
+BUDGET_SHARE = 0.8
+CTX_TTL_S = 600            # the server's answer (or that it gave none) is remembered this long
+CTX_TIMEOUT = 5            # GET /models for the context: a short wait (the budget falls back to the setting)
+_CTX_FLAGS = ("-c", "--ctx-size", "--ctx_size", "-ctx", "ctx-size", "ctx_size")
+_CTX_KEYS = ("n_ctx", "ctx_size", "ctx-size", "context_size", "context_length")
+
+
+def budget_for(ctx):
+    """The background work's in-flight budget for a context of `ctx` tokens: BUDGET_SHARE of it."""
+    return int(int(ctx) * BUDGET_SHARE)
+
+
+INFLIGHT_MAX = budget_for(CTX_DEFAULT)   # the budget while nothing better is known (CTX_DEFAULT)
+
+
+def _ctx_num(v):
+    """A context size from a JSON value or an argument string, inside CTX_LIMITS, else None (0 = "the model's own")."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str) and re.fullmatch(r"\s*[0-9]{1,8}\s*", v):
+        v = int(v)
+    if isinstance(v, (int, float)) and CTX_LIMITS[0] <= int(v) <= CTX_LIMITS[1]:
+        return int(v)
+    return None
+
+
+def ctx_of_entry(entry):
+    """The context size a router's GET /models entry states for its model: `--ctx-size N` (or -c / -ctx, or
+    --ctx-size=N) in its args (entry.status.args or entry.args), else a context number in its status (n_ctx,
+    ctx_size, ...; never n_ctx_train, the model's training length). None when it says nothing usable."""
+    if not isinstance(entry, dict):
+        return None
+    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+    for args in (status.get("args"), entry.get("args")):
+        if isinstance(args, str):
+            args = args.split()
+        if not isinstance(args, list):
+            continue
+        args = [str(a) for a in args]
+        for i, a in enumerate(args):
+            name, eq, val = a.partition("=")
+            if name in _CTX_FLAGS:
+                n = _ctx_num(val) if eq else (_ctx_num(args[i + 1]) if i + 1 < len(args) else None)
+                if n:
+                    return n
+    for d in (status, entry, entry.get("meta") if isinstance(entry.get("meta"), dict) else {}):
+        for k in _CTX_KEYS:
+            n = _ctx_num(d.get(k))
+            if n:
+                return n
+    return None
+
+
+def models_ctx(res, model):
+    """The context size for `model` from a GET /models answer ({data: [...]} or {models: [...]}), else None."""
+    items = res.get("data") if isinstance(res, dict) else None
+    if not isinstance(items, list):
+        items = res.get("models") if isinstance(res, dict) else None
+    if not isinstance(items, list) or not model:
+        return None
+    for e in items:
+        if not isinstance(e, dict):
+            continue
+        names = [e.get("id"), e.get("name"), e.get("model")] + list(e.get("aliases") or [])
+        if str(model) in [str(n) for n in names if n]:
+            return ctx_of_entry(e)
+    return None
+
+
+_CTX_CACHE = {}
+_CTX_LOCK = threading.Lock()
+
+
+def server_ctx(base, key, model, fetch=None, clock=time.monotonic):
+    """The context the local server states for `model` (models_ctx over GET /models), or None. Never raises; the
+    answer (also "none") is cached CTX_TTL_S per server and model. fetch(base, key) (tests) replaces the GET."""
+    k = (str(base or "").rstrip("/"), str(model or ""))
+    if not k[0] or not k[1]:
+        return None
+    with _CTX_LOCK:
+        hit = _CTX_CACHE.get(k)
+        if hit is not None and clock() - hit[1] < CTX_TTL_S:
+            return hit[0]
+    try:
+        res = fetch(base, key) if fetch is not None else _local("GET", base, "/models", key, timeout=CTX_TIMEOUT)
+        n = models_ctx(res, model)
+    except Exception:  # noqa: BLE001 (no answer: the setting decides)
+        n = None
+    with _CTX_LOCK:
+        _CTX_CACHE[k] = (n, clock())
+    return n
+
+
+def cached_ctx(base, model):
+    """What server_ctx last learned for this server and model (no request), or None."""
+    with _CTX_LOCK:
+        hit = _CTX_CACHE.get((str(base or "").rstrip("/"), str(model or "")))
+    return hit[0] if hit else None
+
+
+def reset_ctx():
+    """Forget what the servers said about their contexts (tests)."""
+    with _CTX_LOCK:
+        _CTX_CACHE.clear()
+
+
+def finished_long(res):
+    """0.14.1: the answer stopped at max_tokens (finish_reason "length"); the callers count it (numbers only)."""
+    try:
+        return res["choices"][0].get("finish_reason") == "length"
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
 _INFLIGHT = {"tokens": 0, "n": 0, "peak": 0, "refused": 0}
 _INFLIGHT_LOCK = threading.Lock()
 
@@ -1750,9 +1867,10 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     0.8.5: an answer with garbage or a llama.cpp internal error raises ServerFault (never retried) and marks the
     server and model unhealthy; while marked, ServerFault comes at once; after FAULT_BACKOFF_S a health probe goes
     first.
-    0.12.0: the request is counted in the in-flight budget while it is out (estimate_tokens); `budget` (the sorter and
-    the reader pass INFLIGHT_MAX) refuses it with ContextFull("budget") when it would take the total over. HTTP 500
-    "Context size has been exceeded" raises ContextFull("server"): busy, never retried here, never a fault.
+    0.12.0: the request is counted in the in-flight budget while it is out (estimate_tokens); `budget` (the sorter, the
+    reader and the picker pass theirs: 0.14.1, 80% of the model's context, budget_for) refuses it with
+    ContextFull("budget") when it would take the total over. HTTP 500 "Context size has been exceeded" raises
+    ContextFull("server"): busy, never retried here, never a fault.
     0.14.0: `stream` (chat only) streams the answer (see _local); the lock, the in-flight count and the fault checks
     are the same, and the checks run on the whole answer when it is complete."""
     model = body.get("model") if isinstance(body, dict) else None

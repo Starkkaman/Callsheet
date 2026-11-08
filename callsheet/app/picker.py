@@ -2,6 +2,7 @@
 
 Which of the things that don't need the owner are still worth a mention: promos and updates the sorter sorted out,
 news stories and channel uploads from the owner's connectors, and reports. One request per batch of up to BATCH cards
+(0.14.1: sized from the model's measured seconds per card so a batch takes about triage.TARGET_S, triage.size_for)
 to the owner's local model (the sorter's model setting and slot, after the sorter's and the reader's passes). A card
 is built by Callsheet: the title, the first SENTS sentences (links removed) and the source's name (the owner's label
 for a connector; the sender and "email" for mail), inside the escaped <data> block. The owner's interests ("What to
@@ -34,7 +35,8 @@ rules-only matcher (interest words in the title and text).
 
 When: incremental, right after the reader's pass (triage.Sorter.read_after), under the same rules as the reader
 (call_guard, careful_guard, Chat first, the blocked windows BLOCKED and AUDIT in the owner's time zone, day caps), each
-request inside writer's in-flight budget (INFLIGHT_MAX); a full server (ContextFull) is waited out once (CF_WAIT_S)
+request inside writer's in-flight budget (0.14.1: 80% of the model's context, Sorter.budget; a batch is trimmed until
+one request fits it); a full server (ContextFull) is waited out once (CF_WAIT_S)
 and the batch retried at half size; a second time ends the run with every card still queued.
 
 Storage (callsheet.db): picker_items (enums only; KEEP_DAYS), picker_queue (references: key, hash, origin, index id),
@@ -46,7 +48,6 @@ import hashlib
 import json
 import re
 import secrets
-import statistics
 import sys
 import threading
 import time
@@ -59,7 +60,7 @@ import triage
 import writer
 
 PROMPT_VERSION = "p0130.1"
-BATCH = 12
+BATCH = 12                 # at most (0.14.1: sized by the measured pace below it, triage.size_for)
 SENTS = 2
 TITLE_CHARS = 160
 TEXT_CHARS = 320
@@ -164,7 +165,8 @@ def schema(card_ids, interest_ids):
 
 
 def request_body(model, system, user, card_ids, interest_ids):
-    """/chat/completions: strict json_schema, thinking off, temperature 0, the sorter's slot (triage.slot_for)."""
+    """/chat/completions: strict json_schema, thinking off (every model, Qwen family included), temperature 0, the
+    background model's slot (triage.slot_for)."""
     kwargs = {"enable_thinking": False}
     for part, extra in triage.PROFILES:
         if part in str(model).lower():
@@ -513,6 +515,7 @@ class Picker:
         self.lock = threading.Lock()
         self.plock = threading.Lock()
         self.last_run = None
+        self.lengths = 0                    # 0.14.1: answers that stopped at max_tokens (finish "length")
         with store.lock:
             store.db.executescript(_SCHEMA)
 
@@ -817,29 +820,35 @@ class Picker:
         att = d["valid"] + d["invalid"]
         return {"on": self.enabled(), "waiting": self.pending(), "today": {k: d[k] for k in (
             "cards", "batches", "picked", "flagged", "failed", "valid", "invalid", "context_full")},
-            "gpu_s": d["gpu_s"], "p50_s": pct(0.5), "p95_s": pct(0.95),
+            "gpu_s": d["gpu_s"], "p50_s": pct(0.5), "p95_s": pct(0.95), "lengths": int(d.get("length") or 0),
+            "batch": self.batch_size(),
             "schema_valid": round(d["valid"] / att, 3) if att else None, "last_run": self.last_run}
 
+    def _model(self):
+        return self.sorter.settings()["model"]
+
     def _est(self, n):
-        lat = (self._day().get("lat") or [])[-50:]
-        per = statistics.median(lat) / BATCH if lat else EST_CARD_S
-        return max(per, 0.5) * n
+        """n cards' planning time: the model's measured median seconds per card (0.14.1: per model), else
+        EST_CARD_S."""
+        per = triage.pace(triage.perf_get(self.store, "picker_perf", self._model())) or EST_CARD_S
+        return max(per, 0.1) * n
+
+    def batch_size(self):
+        """0.14.1: as many cards as take about triage.TARGET_S at the model's measured pace, 1 to BATCH."""
+        return triage.size_for(triage.pace(triage.perf_get(self.store, "picker_perf", self._model())), BATCH)
 
     def _caps(self, d):
         return d["cards"] >= DAY_CARDS or d["gpu_s"] >= DAY_GPU_MIN * 60
 
     # one batch ---------------------------------------------------------------------------------------------------------
     def _post(self, body, timeout):
+        """One request: Chat or the brief writer holding the server makes the picker yield (Chat first); inside the
+        in-flight budget (0.14.1: 80% of the model's context, Sorter.budget). An answer cut at max_tokens is counted."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        if self._post_fn is not None:
-            return self._post_fn(body, timeout)
-        base, key = self.sorter._server()  # noqa: SLF001
-
-        def notify(event):
-            if event == "lock":   # Chat or the brief writer has the server: the picker yields (Chat first)
-                raise triage.Busy("The model server is busy.")
-        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic, notify=notify,  # noqa: SLF001
-                            budget=writer.INFLIGHT_MAX)
+        res = self.sorter.post_bg(body, timeout, self._post_fn)
+        if writer.finished_long(res):
+            self.lengths += 1
+        return res
 
     def _take(self, n, skip):
         """Up to n queued cards with their text, newest first; a card whose text is gone waits (STALE_S at most)."""
@@ -888,16 +897,22 @@ class Picker:
         if not send:
             return 0, 0.0, None
         local = {f"i{n}": it["id"] for n, it in enumerate(ints, 1)}
-        data = []
-        for n, c in enumerate(send, 1):
-            c["id"] = f"k{n}"
-            data.append({"id": c["id"], "from": {"promo": "email promo", "update": "email update", "video": "channel",
-                                                 "news": "news feed", "report": "report"}[c["origin"]],
-                         "source": c["source"], "title": c["title"], "text": c["text"]})
         topics = [{"id": lid, "topic": next(i["text"] for i in ints if i["id"] == sid)} for lid, sid in local.items()]
-        notes, _rules = self._notes(send)
-        body = request_body(s["model"], system_text(self._tctx.first),
-                            user_message(data, topics, notes, self._tctx.today), [c["id"] for c in send], list(local))
+        cap = self.sorter.budget(s)
+        while True:   # 0.14.1: one request always fits the in-flight budget: cards come off the end (they stay queued)
+            data = []
+            for n, c in enumerate(send, 1):
+                c["id"] = f"k{n}"
+                data.append({"id": c["id"], "from": {"promo": "email promo", "update": "email update",
+                                                     "video": "channel", "news": "news feed", "report": "report"}[
+                    c["origin"]], "source": c["source"], "title": c["title"], "text": c["text"]})
+            notes, _rules = self._notes(send)
+            body = request_body(s["model"], system_text(self._tctx.first),
+                                user_message(data, topics, notes, self._tctx.today), [c["id"] for c in send],
+                                list(local))
+            if len(send) <= 1 or writer.estimate_tokens(body) <= cap:
+                break
+            send.pop()
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
@@ -972,10 +987,12 @@ class Picker:
         self._tctx = triage.context(self.store, self.sorter.people, today=self.sorter._today())  # noqa: SLF001
         ints = self.interests()
         t0 = self.monotonic()
-        n, waited, reason, size = 0, False, "done", BATCH
+        n, waited, reason, limit = 0, False, "done", BATCH
+        len0 = self.lengths
         tried = set()
         counts = collections.Counter()
         while True:
+            size = min(self.batch_size(), limit)   # 0.14.1: again before every batch (the pace is measured)
             if self.monotonic() - t0 + self._est(size) > room:
                 reason = "budget"
                 break
@@ -1008,7 +1025,7 @@ class Picker:
                 if not waited:   # wait it out once, then the same cards again in a smaller batch
                     waited = True
                     tried.difference_update(c["key"] for c in cards)
-                    size = max(1, size // 2)
+                    limit = max(1, size // 2)
                     self.sleep(CF_WAIT_S)
                     continue
                 reason = "context_full"
@@ -1037,11 +1054,15 @@ class Picker:
                 counts["picked" if valid else "failed"] += sent
                 d["gpu_s"] = round(d["gpu_s"] + secs, 1)
                 d["lat"] = (d.get("lat") or []) + [secs]
+                if sent:   # 0.14.1: the model's pace (per card) sizes the next batches
+                    triage.perf_add(self.store, "picker_perf", s["model"], secs, sent)
+        d["length"] = int(d.get("length") or 0) + self.lengths - len0   # 0.14.1: answers cut at max tokens
         self._save_day(d)
         self.last_run = {"at": self.clock(), "batches": n, "reason": reason}
         if n or counts:
             self.log(f"Callsheet picker: {counts['picked']} picked, {counts['flagged']} flagged, {counts['failed']} "
-                     f"not usable, {counts['context_full']} server full, {self.pending()} waiting ({reason})")
+                     f"not usable, {counts['context_full']} server full, {self.pending()} waiting ({reason})"
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
         return reason
 
     # More / Less like this ----------------------------------------------------------------------------------------------

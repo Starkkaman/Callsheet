@@ -3594,7 +3594,7 @@
     ['ai', null, 'Writing style', '[data-fk="ai-style"]', 'profile tone', ['active_profile']],
     ['ai', null, 'AI sorting', '#sr-st', 'sorting sort labels shadow week on off promos updates needs you', ['sorting.mode']],
     ['ai', null, 'Read each message', '#rd-st', 'reader reading what this is why you summary gist', []],
-    ['ai', null, 'Sorting model, items a day and night reading', '[data-fk="sr-adv"]', 'sorting gemma model limit backfill night days back', ['sorting.model', 'sorting.day_cards', 'sorting.backfill']],
+    ['ai', null, 'Sorting model, items a day and night reading', '[data-fk="sr-adv"]', 'sorting gemma model limit backfill night days back context size tokens', ['sorting.model', 'sorting.day_cards', 'sorting.backfill', 'sorting.ctx_size']],
     ['ai', null, 'Local model health', '#sr-st', 'unhealthy check again server broken garbage', []],
     ['ai', null, 'Check the sorting', '[data-fk="sr-check-open"]', 'sorting right wrong labels numbers copy', []],
     ['ai', null, 'What it learned', '#sr-ln', 'sorting learned forget senders domains taught', ['sorting.learned']],
@@ -4859,14 +4859,21 @@
     var from = h('input', { class: 'inp', id: 'sr-from', type: 'time' }); from.value = s.backfill.start;
     var to = h('input', { class: 'inp', id: 'sr-to', type: 'time' }); to.value = s.backfill.end;
     var days = h('input', { class: 'inp', id: 'sr-days', type: 'number', min: '1', max: '90', inputmode: 'numeric' }); days.value = String(s.backfill.days);
+    /* 0.14.1: the model's context size (used when the server doesn't say it); empty = the default */
+    var cl = s.ctx_limits || [4096, 1048576];
+    var ctx = h('input', { class: 'inp', id: 'sr-ctx', type: 'number', min: String(cl[0]), max: String(cl[1]), step: '1024', inputmode: 'numeric', placeholder: String(s.ctx_default || 32768) }); ctx.value = s.ctx_size ? String(s.ctx_size) : '';
     var aerr = errBox();
     var save = btn('btn', 'Save', { 'data-fk': 'sr-save' }, function () {
       run([save], aerr, function () {
-        return api('PATCH', 'api/sorting/settings', { model: model.value.trim(), day_cards: parseInt(cards.value, 10), backfill: { start: from.value, end: to.value, days: parseInt(days.value, 10) } });
+        return api('PATCH', 'api/sorting/settings', { model: model.value.trim(), day_cards: parseInt(cards.value, 10), backfill: { start: from.value, end: to.value, days: parseInt(days.value, 10) },
+          ctx_size: ctx.value.trim() ? parseInt(ctx.value, 10) : null });
       }, function (r) { srAfter(r, '[data-fk="sr-save"]', 'Saved.'); });
     });
+    var cap = st.capacity || {};
     var advP = h('div', { class: 'sradv', id: 'sr-adv' }, [
       h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-model' }, 'Model'), model, h('p', { class: 'fhint' }, 'As your local model server lists it. Gemma is the default.')]),
+      h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-ctx' }, 'Context size'), ctx,
+        h('p', { class: 'fhint' }, cap.ctx_from === 'server' ? 'Your model server says ' + cap.ctx.toLocaleString() + ' tokens; that counts.' : 'Tokens your model server gives this model, used when it doesn’t say.')]),
       h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-cards' }, 'Items a day'), cards]),
       h('div', { class: 'srwin' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-from' }, 'Night reading from'), from]),
         h('div', { class: 'field' }, [h('label', { class: 'label', for: 'sr-to' }, 'to'), to]),
@@ -4877,6 +4884,7 @@
       SR.adv = !SR.adv; adv.setAttribute('aria-expanded', String(SR.adv)); advP.hidden = !SR.adv;
     });
     var line = plural(st.waiting, 'item', 'items') + ' waiting · today ' + st.today.cards + ' sorted' + (st.capped ? ' · today’s limit reached' : '') +
+      (cap.per_hour ? ' · about ' + cap.per_hour.toLocaleString() + ' emails an hour on this model' : '') +
       (st.server ? '' : ' · needs a local model server (Advanced › Model server)');
     return h('section', { class: 'srsec srset', 'aria-labelledby': 'sr-st' }, [
       h('h2', { class: 'h3', id: 'sr-st', tabindex: '-1' }, 'Sorting'), seg, h('p', { class: 'note' }, SR_MODE_NOTE[s.mode] || ''), err,
@@ -6572,6 +6580,7 @@
       h('h3', { class: 'label wh', id: 'ch-lh' }, 'Local model'),
       h('div', { class: 'swrow' }, [sameSw, h('span', { 'aria-hidden': 'true' }, 'Same server and model as the brief writer')]),
       same ? h('p', { class: 'note' }, L.writer.base_url && L.writer.model ? 'Uses ' + L.writer.model + ' at ' + L.writer.base_url + '.' : 'Set up the writer’s local model above first, or turn this off.') : own,
+      L.shares_background ? h('p', { class: 'note chshare' }, 'Chat and background work share one model: no waiting for a swap.') : null,  /* 0.14.1 */
       h('div', { class: 'lm' }, [h('div', { class: 'field' }, [h('label', { class: 'label', for: 'ch-tools' }, 'Tool use'), tools]),
         num('ch-time', 'timeout', 'Timeout per step (seconds)'), num('ch-max', 'max_tokens', 'Max tokens per answer'),
         num('ch-slot', 'id_slot', 'Server slot for chat')]),

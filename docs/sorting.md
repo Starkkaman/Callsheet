@@ -3,8 +3,8 @@
 `callsheet/app/triage.py`. Design: `~/project/daily-brief/understanding/design.md` (sections 3, 6, 7, 9). The card,
 schema, prompt and merge rules are the ones the 0.8.3 screen measured (`triage083.py`). 0.9.0: prompt `t083.2` with
 its addressing cues, the `t083.3` to_owner rule, the anchored promo rule, the dates-only fact policy and the test
-lead's load rules (slot 1, batches of 6 by day and 12 at night, a pause around Careful briefs, two night windows;
-below).
+lead's load rules (slot 1, batches sized to take about 20 s, at most 6 by day and 12 at night, a pause around Careful
+briefs, two night windows; below).
 
 ## What happens
 
@@ -16,9 +16,10 @@ below).
    last look and at most 3 days old become cards. Each card gets its **rules pre-label** right away (stored, status
    `rules`); new or changed items (by content hash) go into **the work queue** (below). No model is called inside a
    sync.
-2. **The AI pass** (the sorter thread, every 30 s): batches of 6 cards by day and 12 inside the night windows, one
+2. **The AI pass** (the sorter thread, every 30 s): batches sized from the model's measured pace (at most 6 cards by
+   day and 12 inside the night windows), one
    request each, to the owner's local model server (the writer's address), with the model from the sorting settings
-   (Gemma by default), `id_slot` 1 for Gemma (Chat keeps slot 0; any other model: slot 0), temperature 0, thinking off, a strict per-request JSON schema (each card's own sentence ids are the only allowed
+   (Gemma by default), `id_slot` 1 for the background model (Chat keeps slot 0), temperature 0, thinking off, a strict per-request JSON schema (each card's own sentence ids are the only allowed
    `s` values) and the fixed system text. Cards go inside the escaped `<data>` block (`writer._block_json`).
 3. **The merge** (`merge`: `copied_only` (t083.3), then `promo_bulk`, then `place`, deterministic): overrides first (security -> Heads up; invites -> Your day; VIP, known
    person writing to the owner, owner named in To -> never demoted; flagged text -> the model's label is ignored),
@@ -49,10 +50,12 @@ below).
 | After a call time | no start until `AFTER_CALL_S` = 10 min after (the brief writer goes first) |
 | Sync or brief writer | never while `syncer.lock` is held or `syncer.writing` is set |
 | Careful brief (0.9.0) | `careful_guard`: nothing is sent while a Careful brief (a local writer preset other than Fast, e.g. Swift, which uses slot 1) runs (`syncer.writing.preset`) or is due within `CAREFUL_BEFORE_S` = 10 min (the next call time's kind maps to a slow preset, `presets.is_slow`); reason `careful`, checked before every run, between batches and by the night job |
-| Slot (0.9.0) | `slot_for(model)`: `SLOT` = 1 for Gemma (resident; Chat stays on slot 0), 0 for any other model |
-| Batch size (0.9.0) | `batch` = 6 by day (a batch takes ~15 s, so Chat or Home Assistant never waits more than ~30 s behind it), `night_batch` = 12 inside a night window; both settings (4-16) |
+| Slot (0.9.0, 0.14.1) | `slot_for(model, background)`: `SLOT` = 1 for the background model, the sorter's `model` setting whatever its name (resident; sorter, reader and picker share it; Chat stays on slot 0); 0 for any other model. Gemma stays the default for new installs. When Chat uses the same model on the same server, Setup → AI says "Chat and background work share one model: no waiting for a swap." (`chat.shares_background`) |
+| Batch size (0.9.0, 0.14.1) | self-sizing (`triage.size_for`): as many cards as fit in `TARGET_S` = 20 s at the model's measured seconds per card, at least 1, at most `batch` (6 by day) or `night_batch` (12 inside a night window), both settings (4-16); a model not yet measured starts at `FIRST_BATCH` = 2. The size is worked out again before every batch, so Chat or Home Assistant waits about 20 s at most behind one. Gemma at ~2.3 s/card: 6 by day, 8 at night; a dense 27B at ~10 s/card: 2 |
+| Context budget (0.14.1) | background requests together stay under 80% of the model's context (`writer.budget_for`): the size from the model server's `GET /models` entry (`--ctx-size` in its arguments, cached 10 min), else the per-model "Context size" in Setup → AI → Advanced (`ctx_sizes`, 4,096-1,048,576), else 32,768. 65,536 gives 52,428 tokens, 32,768 gives 26,214. A batch that would not fit loses cards from the end until it does (at least 1) |
+| Cut answers (0.14.1) | answers that stop at `max_tokens` (`finish_reason` "length") are counted per day (`lengths`) and in the log line, numbers only |
 | Chat | requests never wait for `writer.LOCAL_LOCK`: when it's taken the sorter yields (`Busy`) |
-| Measured pace | Gemma: 21-36 cards a minute (`MEASURED_CPM`); a batch is planned at the measured median seconds per card (`sorting_perf.card_s`, the last 50 batches), `EST_CARD_S` = 2.5 s until measured |
+| Measured pace | Gemma: 21-36 cards a minute (`MEASURED_CPM`); a batch is planned at the measured median seconds per card per model (`sorting_perf.models`, the last 50 batches each, 8 models; 0.14.1), `EST_CARD_S` = 2.5 s until measured. The status shows "about N emails an hour on this model" (`capacity`: the pace, the batch sizes, the day's reach under the caps, the context and its source) |
 | Daily cap | `day_cards` 1,200 cards and `day_gpu_min` 60 model minutes (1,200 / 21 = 57); then "N items waiting" |
 | By day | incremental only: the queue (new and changed items); no backfill outside the night windows |
 | Night backfill | `backfill.windows`, by default 22:00-01:00 and 04:00-06:00 (1-3 windows, each may cross midnight; the owner's server runs a security audit around 01:00-04:00); both windows are one night (a night runs noon to noon, keyed by the evening's date); 30 days back, 7 nights at most; each night tick runs batches back to back for up to `NIGHT_RUN_S` (= `RUN_S`), so the 5 hours read about 6,300-10,800 cards; pauses when the server is busy, yields the rest of the night after "Loading" twice or when its batches take 3x the measured median per card |
@@ -85,7 +88,8 @@ it. Switch off in Setup → AI.", **Got it** = `POST api/sorting/notice`; `GET a
   (decision, deadline, request, question), then the rules' order. Shadow mode adds nothing (byte-identical brief).
 - `off`: nothing is collected or sent.
 
-Other settings: `model`, `batch` (daytime, 4-16, default 6), `night_batch` (4-16, default 12), `day_cards`,
+Other settings: `model`, `batch` (daytime cap, 4-16, default 6), `night_batch` (night cap, 4-16, default 12), `ctx_size`
+(the current model's context size, or null to clear), `day_cards`,
 `day_gpu_min`, `backfill {on, windows: [[start, end], ...], days, nights}`. `PATCH api/sorting/settings` takes
 `backfill.windows` (1-3 windows of HH:MM, start != end) or `backfill.start`/`end`, which set the first window (the
 page's two time fields); `GET api/sorting` returns `windows` and the first window as `start`/`end`.

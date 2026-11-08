@@ -178,8 +178,28 @@ def schema(cids, sids):
                            "importance": {"enum": list(IMPORTANCE)}, "confidence": {"enum": list(CONF)}}}
 
 
+def fit(payload, notes, system, model, tctx, cids, sids, cap):
+    """0.14.1: (body, sids): the request, kept inside `cap` (the in-flight budget) by leaving out the earlier messages,
+    then the item's last sentences (halving), so a single request always fits; unchanged when it fits (always, on a
+    32k context: a request is a few thousand tokens)."""
+    def body_of(p, ids):
+        return request_body(model, system, user_message(p, notes, tctx.today, tctx.tz_name), cids, ids)
+    body = body_of(payload, sids)
+    if writer.estimate_tokens(body) <= cap:
+        return body, sids
+    item = {k: v for k, v in payload["item"].items() if k != "earlier"}
+    ids = list(sids)
+    while True:
+        p = dict(payload, item=dict(item, s={k: payload["item"]["s"][k] for k in ids}))
+        body = body_of(p, ids)
+        if len(ids) <= 1 or writer.estimate_tokens(body) <= cap:
+            return body, ids
+        ids = ids[:max(1, len(ids) // 2)]
+
+
 def request_body(model, system, user, cids, sids):
-    """/chat/completions: strict json_schema, thinking off, temperature 0, the sorter's slot (triage.slot_for)."""
+    """/chat/completions: strict json_schema, thinking off (every model, Qwen family included), temperature 0, the
+    background model's slot (triage.slot_for)."""
     kwargs = {"enable_thinking": False}
     for part, extra in triage.PROFILES:
         if part in str(model).lower():
@@ -1018,6 +1038,7 @@ class Reader:
         self.lock = threading.Lock()
         self.plock = threading.Lock()
         self.last_run = None
+        self.lengths = 0                    # 0.14.1: answers that stopped at max_tokens (finish "length")
         with store.lock:
             store.db.executescript(_SCHEMA)
 
@@ -1282,6 +1303,7 @@ class Reader:
         att = d["valid"] + d["invalid"]
         return {"on": self.enabled(), "setting": self.settings()["on"], "waiting": self.pending(), "today": {k: d[k] for k in (
             "items", "read", "flagged", "failed", "invalid", "valid", "context_full")}, "drops": dict(d["drops"]),
+            "lengths": int(d.get("length") or 0),
             "gpu_s": d["gpu_s"], "p50_s": pct(0.5), "p95_s": pct(0.95),
             "schema_valid": round(d["valid"] / att, 3) if att else None, "last_run": self.last_run}
 
@@ -1294,16 +1316,13 @@ class Reader:
 
     # one item ----------------------------------------------------------------------------------------------------------
     def _post(self, body, timeout):
+        """One request: Chat or the brief writer holding the server makes the reader yield (Chat first); inside the
+        in-flight budget (0.14.1: 80% of the model's context, Sorter.budget). An answer cut at max_tokens is counted."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        if self._post_fn is not None:
-            return self._post_fn(body, timeout)
-        base, key = self.sorter._server()  # noqa: SLF001
-
-        def notify(event):
-            if event == "lock":   # Chat or the brief writer has the server: the reader yields (Chat first)
-                raise triage.Busy("The model server is busy.")
-        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic, notify=notify,  # noqa: SLF001
-                            budget=writer.INFLIGHT_MAX)
+        res = self.sorter.post_bg(body, timeout, self._post_fn)
+        if writer.finished_long(res):
+            self.lengths += 1
+        return res
 
     def _context(self, src, meta, card, tctx, info):
         """The context entries c1..c8 (Callsheet's own data) and the trusted notes; each with a ref for the page and
@@ -1456,8 +1475,7 @@ class Reader:
         cids = [e["id"] for e in entries]
         payload = {"item": data, "context": [e["data"] for e in entries if e["data"] is not None]}
         system = system_text(tctx.owner_full or tctx.first, tctx.first)
-        body = request_body(s["model"], system, user_message(payload, notes, tctx.today, tctx.tz_name), cids,
-                            info["sids"])
+        body, sids = fit(payload, notes, system, s["model"], tctx, cids, info["sids"], self.sorter.budget(s))
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
@@ -1468,7 +1486,7 @@ class Reader:
             content = res["choices"][0]["message"].get("content")
         except (KeyError, IndexError, TypeError, AttributeError):
             content = None
-        ans, _why = parse(content, cids, info["sids"])
+        ans, _why = parse(content, cids, sids)
         if ans is None:
             self._count(day, dict.fromkeys(FIELDS, "schema_invalid"))
             tries = int(row.get("tries") or 0) + 1
@@ -1526,6 +1544,7 @@ class Reader:
         tctx = triage.context(self.store, self.sorter.people, today=self.sorter._today())  # noqa: SLF001
         t0 = self.monotonic()
         n, waited, reason = 0, False, "done"
+        len0 = self.lengths
         tried = set()
         counts = collections.Counter()
         while True:
@@ -1592,13 +1611,15 @@ class Reader:
             for k, v in drops.items():
                 d["drops"][k] = d["drops"].get(k, 0) + v
                 counts["drop_" + k] += v
+        d["length"] = int(d.get("length") or 0) + self.lengths - len0   # 0.14.1: answers cut at max tokens
         self._save_day(d)
         self.last_run = {"at": self.clock(), "items": n, "reason": reason}
         if n or counts:
             dropped = sum(v for k, v in counts.items() if k.startswith("drop_"))
             self.log(f"Callsheet reader: {counts['read']} read, {counts['flagged']} flagged, {counts['failed']} not "
                      f"usable, {dropped} texts dropped by checks, {counts['context_full']} server full, "
-                     f"{self.pending()} waiting ({reason})")
+                     f"{self.pending()} waiting ({reason})"
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
         return reason
 
     # the page ----------------------------------------------------------------------------------------------------------

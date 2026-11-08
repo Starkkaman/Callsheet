@@ -17,7 +17,8 @@ and overrides are never changed. Feed and report items said here are skipped in 
 shows at most 5 items and 3 per source; the rest are counted ("and N more in the lists below") and stay in those lists.
 
 ## The request
-One request per batch of up to 12 cards, to the owner's local model with the sorter's model and slot, after the
+One request per batch of up to 12 cards (0.14.1: as many as take about 20 s at the model's measured seconds per card,
+`picker_perf` per model; 2 until measured), to the owner's local model with the sorter's model and slot, after the
 reader's pass (`triage.Sorter.read_after`). A card: from (email promo, news feed, ...), source (the owner's label or
 the sender), title (160), the first two sentences of the text (links out, 320), inside the escaped `<data>` block.
 `<interests>` (trusted): the owner's topics as i1..iN, never their levels. `<notes>` (trusted): the owner's notes about
@@ -62,7 +63,7 @@ Undo (the Done / Hide pattern): Undo forgets a new choice, or sets the choice be
 ## Load rules
 As the reader: blocked windows 06:16-06:45, 12:16-12:45, 16:46-17:15 and 01:00-04:00 (owner's time zone), the
 sorter's call guard and careful guard, Chat first (`writer.LOCAL_LOCK`, `Busy`), each request inside the in-flight
-budget (`writer.INFLIGHT_MAX`), ContextFull waited out once (10 s) and retried at half size, a second time ends the
+budget (80% of the model's context, `Sorter.budget`; a batch that would not fit loses cards from the end; 0.14.1), ContextFull waited out once (10 s) and retried at half size, a second time ends the
 run with every card still queued. Day caps: 400 cards, 15 GPU minutes.
 
 ## Storage and logs

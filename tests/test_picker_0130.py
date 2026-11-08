@@ -685,7 +685,8 @@ class Load(Base):
                                    picker.user_message(cards, topics, [{"note": "n1", "text": "y" * 300}] * 8,
                                                        dt.date(2026, 11, 3)), [c["id"] for c in cards],
                                    [t["id"] for t in topics])
-        self.assertLess(writer.estimate_tokens(body) + picker.MAX_TOKENS, writer.INFLIGHT_MAX // 8)
+        # 0.14.1: a full batch is a small share of the budget even on a 32k pool (26,214)
+        self.assertLess(writer.estimate_tokens(body) + picker.MAX_TOKENS, writer.budget_for(32768) // 4)
 
     def test_context_full_waits_once_then_smaller(self):
         self.some()

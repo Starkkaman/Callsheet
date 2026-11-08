@@ -641,10 +641,11 @@ class Budget(unittest.TestCase):
             writer._INFLIGHT.update(tokens=0, n=0)  # noqa: SLF001
 
     def test_inflight_budget_refuses_over_the_limit(self):
-        with writer.inflight(40_000, writer.INFLIGHT_MAX):
-            self.assertEqual(writer.inflight_room(), writer.INFLIGHT_MAX - 40_000)
+        lim = writer.budget_for(65536)   # 0.14.1: the budget follows the context (52,428 on a 64k pool)
+        with writer.inflight(40_000, lim):
+            self.assertEqual(writer.inflight_room(lim), lim - 40_000)
             with self.assertRaises(writer.ContextFull) as cm:
-                with writer.inflight(20_000, writer.INFLIGHT_MAX):
+                with writer.inflight(20_000, lim):
                     pass
             self.assertEqual(cm.exception.rule, "budget")
             with writer.inflight(20_000):        # Chat: counted, never refused

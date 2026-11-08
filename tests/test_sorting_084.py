@@ -140,7 +140,9 @@ class PromptAndSchema(unittest.TestCase):
         self.assertTrue(user.rstrip().endswith("exactly these keys: c1."))
         self.assertNotIn("<system>", user)
         self.assertEqual(body["id_slot"], 1)             # 0.9.0: Gemma sorts on slot 1, Chat keeps slot 0
-        self.assertEqual(triage.request_body("Qwen3.5-9B-Q8_0", cards, "x", TUE.date(), "UTC")["id_slot"], 0)
+        # 0.14.1: slot 1 is the configured background model's, whatever its name (not only Gemma's)
+        self.assertEqual(triage.request_body("Qwen3.5-9B-Q8_0", cards, "x", TUE.date(), "UTC")["id_slot"], 1)
+        self.assertEqual(triage.slot_for("Qwen3.5-9B-Q8_0", background=triage.GEMMA), 0)
         self.assertEqual(body["temperature"], 0)
         self.assertEqual(body["model"], "gemma-4-26b-a4b-it-qat-q4_0")
         self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
@@ -286,6 +288,15 @@ class FromOwner(unittest.TestCase):
         self.assertEqual((f["status"], f["verified"], f["headsup"]), ("held", True, False))
 
 
+def paced(store, card_s=1.0, model=triage.GEMMA, key="sorting_perf"):
+    """0.14.1: a measured pace for the model (seconds per card), so batch sizes reach their caps (`batch` 6,
+    `night_batch` 12) as before; an unmeasured model starts at triage.FIRST_BATCH (tested in test_resident_0141)."""
+    p = store._get_meta(key, {}) or {}
+    models = dict(p.get("models") or {})
+    models[model] = [float(card_s)] * 10
+    store._set_meta(key, {"models": models})
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -303,6 +314,7 @@ class Base(unittest.TestCase):
         self.logs = []
         self.sorter = triage.Sorter(self.store, self.syncer, None, None, clock=self.clock.now,
                                     monotonic=self.clock.mono, post=self.post, log=self.logs.append)
+        paced(self.store)
 
     def threads(self, n, start=0, text="Hi Isaac, can you send the deck by Friday?"):
         return [(thread(str(i), f"Person {i} <p{i}@new.example>", f"Subject {SECRET} {i}", text),

@@ -106,8 +106,10 @@ After the answer (`parse`, then `check`):
   run never starts in one, stops before the next one starts, and leaves 60 s.
 - Day caps: 200 items and 15 GPU minutes a day.
 - In-flight budget (`writer.inflight`, shared with the sorter and Chat): requests count their estimated tokens
-  (characters / 3.5 plus `max_tokens`) while in flight; background work never takes Callsheet's total over 56,000
-  (Chat is counted, never refused).
+  (characters / 3.5 plus `max_tokens`) while in flight; background work never takes Callsheet's total over 80% of
+  the model's context (0.14.1, `Sorter.budget`: 52,428 for 65,536, 26,214 for 32,768; Chat is counted, never refused).
+  A request that would not fit drops the earlier items' context first, then halves the item's sentences (`reader.fit`).
+  Thinking is off for every model (Qwen included); answers cut at `max_tokens` are counted (`lengths`).
 - `writer.ContextFull` (the server's HTTP 500 "Context size has been exceeded", or the budget): wait 10 s and retry
   the same item once; a second time ends the run with the item still queued (nothing is lost). The sorter halves its
   batches for 15 minutes after one.
