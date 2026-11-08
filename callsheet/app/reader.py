@@ -178,23 +178,74 @@ def schema(cids, sids):
                            "importance": {"enum": list(IMPORTANCE)}, "confidence": {"enum": list(CONF)}}}
 
 
-def fit(payload, notes, system, model, tctx, cids, sids, cap):
-    """0.14.1: (body, sids): the request, kept inside `cap` (the in-flight budget) by leaving out the earlier messages,
-    then the item's last sentences (halving), so a single request always fits; unchanged when it fits (always, on a
-    32k context: a request is a few thousand tokens)."""
-    def body_of(p, ids):
-        return request_body(model, system, user_message(p, notes, tctx.today, tctx.tz_name), cids, ids)
-    body = body_of(payload, sids)
-    if writer.estimate_tokens(body) <= cap:
-        return body, sids
-    item = {k: v for k, v in payload["item"].items() if k != "earlier"}
+CTX_KEEP = 3               # 0.14.2: context entries kept when a request would read too long (the first ones)
+TASKS_KEEP = 1             # ... a project's open tasks kept then
+NOTES_KEEP = triage.NOTES_KEEP
+
+
+def _tasks_cut(entries):
+    """The context entries with each project's open tasks cut to TASKS_KEEP, and how many tasks went."""
+    out, n = [], 0
+    for e in entries:
+        t = e.get("open_tasks") if isinstance(e, dict) else None
+        if isinstance(t, list) and len(t) > TASKS_KEEP:
+            n += len(t) - TASKS_KEEP
+            e = dict(e, open_tasks=t[:TASKS_KEEP])
+        out.append(e)
+    return out, n
+
+
+def fit(payload, notes, system, model, tctx, cids, sids, cap, ptok=None):
+    """(body, sids, cids, counts): the request, kept inside `cap` (the in-flight budget) and, 0.14.2, `ptok` (the
+    estimated prompt tokens that take about writer.PREFILL_CAP_S to read on this model; None: no time cap).
+    The item's own text stays whole (BODY_CHARS): only low-value context is clipped, in this order, until it fits:
+    project task lists (TASKS_KEEP each), the context entries after the first CTX_KEEP, the owner's notes after the
+    first NOTES_KEEP (the most relevant). Still too long to read in time: it goes alone as it is (counts "alone").
+    0.14.1: still over the in-flight budget (never on a 32k context): the earlier messages are left out, then the
+    item's last sentences (halving), so a single request always fits. `counts` (clip_tasks, clip_context, clip_notes,
+    alone) are numbers only; `cids` are the context ids sent (the schema allows only those). Unchanged when it fits."""
+    counts = collections.Counter()
+
+    def body_of(p, ns, ids, cs):
+        return request_body(model, system, user_message(p, ns, tctx.today, tctx.tz_name), cs, ids)
+
+    def over(b):
+        return writer.estimate_tokens(b) > cap, ptok is not None and writer.prompt_tokens(b) > ptok
+    body = body_of(payload, notes, sids, cids)
+    mem, slow = over(body)
+    if not (mem or slow):
+        return body, sids, cids, counts
+    ctx, ns, p = list(payload.get("context") or []), list(notes or []), payload
+    for step in ("clip_tasks", "clip_context", "clip_notes"):
+        if step == "clip_tasks":
+            ctx, k = _tasks_cut(ctx)
+        elif step == "clip_context":
+            ctx, k = ctx[:CTX_KEEP], max(0, len(ctx) - CTX_KEEP)
+        else:
+            ns, k = ns[:NOTES_KEEP], max(0, len(ns) - NOTES_KEEP)
+        if not k:
+            continue
+        counts[step] = k
+        p = dict(payload, context=ctx)
+        cids = [e["id"] for e in ctx if isinstance(e, dict) and e.get("id")] + [x["id"] for x in ns]
+        body = body_of(p, ns, sids, cids)
+        mem, slow = over(body)
+        if not (mem or slow):
+            return body, sids, cids, counts
+    if not mem:   # the item itself takes longer than the cap to read: it goes alone (as always), counted
+        counts["alone"] = 1
+        return body, sids, cids, counts
+    item = {k: v for k, v in p["item"].items() if k != "earlier"}
     ids = list(sids)
     while True:
-        p = dict(payload, item=dict(item, s={k: payload["item"]["s"][k] for k in ids}))
-        body = body_of(p, ids)
+        p2 = dict(p, item=dict(item, s={k: p["item"]["s"][k] for k in ids}))
+        body = body_of(p2, ns, ids, cids)
         if len(ids) <= 1 or writer.estimate_tokens(body) <= cap:
-            return body, ids
+            break
         ids = ids[:max(1, len(ids) // 2)]
+    if ptok is not None and writer.prompt_tokens(body) > ptok:
+        counts["alone"] = 1
+    return body, ids, cids, counts
 
 
 def request_body(model, system, user, cids, sids):
@@ -1039,6 +1090,7 @@ class Reader:
         self.plock = threading.Lock()
         self.last_run = None
         self.lengths = 0                    # 0.14.1: answers that stopped at max_tokens (finish "length")
+        self._fit = collections.Counter()   # 0.14.2: what fitting the prefill cap did (counts only)
         with store.lock:
             store.db.executescript(_SCHEMA)
 
@@ -1319,7 +1371,7 @@ class Reader:
         """One request: Chat or the brief writer holding the server makes the reader yield (Chat first); inside the
         in-flight budget (0.14.1: 80% of the model's context, Sorter.budget). An answer cut at max_tokens is counted."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        res = self.sorter.post_bg(body, timeout, self._post_fn)
+        res = self.sorter.post_bg(body, timeout, self._post_fn, kind="reader")
         if writer.finished_long(res):
             self.lengths += 1
         return res
@@ -1475,7 +1527,12 @@ class Reader:
         cids = [e["id"] for e in entries]
         payload = {"item": data, "context": [e["data"] for e in entries if e["data"] is not None]}
         system = system_text(tctx.owner_full or tctx.first, tctx.first)
-        body, sids = fit(payload, notes, system, s["model"], tctx, cids, info["sids"], self.sorter.budget(s))
+        body, sids, cids, fitc = fit(payload, notes, system, s["model"], tctx, cids, info["sids"],
+                                     self.sorter.budget(s), self.sorter.prefill(s)["cap_tokens"])
+        if len(cids) < len(entries):   # 0.14.2: low-value context clipped to read in time (counted, never logged)
+            entries = [e for e in entries if e["id"] in cids]
+        self.sorter.fit_add("reader", fitc)
+        self._fit.update(fitc)
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
@@ -1545,6 +1602,7 @@ class Reader:
         t0 = self.monotonic()
         n, waited, reason = 0, False, "done"
         len0 = self.lengths
+        self._fit = collections.Counter()
         tried = set()
         counts = collections.Counter()
         while True:
@@ -1619,7 +1677,8 @@ class Reader:
             self.log(f"Callsheet reader: {counts['read']} read, {counts['flagged']} flagged, {counts['failed']} not "
                      f"usable, {dropped} texts dropped by checks, {counts['context_full']} server full, "
                      f"{self.pending()} waiting ({reason})"
-                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else "")
+                     + triage.fit_text(self._fit))
         return reason
 
     # the page ----------------------------------------------------------------------------------------------------------

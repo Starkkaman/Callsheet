@@ -300,11 +300,13 @@
   setupBtn.addEventListener('click', function () { ui.wiz = null; openSetup('home'); });  /* 0.7.1: Setup opens on its home page */
   backBtn.addEventListener('click', function () { location.hash = 'brief'; });
   refreshBtn.addEventListener('click', function () {
+    /* 0.14.2: Refresh with Chat open: a quiet note in Chat while the brief is written (one shared model) */
+    if (ui.view === 'brief' && U.tab === 'chat') { CH.briefNote = true; chatRefreshMsgs(); }
     run([refreshBtn], refreshErr, function () { return api('POST', 'api/sync', {}); }, function (ls) {
       if (S && ls) S.last_sync = ls;
       if (ls && ls.ok === false) refreshErr.textContent = 'Refreshed with problems: see Heads up on Agenda.';
       return showBrief();
-    });
+    }).then(function () { if (CH.briefNote && !(B && B.writing)) { CH.briefNote = false; chatRefreshMsgs(); } });
   });
 
   /* ---------- render: brief (tabs-v6) ----------
@@ -1697,7 +1699,7 @@
   }
 
   /* ----- the whole view ----- */
-  function render(d) { setBrief(d); renderBrief(); pollWriting(); }
+  function render(d) { setBrief(d); if (CH && CH.briefNote && !B.writing) CH.briefNote = false; renderBrief(); pollWriting(); }
   /* 0.6.1: while api/brief says "writing", ask again every poll_s seconds; render only when the writer is done */
   var writePoll = null;
   function pollWriting() {
@@ -5913,7 +5915,16 @@
     });
     if (CH.sending) out.push(h('div', { class: 'mq' }, [h('span', { class: 'sr' }, 'You asked: '), CH.sending]), chatBusy({ text: 'Sending…', steps: [] }, false));
     else if (conv && conv.pending) out.push(chatBusy(conv.pending, true));
+    if (chatBriefNote()) out.push(h('p', { class: 'cbrief', role: 'status' }, CHAT_BRIEF_NOTE));
     return out;
+  }
+  /* 0.14.2: "Writing the brief…" in Chat: after Refresh with Chat open (until the brief is written), or while a
+     question waits and Callsheet says a brief is being written (one shared model: answers may be slow) */
+  var CHAT_BRIEF_NOTE = 'Writing the brief — answers may be slow for a minute.';
+  function chatBriefNote() {
+    if (CH.briefNote) return true;
+    var conv = CH.conv, waiting = !!(CH.sending || (conv && conv.pending));
+    return waiting && !!((conv && conv.brief_note) || (CH.ov && CH.ov.brief_note) || (B && B.writing));
   }
   function chatIntro() {
     var ov = CH.ov || {};

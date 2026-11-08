@@ -140,7 +140,9 @@ class LocalNativeTest(Base):
         self.assertTrue(sysmsg.endswith(chat.CHAT_SAFETY))  # the fixed rules come last
         self.assertIn("Today is Wednesday 28 October 2026", sysmsg)
         self.assertIn("Personal, Work", sysmsg)
-        self.assertEqual(b[0]["messages"][-1], {"role": "user", "content": "What did Jonas send?"})
+        # 0.14.2: the time of day rides on the question, so the system prompt stays cached across turns
+        self.assertNotIn("10 am", sysmsg)
+        self.assertEqual(b[0]["messages"][-1], {"role": "user", "content": "What did Jonas send?" + "\n\n[Callsheet: the time now is 10 am.]"})
         tools_back = [m for m in b[2]["messages"] if m["role"] == "tool"]
         self.assertEqual([m["tool_call_id"] for m in tools_back], ["c1", "c2", "c3"])
         self.assertTrue(all(m["content"].startswith("<data>\n") and m["content"].endswith("\n</data>")
@@ -158,7 +160,7 @@ class LocalNativeTest(Base):
         conv, msg = self.ask("And now?", cid=conv["id"])
         self.assertEqual([m["role"] for m in conv["messages"]], ["user", "assistant", "user", "assistant"])
         msgs = self.bodies()[-1]["messages"]
-        self.assertEqual([m["content"] for m in msgs[1:]], ["First question?", "Nothing about that.", "And now?"])
+        self.assertEqual([m["content"] for m in msgs[1:]], ["First question?", "Nothing about that.", "And now?" + "\n\n[Callsheet: the time now is 10 am.]"])
 
     def test_max_rounds_then_forced_answer(self):
         self.local.messages = [tool_msg(call(f"c{i}", "stats", {})) for i in range(chat.MAX_ROUNDS)] + \
@@ -225,7 +227,7 @@ class LocalNativeTest(Base):
             # a blank answer never goes back as history
             self.local.messages = [say("Six.")]
             self.ask("again", cid=conv["id"])
-            self.assertEqual([m["content"] for m in self.bodies()[-1]["messages"][1:]], ["again"])
+            self.assertEqual([m["content"] for m in self.bodies()[-1]["messages"][1:]], ["again" + "\n\n[Callsheet: the time now is 10 am.]"])
 
     def test_server_errors_are_plain_sentences(self):
         self.local.status = 401

@@ -247,8 +247,8 @@ class Design090(unittest.TestCase):
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")
-        self.assertRegex(cfg, r'(?m)^version: "0\.14\.1"$')  # 0.14.1 = one resident model for Chat and background work
-        self.assertIn('APP_VERSION = "0.14.1"', (APP / "api.py").read_text(encoding="utf-8"))
+        self.assertRegex(cfg, r'(?m)^version: "0\.14\.2"$')  # 0.14.2 = background requests capped by measured prefill time
+        self.assertIn('APP_VERSION = "0.14.2"', (APP / "api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

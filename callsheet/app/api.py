@@ -47,7 +47,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.14.1"
+APP_VERSION = "0.14.2"
 
 
 class MethodNotAllowed(Exception):
@@ -471,6 +471,14 @@ class App:
             out["reader_counts"] = self.reader.counts()
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"Callsheet reader counts failed: {type(e).__name__}\n")
+        try:   # 0.14.2: background prefill pace, request sizes and split/clip counts (numbers only)
+            out["background"] = self.sorter.bg_numbers()
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Callsheet background numbers failed: {type(e).__name__}\n")
+        try:   # 0.14.2: per-turn Chat prompt tokens, cached tokens and first-token times (numbers only)
+            out["chat_turns"] = self.chat.numbers()
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"Callsheet chat numbers failed: {type(e).__name__}\n")
         return out
 
     def sorting_fix(self, body):

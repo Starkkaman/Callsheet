@@ -110,6 +110,11 @@ After the answer (`parse`, then `check`):
   the model's context (0.14.1, `Sorter.budget`: 52,428 for 65,536, 26,214 for 32,768; Chat is counted, never refused).
   A request that would not fit drops the earlier items' context first, then halves the item's sentences (`reader.fit`).
   Thinking is off for every model (Qwen included); answers cut at `max_tokens` are counted (`lengths`).
+- Prefill cap (0.14.2, `reader.fit`): a request is also kept to about 20 s of prefill at the model's measured pace
+  (`Sorter.prefill`, see sorting.md). The item's own text stays whole (up to 4,000 characters); only low-value context
+  is clipped, in this order: each project's open tasks after the first (`clip_tasks`), the context entries after the
+  first 3 (`clip_context`), the notes after the first (`clip_notes`); still too long, it goes alone as it is (`alone`).
+  Counted per day (`bg_day`) and in the run log line, numbers only.
 - `writer.ContextFull` (the server's HTTP 500 "Context size has been exceeded", or the budget): wait 10 s and retry
   the same item once; a second time ends the run with the item still queued (nothing is lost). The sorter halves its
   batches for 15 minutes after one.

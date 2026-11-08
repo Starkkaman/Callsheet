@@ -18,7 +18,7 @@ import chat  # noqa: E402  (path set up by test_projects_070)
 
 KEY = "sk-ant-api03-PREFETCHtestVALUE-5678abcd"
 # sha256 of the first request body of an unscoped question over T.fixture (json, sorted keys), as 3d27a0f built it
-UNSCOPED_BODY_SHA = "2142c7ee30fc0a55a2fd6c5bf92f88d040d7e00be6ef9a579575d3bd0f0b5b4b"
+UNSCOPED_BODY_SHA = "da95a7d0c5f7a086df417fe11214207770508595456d1efdb8a50ff91171f380"
 
 
 def pinned(body):
@@ -280,7 +280,7 @@ class ChatFlowTest(Base):
         b0 = loc.chats()[0]["body"]
         m = b0["messages"]
         self.assertEqual([x["role"] for x in m], ["system", "user", "assistant", "tool"])
-        self.assertEqual(m[1]["content"], "Is the venue contract approved?")
+        self.assertRegex(m[1]["content"], r"\AIs the venue contract approved\?\n\n\[Callsheet: the time now is [^\]\n]+\.\]\Z")
         tc = m[2]["tool_calls"][0]
         self.assertEqual((tc["id"], tc["function"]["name"]), (chat.PREFETCH_CALL, "search"))
         self.assertEqual(json.loads(tc["function"]["arguments"]), {"q": "Is the venue contract approved?"})
@@ -304,7 +304,7 @@ class ChatFlowTest(Base):
         _, msg2 = self.ask(c, "What should I do next?", cid=conv["id"])
         m = loc.chats()[2]["body"]["messages"]
         self.assertEqual([x["role"] for x in m][-3:], ["user", "assistant", "tool"])
-        self.assertEqual(m[-3]["content"], "What should I do next?")
+        self.assertEqual(m[-3]["content"], "What should I do next?\n\n[Callsheet: the time now is 10 am.]")
         self.assertIn("Book the caterer", m[-1]["content"])
 
     def test_json_fallback(self):

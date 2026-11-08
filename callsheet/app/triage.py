@@ -106,6 +106,15 @@ NIGHT_BATCH = 12           # inside the night windows, at most
 TARGET_S = 20
 FIRST_BATCH = 2
 PERF_MODELS = 8            # the measured pace is kept for this many models
+# 0.14.2 (test lead, binding): no single background request (sorter, reader, picker) takes more than about
+# writer.PREFILL_CAP_S (20 s) of the server's measured prefill (writer.prompt_tokens at the model's learned pace,
+# Sorter.prefill). Meaning is split, never clipped: a batch that would take longer sends fewer cards (the rest go in
+# the next one). Only low-value context is clipped (the owner's notes beyond the NOTES_KEEP most relevant; the reader
+# also clips context entries and project task lists), counted, never logged as text. One card still too long goes alone
+# (counted "alone"). PREFILL_OVER_S: a measured prefill above it is counted as over (the live bar is 25 s).
+NOTES_KEEP = 1
+PREFILL_OVER_S = 25.0
+FIT_KEYS = ("requests", "split", "moved", "alone", "clip_notes", "clip_context", "clip_tasks", "over")
 RUN_S = 180                # an incremental run: at most 3 minutes of model time
 END_BEFORE_S = 10 * 60     # ... ending at least 10 minutes before a call time
 AFTER_CALL_S = 10 * 60     # ... and starting no sooner than 10 minutes after one (the brief writer goes first)
@@ -1540,6 +1549,37 @@ def pace(xs):
     return statistics.median(xs) if xs else None
 
 
+def fit_text(c):
+    """0.14.2: a log line's fitting counts (empty when nothing was split or clipped): counts only."""
+    c = c or {}
+    parts = []
+    if c.get("split"):
+        parts.append(f"{c['split']} split ({c.get('moved', 0)} moved to the next request)")
+    for k, name in (("clip_notes", "notes"), ("clip_context", "context entries"), ("clip_tasks", "project tasks")):
+        if c.get(k):
+            parts.append(f"{c[k]} {name} clipped")
+    if c.get("alone"):
+        parts.append(f"{c['alone']} sent alone over the prefill cap")
+    return (", " + ", ".join(parts)) if parts else ""
+
+
+def _vals_get(store, key, model):
+    """0.14.2: a model's measured values from meta `key` ({"models": {model: [numbers]}}), the last PREFILL_KEEP."""
+    p = store._get_meta(key, {}) or {}  # noqa: SLF001
+    xs = (p.get("models") or {}).get(str(model)) if isinstance(p, dict) and isinstance(p.get("models"), dict) else None
+    return [float(x) for x in xs or [] if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0][
+        -writer.PREFILL_KEEP:]
+
+
+def _vals_add(store, key, model, value):
+    p = store._get_meta(key, {}) or {}  # noqa: SLF001
+    models = dict(p["models"]) if isinstance(p, dict) and isinstance(p.get("models"), dict) else {}
+    xs = _vals_get(store, key, model) + [float(value)]
+    models.pop(str(model), None)
+    models[str(model)] = xs[-writer.PREFILL_KEEP:]
+    store._set_meta(key, {"models": dict(list(models.items())[-PERF_MODELS:])})  # noqa: SLF001
+
+
 def _hhmm(v):
     return isinstance(v, str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", v) is not None
 
@@ -1601,6 +1641,7 @@ class Sorter:
         self.picker = None                  # 0.13.0: picker.Picker (api.App sets it); runs after the reader's pass
         self._shrink_until = 0.0            # 0.12.0: smaller batches until then (after a ContextFull)
         self.lengths = 0                    # 0.14.1: the sorter's answers that stopped at max_tokens (finish "length")
+        self._fit = collections.Counter()   # 0.14.2: the last batch's fitting (split, moved, alone, clip_notes)
 
     # settings ------------------------------------------------------------------------------------------------------
     def settings(self):
@@ -1803,18 +1844,101 @@ class Sorter:
         """The background work's in-flight budget (sorter, reader, picker): 80% of the model's context."""
         return writer.budget_for(self.ctx_size(s)[0])
 
-    def post_bg(self, body, timeout, post_fn=None, budget=None):
+    def post_bg(self, body, timeout, post_fn=None, budget=None, kind="sorter"):
         """0.14.1: one background request (the sorter's, the reader's or the picker's): through `post_fn` (tests) or
-        writer._post under the in-flight budget (80% of the model's context)."""
-        if post_fn is not None:
-            return post_fn(body, timeout)
+        writer._post under the in-flight budget (80% of the model's context). 0.14.2: the answer's prefill timings
+        teach the model's pace (writer._post learns from every local answer; a test's post_fn stands in for it) and
+        the request's size and measured prefill are counted for `kind` (numbers only)."""
         base, key = self._server()
+        if post_fn is not None:
+            res = post_fn(body, timeout)
+            writer.learn_prefill(base, body.get("model") if isinstance(body, dict) else None, body, res)
+        else:
+            def notify(event):
+                if event == "lock":   # Chat or the brief writer has the server: background work yields (Chat first)
+                    raise Busy("The model server is busy.")
+            res = writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
+                               notify=notify, budget=self.budget() if budget is None else budget)
+        try:
+            self._note_request(kind, body, res)
+        except Exception as e:  # noqa: BLE001 (counting never breaks the work)
+            self.log(f"Callsheet sorting: a request wasn't counted ({type(e).__name__})")
+        return res
 
-        def notify(event):
-            if event == "lock":   # Chat or the brief writer has the server: background work yields (Chat first)
-                raise Busy("The model server is busy.")
-        return writer._post(base, key, body, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
-                            notify=notify, budget=self.budget() if budget is None else budget)
+    # 0.14.2: the prompt's time (prefill) ---------------------------------------------------------------------------------
+    def prefill(self, s=None):
+        """{tps, measured, scale, cap_s, cap_tokens}: the background model's prefill pace (what writer learned from the
+        server's timings this session, else what this store measured before, else writer.PREFILL_TPS_DEFAULT), the
+        token estimate's correction and how many estimated prompt tokens fit in writer.PREFILL_CAP_S."""
+        s = s or self.settings()
+        base = self._server()[0]
+        tps = writer.prefill_rate(base, s["model"]) or pace(_vals_get(self.store, "prefill_perf", s["model"]))
+        scale = writer.token_scale(base, s["model"])
+        if scale == 1.0:
+            m = pace(_vals_get(self.store, "prefill_scale", s["model"]))
+            scale = min(writer.TOKEN_SCALE[1], max(writer.TOKEN_SCALE[0], m)) if m else 1.0
+        return {"tps": round(tps, 1) if tps else None, "measured": bool(tps), "scale": round(scale, 3),
+                "cap_s": writer.PREFILL_CAP_S, "default_tps": writer.PREFILL_TPS_DEFAULT,
+                "cap_tokens": writer.cap_tokens(tps, scale)}
+
+    def fits(self, body, cap, ptok):
+        """(over the in-flight budget, over the prefill cap): a request's two limits."""
+        return writer.estimate_tokens(body) > cap, writer.prompt_tokens(body) > ptok
+
+    def _bg_day(self):
+        d = self.store._get_meta("bg_day", {}) or {}  # noqa: SLF001
+        today = self._today().isoformat()
+        if not isinstance(d, dict) or d.get("day") != today:
+            d = {"day": today, "kinds": {}}
+        return d
+
+    def _kind_day(self, d, kind):
+        k = d["kinds"].setdefault(kind, {})
+        for f in FIT_KEYS:
+            k.setdefault(f, 0)
+        for f in ("est_max_s", "prefill_max_s", "prefill_s", "tokens_max"):
+            k.setdefault(f, 0)
+        return k
+
+    def fit_add(self, kind, counts):
+        """0.14.2: what a request's fitting did (split, moved, alone, clip_*), counted per day and kind."""
+        counts = {k: int(v) for k, v in dict(counts or {}).items() if k in FIT_KEYS and v}
+        if not counts:
+            return
+        d = self._bg_day()
+        k = self._kind_day(d, kind)
+        for f, v in counts.items():
+            k[f] += v
+        self.store._set_meta("bg_day", d)  # noqa: SLF001
+
+    def _note_request(self, kind, body, res):
+        """One background request: its estimated size and prefill, the server's measured prefill (prompt_ms), and the
+        pace it teaches (kept in callsheet.db for the next start). Numbers only."""
+        s = self.settings()
+        pf = self.prefill(s)
+        smp = writer.prefill_sample(body, res)
+        d = self._bg_day()
+        k = self._kind_day(d, kind)
+        k["requests"] += 1
+        k["tokens_max"] = max(k["tokens_max"], writer.prompt_tokens(body))
+        k["est_max_s"] = max(k["est_max_s"], writer.prefill_secs(body, pf["tps"], pf["scale"]))
+        if smp and smp.get("prompt_ms"):
+            secs = round(smp["prompt_ms"] / 1000, 1)
+            k["prefill_max_s"] = max(k["prefill_max_s"], secs)
+            k["prefill_s"] = round(k["prefill_s"] + secs, 1)
+            k["over"] += secs > PREFILL_OVER_S
+        self.store._set_meta("bg_day", d)  # noqa: SLF001
+        if smp and smp.get("tps"):
+            _vals_add(self.store, "prefill_perf", s["model"], smp["tps"])
+        if smp and smp.get("scale"):
+            _vals_add(self.store, "prefill_scale", s["model"], smp["scale"])
+
+    def bg_numbers(self):
+        """0.14.2 "Copy the numbers": the background model's prefill pace and cap, and today's requests per kind
+        (counts, sizes and seconds only)."""
+        s = self.settings()
+        d = self._bg_day()
+        return {"model": s["model"], "prefill": self.prefill(s), "today": d["kinds"]}
 
     def _post(self, body, timeout=TIMEOUT_S):
         """One request. timeout: the room left in the run (a batch never runs past the budget). The sorter never
@@ -2007,15 +2131,30 @@ class Sorter:
             cards.append(dict({"id": cid}, **card))
             metas[cid], keys[cid] = meta, src
             self._remember(src["key"], meta, card.get("area"))
-        cap = self.budget(s)
-        while True:
+        cap, ptok = self.budget(s), self.prefill(s)["cap_tokens"]
+        fit, keep = collections.Counter(), None
+        while True:   # 0.14.2: also inside the prefill cap: cards first (split), then the notes beyond the most relevant
             notes, nids = self._notes_for(cards, metas)
+            if keep is not None and len(notes) > keep:
+                fit["clip_notes"], notes = len(notes) - keep, notes[:keep]
             body = request_body(s["model"], cards, ctx.system(notes), ctx.today, ctx.tz_name)
-            if len(cards) <= 1 or writer.estimate_tokens(body) <= cap:
+            mem, slow = self.fits(body, cap, ptok)
+            if not (mem or slow):
                 break
-            cid = cards.pop()["id"]
-            metas.pop(cid)
-            keys.pop(cid)
+            if len(cards) > 1:
+                cid = cards.pop()["id"]
+                metas.pop(cid)
+                keys.pop(cid)
+                fit["moved"] += 1
+                continue
+            if keep is None and len(notes) > NOTES_KEEP:
+                keep = NOTES_KEEP
+                continue
+            fit["alone"] += bool(slow)   # one card still over the cap: it goes alone (counted)
+            break
+        fit["split"] = int(fit["moved"] > 0)
+        self.fit_add("sorter", fit)
+        self._fit = fit
         per_card = {cid: [nids[n["note"]] for n in notes if cid in n.get("applies_to", ()) and nids.get(n["note"])]
                     for cid in metas}
         t0 = self.monotonic()
@@ -2203,6 +2342,7 @@ class Sorter:
         tot = {"in": 0, "out": 0, "prompt_ms": 0, "predicted_ms": 0}
         reason = "done"
         len0 = self.lengths
+        fits = collections.Counter()   # 0.14.2: what fitting the prefill cap did this run (counts only)
         while self.pending:
             size = self.batch_size(s)   # 0.14.1: again before every batch (the first one measures the pace)
             est = self._est(size)
@@ -2245,6 +2385,7 @@ class Sorter:
                 reason = "server"
                 break
             n, batches, fb = n + c, batches + 1, fb + f
+            fits.update(self._fit)
             for k in tot:
                 tot[k] += u[k] if isinstance(u[k], (int, float)) else 0
             d["cards"] += c
@@ -2260,7 +2401,8 @@ class Sorter:
             self.log(f"Callsheet sorting: {n} cards, {batches} batches, {fb} rules only, {tot['in']} in / "
                      f"{tot['out']} out tokens, {tot['prompt_ms']:.0f} ms prompt, {tot['predicted_ms']:.0f} ms output, "
                      f"{n / el * 60:.0f} cards/min, {len(self.pending)} waiting ({reason})"
-                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else "")
+                     + fit_text(fits))
         return reason
 
     # the night backfill ------------------------------------------------------------------------------------------------

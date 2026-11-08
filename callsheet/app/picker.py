@@ -516,6 +516,7 @@ class Picker:
         self.plock = threading.Lock()
         self.last_run = None
         self.lengths = 0                    # 0.14.1: answers that stopped at max_tokens (finish "length")
+        self._fit = collections.Counter()   # 0.14.2: what fitting the prefill cap did (counts only)
         with store.lock:
             store.db.executescript(_SCHEMA)
 
@@ -845,7 +846,7 @@ class Picker:
         """One request: Chat or the brief writer holding the server makes the picker yield (Chat first); inside the
         in-flight budget (0.14.1: 80% of the model's context, Sorter.budget). An answer cut at max_tokens is counted."""
         timeout = max(5, min(TIMEOUT_S, int(timeout)))
-        res = self.sorter.post_bg(body, timeout, self._post_fn)
+        res = self.sorter.post_bg(body, timeout, self._post_fn, kind="picker")
         if writer.finished_long(res):
             self.lengths += 1
         return res
@@ -898,8 +899,11 @@ class Picker:
             return 0, 0.0, None
         local = {f"i{n}": it["id"] for n, it in enumerate(ints, 1)}
         topics = [{"id": lid, "topic": next(i["text"] for i in ints if i["id"] == sid)} for lid, sid in local.items()]
-        cap = self.sorter.budget(s)
-        while True:   # 0.14.1: one request always fits the in-flight budget: cards come off the end (they stay queued)
+        cap, ptok = self.sorter.budget(s), self.sorter.prefill(s)["cap_tokens"]
+        fit, keep = collections.Counter(), None
+        # 0.14.1: one request always fits the in-flight budget; 0.14.2: and the prefill cap (triage.NOTES_KEEP): cards
+        # come off the end (they stay queued for the next batch), then a single card's notes beyond the most relevant
+        while True:
             data = []
             for n, c in enumerate(send, 1):
                 c["id"] = f"k{n}"
@@ -907,12 +911,26 @@ class Picker:
                                                      "video": "channel", "news": "news feed", "report": "report"}[
                     c["origin"]], "source": c["source"], "title": c["title"], "text": c["text"]})
             notes, _rules = self._notes(send)
+            if keep is not None and len(notes) > keep:
+                fit["clip_notes"], notes = len(notes) - keep, notes[:keep]
             body = request_body(s["model"], system_text(self._tctx.first),
                                 user_message(data, topics, notes, self._tctx.today), [c["id"] for c in send],
                                 list(local))
-            if len(send) <= 1 or writer.estimate_tokens(body) <= cap:
+            mem, slow = self.sorter.fits(body, cap, ptok)
+            if not (mem or slow):
                 break
-            send.pop()
+            if len(send) > 1:
+                send.pop()
+                fit["moved"] += 1
+                continue
+            if keep is None and len(notes) > triage.NOTES_KEEP:
+                keep = triage.NOTES_KEEP
+                continue
+            fit["alone"] += bool(slow)
+            break
+        fit["split"] = int(fit["moved"] > 0)
+        self.sorter.fit_add("picker", fit)
+        self._fit.update(fit)
         t0 = self.monotonic()
         try:
             res = self._post(body, timeout)
@@ -989,6 +1007,7 @@ class Picker:
         t0 = self.monotonic()
         n, waited, reason, limit = 0, False, "done", BATCH
         len0 = self.lengths
+        self._fit = collections.Counter()
         tried = set()
         counts = collections.Counter()
         while True:
@@ -1062,7 +1081,8 @@ class Picker:
         if n or counts:
             self.log(f"Callsheet picker: {counts['picked']} picked, {counts['flagged']} flagged, {counts['failed']} "
                      f"not usable, {counts['context_full']} server full, {self.pending()} waiting ({reason})"
-                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else ""))
+                     + (f", {self.lengths - len0} cut at max tokens" if self.lengths > len0 else "")
+                     + triage.fit_text(self._fit))
         return reason
 
     # More / Less like this ----------------------------------------------------------------------------------------------

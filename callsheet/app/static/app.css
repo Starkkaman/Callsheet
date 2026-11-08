@@ -2826,6 +2826,7 @@ html.fa-lock{overflow:hidden}
 .bv .lmark{margin-left:2px}
 .bv .lflag{text-decoration:underline dashed var(--alert);text-underline-offset:3px}
 .bv .lstate{margin:2px 0 0;font-size:var(--fs-sm);color:var(--muted)}
+.bv .chatcol .cbrief{margin:4px 0 0;font-size:var(--fs-sm);color:var(--muted)}   /* 0.14.2: quiet, no accent colour */
 .bv .lstate:empty{display:none}
 .bv a.wchip{cursor:pointer;color:inherit;text-decoration:none}
 .bv a.wchip .wt{text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:3px}

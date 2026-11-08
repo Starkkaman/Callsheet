@@ -1389,7 +1389,7 @@ def _log_answer(log, res, wall):
     parts = [f"finish {str(finish)[:20] if finish else 'unknown'}",
              f"{_num(usage.get('prompt_tokens')) or 0} prompt / {_num(usage.get('completion_tokens')) or 0} "
              "completion tokens"]
-    for k in ("prompt_n", "cache_n"):
+    for k in ("prompt_n", "cache_n", "prompt_ms"):   # 0.14.2: prompt_ms (the prefill's own time)
         if _num(timings.get(k)) is not None:
             parts.append(f"{k} {_num(timings.get(k))}")
     log("Callsheet writer: local answer: " + ", ".join(parts) + f", {wall:.1f}s")
@@ -1793,6 +1793,126 @@ def finished_long(res):
         return res["choices"][0].get("finish_reason") == "length"
     except (KeyError, IndexError, TypeError, AttributeError):
         return False
+
+
+# --- 0.14.2: the prompt's time on the server (test lead, binding) --------------------------------------------------------
+# One resident model serves Chat and the background work. A background request makes Chat wait for its prompt to be
+# read (prefill), so no single sorter, reader or picker request may take more than about PREFILL_CAP_S of measured
+# prefill. The pace is learned per server and model from llama.cpp's own timings in every local answer
+# (timings.prompt_n tokens in timings.prompt_ms: the tokens the server actually read, cached ones left out), the median
+# of the last PREFILL_KEEP answers that read at least PREFILL_MIN_N tokens; PREFILL_TPS_DEFAULT (conservative) until
+# then. Callsheet's own estimate (characters / CHARS_PER_TOKEN) is corrected by the measured ratio of the server's
+# usage.prompt_tokens to it (TOKEN_SCALE, clamped). Numbers only; memory only (the sorter keeps its own copy in
+# callsheet.db, triage.Sorter.prefill).
+PREFILL_TPS_DEFAULT = 200.0
+PREFILL_CAP_S = 20.0
+PREFILL_MIN_N = 256
+PREFILL_KEEP = 20
+TOKEN_SCALE = (0.6, 1.8)
+_PREFILL = {}
+_PREFILL_LOCK = threading.Lock()
+
+
+def prompt_tokens(body):
+    """The prompt's estimated tokens (messages, and tools when offered; no schema, no max_tokens):
+    characters / CHARS_PER_TOKEN. The server reads this much (minus what it has cached)."""
+    if not isinstance(body, dict):
+        return 0
+    chars = 0
+    for m in body.get("messages") or []:
+        c = m.get("content") if isinstance(m, dict) else None
+        chars += len(c) if isinstance(c, str) else len(json.dumps(c, ensure_ascii=False)) if c else 0
+        if isinstance(m, dict) and m.get("tool_calls"):
+            chars += len(json.dumps(m["tool_calls"], ensure_ascii=False))
+    if body.get("tools"):
+        chars += len(json.dumps(body["tools"], ensure_ascii=False))
+    return int(chars / CHARS_PER_TOKEN)
+
+
+def prefill_sample(body, res):
+    """One answer's prefill measurement: {tps, scale, prompt_n, prompt_ms, cache_n, prompt} or None (no usable
+    timings). tps: prompt_n / prompt_ms (None when fewer than PREFILL_MIN_N tokens were read); scale: the server's
+    usage.prompt_tokens over prompt_tokens(body) (None when either is small)."""
+    if not isinstance(res, dict):
+        return None
+    tm = res.get("timings") if isinstance(res.get("timings"), dict) else {}
+    usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+    pn, pm, cn = _num(tm.get("prompt_n")), tm.get("prompt_ms"), _num(tm.get("cache_n"))
+    pm = float(pm) if isinstance(pm, (int, float)) and not isinstance(pm, bool) and pm > 0 else None
+    total = _num(usage.get("prompt_tokens"))
+    est = prompt_tokens(body)
+    tps = round(pn / (pm / 1000), 1) if pn and pm and pn >= PREFILL_MIN_N else None
+    scale = round(total / est, 3) if total and est >= 200 and total >= 100 else None
+    if tps is None and scale is None and pn is None:
+        return None
+    return {"tps": tps, "scale": scale, "prompt_n": pn, "prompt_ms": round(pm) if pm else None, "cache_n": cn,
+            "prompt": total}
+
+
+def _pkey(base, model):
+    return str(base or "").rstrip("/"), str(model or "")
+
+
+def learn_prefill(base, model, body, res):
+    """Remember one answer's prefill pace for this server and model (writer._post does it for every local answer).
+    Returns prefill_sample's dict or None."""
+    smp = prefill_sample(body, res)
+    if smp is None or (smp["tps"] is None and smp["scale"] is None):
+        return smp
+    with _PREFILL_LOCK:
+        rec = _PREFILL.setdefault(_pkey(base, model), {"tps": [], "scale": []})
+        for k in ("tps", "scale"):
+            if smp[k] is not None:
+                rec[k] = (rec[k] + [smp[k]])[-PREFILL_KEEP:]
+    return smp
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def prefill_rate(base, model):
+    """The measured median prefill tokens per second for this server and model, or None (not measured yet)."""
+    with _PREFILL_LOCK:
+        rec = _PREFILL.get(_pkey(base, model))
+        return _median(rec["tps"]) if rec and rec["tps"] else None
+
+
+def token_scale(base, model):
+    """The measured median of the server's prompt tokens over Callsheet's estimate (TOKEN_SCALE bounds), else 1.0."""
+    with _PREFILL_LOCK:
+        rec = _PREFILL.get(_pkey(base, model))
+        m = _median(rec["scale"]) if rec and rec["scale"] else None
+    return min(TOKEN_SCALE[1], max(TOKEN_SCALE[0], m)) if m else 1.0
+
+
+def cap_tokens(tps, scale=1.0, cap_s=PREFILL_CAP_S):
+    """How many estimated prompt tokens (prompt_tokens) take about cap_s of prefill at `tps` (default pace when None)."""
+    return int(cap_s * (tps or PREFILL_TPS_DEFAULT) / max(TOKEN_SCALE[0], scale or 1.0))
+
+
+def prefill_secs(body, tps, scale=1.0):
+    """A request's estimated prefill seconds (everything read, nothing cached: the conservative side)."""
+    return round(prompt_tokens(body) * (scale or 1.0) / (tps or PREFILL_TPS_DEFAULT), 1)
+
+
+def prefill_view():
+    """{model: {tps, scale, n}} for "Copy the numbers" (numbers and the model name only)."""
+    with _PREFILL_LOCK:
+        return {f"{k[1]}": {"tps": _median(v["tps"]), "scale": _median(v["scale"]), "n": len(v["tps"])}
+                for k, v in _PREFILL.items()}
+
+
+def reset_prefill():
+    """Forget the measured paces (tests)."""
+    with _PREFILL_LOCK:
+        _PREFILL.clear()
+
+
 _INFLIGHT = {"tokens": 0, "n": 0, "peak": 0, "refused": 0}
 _INFLIGHT_LOCK = threading.Lock()
 
@@ -1930,6 +2050,10 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
     finally:
         LOCAL_LOCK.release()
     _log_answer(log, res, clock() - t0)
+    try:   # 0.14.2: every local answer teaches this server and model's prefill pace (numbers only)
+        learn_prefill(base, model, body, res)
+    except Exception:  # noqa: BLE001 (measuring never breaks an answer)
+        pass
     return res
 
 

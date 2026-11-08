@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.2 (background work that never makes Chat wait long)
+
+- **No background request takes more than about 20 seconds to read.** Callsheet times how fast your model reads a
+  prompt and keeps every sorting, reading and picking request short enough to read in about 20 seconds. Until it has
+  measured your model it assumes a slow one.
+- **Split, not cut.** A batch that would take too long goes as smaller batches; nothing is left out. An email the
+  reader explains is always sent whole (up to its usual length); only the extras around it get shorter: long project
+  task lists, the context beyond the first few entries, and your notes beyond the most relevant one. An item that is
+  still too long goes on its own. Callsheet counts how often this happens, numbers only.
+- **A note while a brief is being written.** When you press Refresh with a chat open, or ask something while
+  Callsheet is writing a brief, Chat says "Writing the brief — answers may be slow for a minute."
+- **Faster follow-up questions.** The model server keeps the start of the conversation ready, so a follow-up only
+  reads what is new. The last few turns go along whole; older ones go along short, with the items they used, so Chat
+  can open an item again when you ask about it.
+- **More in "Copy the numbers".** Each chat turn's prompt size, how much of it the server had ready, and the time
+  to the first word; the background model's reading speed and today's request sizes. Numbers only.
+
 ## 0.14.1 (one model for everything)
 
 - **Any model can stay loaded for background work.** Sorting, reading and picking use the model you chose in

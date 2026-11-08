@@ -300,11 +300,11 @@ class Fits(Base):
         tctx = types.SimpleNamespace(today=TUE.date(), tz_name="UTC")
         system = reader.system_text("Isaac Hammond", "Isaac")
         sids = list(sents)
-        body, ids = reader.fit(payload, [], system, SWIFT, tctx, [], sids, writer.budget_for(32768))
+        body, ids, _cids, _fit = reader.fit(payload, [], system, SWIFT, tctx, [], sids, writer.budget_for(32768))
         self.assertEqual(ids, sids)                                          # fits: unchanged
         self.assertIn('"earlier"', body["messages"][1]["content"])
         cap = writer.estimate_tokens(body) // 2
-        body, ids = reader.fit(payload, [], system, SWIFT, tctx, [], sids, cap)
+        body, ids, _cids, _fit = reader.fit(payload, [], system, SWIFT, tctx, [], sids, cap)
         self.assertLessEqual(writer.estimate_tokens(body), cap)
         self.assertNotIn('"earlier"', body["messages"][1]["content"])
         self.assertLess(len(ids), len(sids))
