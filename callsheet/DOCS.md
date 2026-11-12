@@ -517,6 +517,10 @@ Pick a look under **Look** in the header or in Setup > About you.
 - Know me (0.6.0) keeps its index in `index.db` next to it (readable only by the app, not in backups) and chats in
   `chat/` (30 days). The brief writer never gets the index; Chat sends what it found only to the model you picked
   for it, and profile suggestions send only names, email domains, counts and short subject lines.
+- The message store (0.15.0) keeps the text of every message Callsheet reads, received and sent (Gmail, Signal,
+  Slack), and your calendar events, in `messages.db` next to it (readable only by the app). It is **in** Home
+  Assistant backups and nothing is deleted from it. The first time, Gmail is read back 90 days (Setup › Advanced ›
+  Message history). Chat searches it and, as with the index, sends what it found only to the model you picked for it.
 
 ## Troubleshooting
 
