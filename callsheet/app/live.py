@@ -410,7 +410,8 @@ class SlackReader:
         self.client = client or (lambda token: slack.Client(token, clock=clock, sleep=sleep, max_calls=SLACK_CALLS))
 
     def targets(self):
-        return [(w["id"], "Slack · " + (w.get("team") or w.get("domain") or w["id"])) for w in self.store.slack_workspaces()]
+        return [(w["id"], "Slack · " + (w.get("team_name") or w.get("team") or w.get("domain") or w["id"]))
+                for w in self.store.slack_workspaces()]
 
     def _names(self, cl, ws):
         names = {k: str(v.get("name") if isinstance(v, dict) else v)[:80]
@@ -709,7 +710,7 @@ class Live:
             if self.RANK.index(st) > self.RANK.index(worst):
                 worst = st
             if warn:
-                warns.append(f"{label if len(targets) > 1 else NAMES[kind]} {warn}.")
+                warns.append(f"{label if len(targets) > 1 else NAMES[kind]} {warn.rstrip('.')}.")
         mine = [rows[a] for a, _ in targets if a in rows]
         checked = min((r["last_success"] for r in mine if r.get("last_success")), default=None) \
             if all(r.get("last_success") for r in mine) and mine else None
@@ -744,9 +745,9 @@ class Live:
         if st.get("running") and not st.get("error"):
             return {"key": "signal", "name": "Signal", "state": "live", "word": "Live", "line": "Live · " + read,
                     "warn": None, "checked_at": row.get("last_success"), "read_up_to": newest, "backlog": 0}
-        why = st.get("error") or "signal-cli isn't running"
+        why = str(st.get("error") or "signal-cli isn't running").rstrip(".")
         return {"key": "signal", "name": "Signal", "state": "behind", "word": "Not receiving",
-                "line": "Not receiving · " + read, "read_up_to": newest, "backlog": 0, "checked_at": row.get("last_success"),
+                "line": read[:1].upper() + read[1:], "read_up_to": newest, "backlog": 0, "checked_at": row.get("last_success"),
                 "warn": f"Signal isn't receiving ({why}). Callsheet restarts it by itself; messages wait on Signal's "
                         "servers meanwhile."}
 
