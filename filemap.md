@@ -28,6 +28,8 @@ streamed answers (`SSEReader`, `StreamAnswer`, `read_stream`, `StreamCut`) under
 - `callsheet/app/evalscore.py`: pure draft scorer for the evaluation (ported from the replay harness, object-keyed replies): commitments, placeholders used/needed, invented answers, answer-shape check.
 - `callsheet/app/oauth.py`: account connection flow: state + PKCE in memory (15 min), auth URL, paste-back parsing, code exchange, plain-word errors.
 - `callsheet/app/index.py`: 0.6.0 Know me index: `/data/index.db` (0600) with items + FTS5, idempotent upserts, planted-instruction flags (`instr`, hashes only; backfill), cursors, search/get/stats, delete per source/account, wipe. 0.8.4: `hidden` column (`hidden_text` on rows), `triage_rows`/`triage_count` for the sorter.
+- `callsheet/app/msgstore.py`: 0.15.0 message store `/data/messages.db` (0600, in backups): messages in both directions, revisions (edits, deletes), calendar events, cursors, freshness, FTS5 (LIKE fallback), one writer thread; `ChatView` merges it into Chat's search/get_item.
+- `callsheet/app/live.py`: 0.15.0 live readers (Gmail backfill + history, Calendar, Slack, Signal ingest via signalcli's `on_envelope`), backoff, freshness and the Sources panel's status rows.
 - `callsheet/app/know_profile.py`: 0.6.0 Know me 3b: the drafted profile from the index (people, recurring, habits, VIP candidates, projects), AI suggestions and questions (aggregates only), owner saves and answers into memory.md.
 - `callsheet/app/sources.py`: 0.6.0 index sources (read-only): Gmail, Calendar, Slack, Drive (scope check via token refresh), Obsidian (vault check + note parsing), Signal (SQL over the 0.5.1 store's signal tables: live and imported, ignored chats left out, the refresh also takes history imported later); retry/skip errors in plain words.
 - `callsheet/app/inject.py`: 0.6.0 Chat: rules-only detector for instructions planted in indexed items (`instructions(text)`, short sentence hashes for the index) and the answer post-check (`repeated`, `LABEL`); 0.7.1: link lures (`link_lure`, `urls`, `host`; not for `OWN_SOURCES` = obsidian), `VERSION` 2.
@@ -101,6 +103,7 @@ job (`Live`: whole sentences, defanged and marked; `_sink`, `_claude_stream`, St
 - `tests/test_hidden_html_082.py`: 0.8.2 hidden HTML text: each hiding technique, nesting, malformed HTML, visible text unchanged, `hidden_text` on mail and event items, 1 MB and hostile-body timing.
 - `tests/test_people_adversarial_082.py`: 0.8.2 People adversarial cases (S-T3, S-T4, S-T5, S-T6, S-T17, S-T19, S-L3; mail, Slack and Signal), the second confirm step for a merge into a VIP (people, API, page) and exact Undo merge.
 - `tests/fake_google_index.py`: the fake Google plus Gmail list/get(full), profile, Calendar pages, Drive list/export/media (scope-gated) and one-shot injected failures.
+- `tests/test_messages_0150.py`: 0.15.0 message store and live readers with in-process fakes (backfill, history, expiry, sent, Signal sync/group, Slack own/threads, Calendar changes, freshness, ChatView, API, allowlist).
 - `tests/test_api_google.py`: API end to end against the fake Google: settings, areas, VIPs, connect flow and its errors, sync, live brief, GET-only, secrets never returned.
 - `tests/test_google_client.py`: Google client allowlist (GET only to Gmail/Calendar, POST only to token/revoke); only google.py opens connections.
 - `tests/test_rules.py`: schedule and reply rules, call times and days off, scheduler, brief composition.
@@ -169,6 +172,7 @@ job (`Live`: whole sentences, defanged and marked; `_sink`, `_claude_stream`, St
 - `docs/push-and-alerts.md`: 0.5.1 phone notifications and urgent alerts: Home Assistant access and allowlist, deep link, settings, summary and alert texts, the light check, urgent rules, timing, rate limit, state, API.
 - `docs/know-me-profile.md`: 0.6.0 Know me 3b: the draft, the AI pass and its prompt, the memory boundary, questions, API.
 - `docs/know-me-index.md`: 0.6.0 Know me index (3a): schema, sources and allowlist additions, scan and estimates, API, and the Python interface for 3b/3c.
+- `docs/messages.md`: 0.15.0 message store and live readers: schema, readers and their cadence, freshness states and API, Chat's merge, disk estimate.
 - `docs/writer-presets.md`: 0.6.1 writer presets per call time: design (from model-per-call-time.md), data model, validation, the Careful suggestion, API, run flow, logs, risks.
 - `docs/people.md`: 0.8.2 People: data model, match signals, the owner record, where people are used, migration, API, the memory paste warning.
 - `docs/learning.md`: 0.8.5 Learning: what teaches, what is stored, priors, how they apply, why no few-shot examples, What it learned, API, tests.

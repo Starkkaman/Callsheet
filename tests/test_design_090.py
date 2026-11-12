@@ -247,8 +247,8 @@ class Design090(unittest.TestCase):
 
     def test_version(self):
         cfg = (ROOT / "callsheet" / "config.yaml").read_text(encoding="utf-8")
-        self.assertRegex(cfg, r'(?m)^version: "0\.14\.5"$')  # 0.14.5 = the web search switch works
-        self.assertIn('APP_VERSION = "0.14.5"', (APP / "api.py").read_text(encoding="utf-8"))
+        self.assertRegex(cfg, r'(?m)^version: "0\.15\.0"$')  # 0.15.0 = the message store and live reading
+        self.assertIn('APP_VERSION = "0.15.0"', (APP / "api.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

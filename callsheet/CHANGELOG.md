@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.15.0 (Callsheet keeps your messages and reads them as they arrive)
+
+- **A message store.** Callsheet now keeps every message it reads, received and sent, in its own database on the Home
+  Assistant box (`messages.db`): mail from every Gmail account (your Sent mail too), Signal (your own messages from
+  your phone too, and group messages with the group's name), Slack (your own messages and thread replies too), and
+  your calendar events. Nothing is deleted: an edited message keeps its earlier text, a deleted one is marked deleted.
+  It is part of Home Assistant's backups.
+- **Read as they arrive.** Signal is stored the moment it arrives, Gmail is checked every 2 minutes, Slack every 3
+  minutes and Calendar every 15 minutes, in the background. The first time, Callsheet reads back 90 days of mail
+  (Setup › Advanced › Message history changes that), newest first, a little at a time.
+- **Sources, first in Setup › Connections.** One row per source says when Callsheet last checked it and how far it
+  has read ("Gmail · 4 accounts · Checked 2 min ago · read up to 2 min ago"). When a source stops moving or keeps
+  failing, its row says so in plain words inside a dashed box. Chat's search (the older index) has its own row and
+  says how many days behind it is.
+- **Chat finds new messages.** Chat's search also looks in the message store, newest first, so a Signal message from
+  the last hour is found even when the older index is behind.
+- Still read-only: the only new request is Gmail's "what changed since" list, under the same read-only permission, so
+  there is nothing to approve again. Nothing is sent, archived or deleted in any account. The brief, Replies and
+  sorting work as before.
+
 ## 0.14.5 (The web search switch works)
 
 - **One clear switch for web search.** Setup › AI › Web search showed "Off" twice and pressing it did nothing. Now
