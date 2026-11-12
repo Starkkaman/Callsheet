@@ -2836,3 +2836,22 @@ html.fa-lock{overflow:hidden}
   .bv .chsw[aria-checked=true] .th{transform:translateX(18px)} .bv .cthink summary{min-height:44px;align-items:center} }
 @media (prefers-reduced-motion:reduce){ .bv .chsw .ch,.bv .chsw .th{transition:none} }
 .app[data-calm] .bv .chsw .ch,.app[data-calm] .bv .chsw .th{transition:none}
+
+/* 0.15.0 Setup › Connections › Sources: one row per source, status as shape + word, a dashed box when one falls behind */
+.srcf .srows{margin-top:8px}
+.srow{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:2px 12px;align-items:center;padding:12px 0}
+.srow+.srow{border-top:var(--rule-w) solid var(--rule)}
+.srow>.si{grid-row:1/3;display:flex;color:var(--muted)}
+.srow>.si svg{width:18px;height:18px}
+.srow .sn{grid-column:2;min-width:0;overflow-wrap:anywhere}
+.srow .sst{grid-column:3;grid-row:1/3;justify-self:end;font-size:var(--fs-xs);letter-spacing:var(--label-track);text-transform:var(--label-case);white-space:nowrap;color:var(--text)}
+.srow .sst::before{content:"\2713\00a0";color:var(--ok)}
+.srow .sst.catching_up::before{content:"\25D0\00a0";color:var(--muted)}
+.srow .sst.starting::before,.srow .sst.off::before{content:"\25CB\00a0";color:var(--muted)}
+.srow .sst.behind,.srow .sst.error{color:var(--warn-ink,var(--text))}
+.srow .sst.behind::before,.srow .sst.error::before{content:"\25B2\00a0";color:var(--warn-ink,var(--alert))}
+.srow .sub{grid-column:2;color:var(--muted);font-size:var(--fs-sm);min-width:0;overflow-wrap:anywhere}
+.srow .swarn{grid-column:2/-1;margin:8px 0 0}
+.srow.bad{border:1.5px dashed var(--warn-line,var(--alert));border-radius:12px;padding:12px;margin:8px 0}
+.srow.bad+.srow{border-top:0}
+@media (max-width:700px){.srow{grid-template-columns:20px minmax(0,1fr)}.srow .sst{grid-row:auto;grid-column:2;justify-self:start}}

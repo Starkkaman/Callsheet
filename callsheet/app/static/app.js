@@ -3374,6 +3374,7 @@
     })]));
     var cur = areas.filter(function (a) { return a.id === sel; })[0];
     return [
+      sourcesPanel(),  /* 0.15.0: each source's freshness, first */
       h('p', { class: 'intro' }, 'What Callsheet may read, by area. Check your employer’s policy before adding work accounts.'),
       S.google_client.configured ? null : keyPanel(),
       chips,
@@ -3383,6 +3384,54 @@
       connectorsSlot(),  /* 0.10.0 connectors */
       h('div', { class: 'callout' }, [h('div', { class: 'h' }, 'Always'),
         h('p', null, 'The brief reads and drafts. It never sends, accepts or deletes anything.')])];
+  }
+  /* ---------- 0.15.0 Setup › Connections › Sources: how fresh each source is (GET api/sources). One row per source,
+     status as shape + word; a source that stops advancing or keeps failing says so plainly, in a dashed box. Loaded when
+     Connections is drawn and older than a minute (like Web search), so nothing re-renders under the owner's hands. ---------- */
+  var SRCF = { v: null, at: 0, loading: false, err: null };
+  var SRCF_ICON = { signal: 'signal', gmail: 'mail', calendar: 'cal', slack: 'slack', chat_search: 'search' };
+  function srcfLoad() {
+    SRCF.loading = true;
+    api('GET', 'api/sources').then(function (v) { SRCF.v = v; SRCF.err = null; }, function (e) { SRCF.err = e.message; })
+      .then(function () {
+        SRCF.loading = false; SRCF.at = Date.now();
+        if (!inPlace('connections') && !(inPlace('advanced') && ui.adv.messages)) return;
+        var ae = document.activeElement, fk = ae && ae.getAttribute && ae.getAttribute('data-fk');
+        renderSetup(fk ? '[data-fk="' + cssq(fk) + '"]' : null);
+      });
+  }
+  function sourcesPanel() {
+    if (!SRCF.loading && (!SRCF.at || Date.now() - SRCF.at > 60000)) srcfLoad();
+    var v = SRCF.v, head = h('h2', { class: 'h3', id: 'srcf-h' }, 'Sources');
+    if (!v) return h('section', { class: 'where srcf', 'aria-labelledby': 'srcf-h' }, [head,
+      SRCF.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the sources (' + SRCF.err + ').') : h('p', { class: 'muted' }, 'Loading…')]);
+    var rows = (v.sources || []).concat(v.chat_search ? [v.chat_search] : []);
+    return h('section', { class: 'where srcf', 'aria-labelledby': 'srcf-h' }, [head,
+      h('p', { class: 'note' }, '“Checked” is when Callsheet last looked. “Read up to” is the newest message it has taken in.'),
+      h('div', { class: 'srows' }, rows.map(srcRow))]);
+  }
+  function srcRow(r) {
+    var bad = r.state === 'behind' || r.state === 'error';
+    return h('div', { class: 'srow' + (bad ? ' bad' : ''), 'data-src': r.key }, [
+      h('span', { class: 'si' }, ico(SRCF_ICON[r.key] || 'note')),
+      h('b', { class: 'sn' }, r.name),
+      h('span', { class: 'sst ' + r.state }, r.word),
+      h('span', { class: 'sub' }, r.line),
+      bad && r.warn ? h('p', { class: 'swarn' }, r.warn) : null]);
+  }
+  /* Advanced › Message history: how far back mail is read the first time (PATCH api/sources/settings) */
+  function advMessages() {
+    if (!SRCF.v) { if (!SRCF.loading) srcfLoad(); return h('p', { class: 'note', role: 'status' }, SRCF.err || 'Loading…'); }
+    var st = SRCF.v.settings, kept = SRCF.v.store || {};
+    var sel = on(h('select', { class: 'inp', id: 'msg-days', 'data-fk': 'msg-days' }, st.choices.map(function (d) {
+      return h('option', { value: String(d), selected: d === st.backfill_days ? true : null }, d + ' days');
+    })), 'change', function () {
+      api('PATCH', 'api/sources/settings', { backfill_days: +sel.value }).then(function (v) { SRCF.v = v; SRCF.err = null; SRCF.at = Date.now(); },
+        function (e) { SRCF.err = e.message; }).then(function () { renderSetup('[data-fk="msg-days"]'); });
+    });
+    return [h('p', { class: 'note' }, 'How far back Callsheet reads mail the first time. Everything it reads is kept, sent and received.'),
+      h('label', { class: 'fl', for: 'msg-days' }, 'Read back'), sel,
+      h('p', { class: 'muted' }, (kept.messages || 0).toLocaleString() + ' messages kept · ' + Math.max(1, Math.round((kept.bytes || 0) / 1048576)).toLocaleString() + ' MB')];
   }
   function otherSources() {
     function row(name, line, fk, fn) {
@@ -3543,6 +3592,7 @@
     ['alerts', 'Alert limits and privacy', function () { return pushBlock('adv'); }],
     ['writing', 'Writing instructions and safety rules', function () { return writingBlock(); }],
     ['memory', 'Memory file', function () { return memoryBlock('adv'); }],
+    ['messages', 'Message history', advMessages],  /* 0.15.0 */
     ['eval', 'Writer evaluation', advEval],
     ['signal', 'Signal history import', advSignal],
     ['startover', 'Start over', advStartOver]];
