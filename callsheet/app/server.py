@@ -283,6 +283,8 @@ def main(argv=None):
             httpd.app.scanner.start_thread()
         httpd.app.sorter.start_thread()  # 0.8.4 AI sorting: rules labels per sync, the AI pass inside its budget
         httpd.app.connectors.start_thread()  # 0.10.0 connectors: reads the owner's feeds on their schedule
+        if httpd.app.live:  # 0.15.0 live reading: Gmail, Calendar and Slack into messages.db (Signal: on_envelope)
+            httpd.app.live.start_threads()
     httpd.app.signal.service.start()  # Signal (0.5.1): signal-cli runs only once Signal is linked
     print(f"Callsheet listening on {args.host}:{httpd.server_address[1]}", flush=True)
     try:

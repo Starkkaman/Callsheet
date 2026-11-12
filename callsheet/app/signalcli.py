@@ -336,6 +336,8 @@ class SignalService:
         self._error = None
         self._received = 0
         self._last_prune = 0.0
+        # 0.15.0 message store: live.SignalIngest.on_envelope(envelope, me), called for every envelope (set by api.App)
+        self.on_envelope = None
 
     # --- process ---------------------------------------------------------
     def available(self):
@@ -547,6 +549,11 @@ class SignalService:
         res = params.get("result") if isinstance(params.get("result"), dict) else params
         me = dict(self._me, name=(self.store.settings().get("name") or "").strip() or None)
         now = self.clock()
+        if self.on_envelope is not None:
+            try:
+                self.on_envelope(res.get("envelope"), me)
+            except Exception as e:  # noqa: BLE001 (the brief's own Signal tables still get the message)
+                self.log(f"Callsheet Signal: message store write failed ({type(e).__name__})")
         act = from_envelope(res.get("envelope"), me, self.store.signal_hash, now)
         if act is None:
             return

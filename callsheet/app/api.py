@@ -39,6 +39,8 @@ import picker as picker_mod          # 0.13.0 picker
 import connectors as connectors_mod  # 0.10.0 connectors
 import net                           # 0.10.0 connectors
 import websearch                     # 0.14.0 web search (the owner's SearXNG)
+import msgstore                      # 0.15.0 message store
+import live as live_mod              # 0.15.0 live reading
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -112,6 +114,7 @@ class App:
         self.signal = signal_api.SignalApi(self.store, data_dir, clock=clock)
         self._index_init(data_dir)  # 0.6.0 index: Know me (index.db, scanner)
         self._profile_init()  # 0.6.0 profile: the drafted profile and questions
+        self._messages_init(data_dir)  # 0.15.0 message store and live reading (msgstore.py, live.py)
         self._chat_init(data_dir)  # 0.6.0 chat: Ask Callsheet over the index (chat.py)
         # 0.7.0 projects: the planning assistant (projects.py, docs/projects.md)
         self.projects = projects_mod.Projects(self.store, self.index, notifier=self.notifier,
@@ -189,6 +192,8 @@ class App:
         self.routes += self._people_routes()  # 0.8.2 people
         self.routes += self._sorting_routes()  # 0.8.4 AI sorting
         self.routes += self._connector_routes()  # 0.10.0 connectors (0.11.1: Chat's setup cards use the same endpoints)
+        self.routes += [("GET", r"sources", self.sources_status),           # 0.15.0 Setup → Connections → Sources
+                        ("PATCH", r"sources/settings", self.patch_sources_settings)]
         self.routes += [("GET", r"web-search", self.web_search),            # 0.14.0 Setup → AI → Web search
                         ("PATCH", r"web-search", self.patch_web_search),
                         ("POST", r"web-search/check", self.web_search_check)]
@@ -213,10 +218,14 @@ class App:
         self.sorter.stop()  # 0.8.4 AI sorting
         self.connectors.stop()  # 0.10.0 connectors
         self.signal.service.close()  # Signal (0.5.1): stops signal-cli cleanly
+        if self.live:  # 0.15.0 live readers
+            self.live.stop()
         self.chat.close()  # 0.6.0 chat
         if self.scanner:  # 0.6.0 index
             self.scanner.stop()
             self.index.close()
+        if self.messages:  # 0.15.0 message store
+            self.messages.close()
         self.store.close()
 
     def _signal_area(self):
@@ -1506,8 +1515,43 @@ class App:
         return self._pf("set_vip", key, body["vip"])
 
     # --- 0.6.0 chat: Ask Callsheet, read-only tool use over the local index (chat.py, docs/chat.md) ---------------
+    def _messages_init(self, data_dir):
+        """0.15.0: messages.db (kept, in backups) and the live readers. The readers' threads start in server.main
+        (not in tests); Signal's envelopes reach the store through signalcli's on_envelope hook."""
+        self.messages = self.live = None
+        try:
+            self.messages = msgstore.MessageStore(data_dir, clock=self.clock)
+        except msgstore.StoreError as e:
+            print(f"Callsheet messages: {e}", file=sys.stderr, flush=True)
+            return
+        self.messages.owner_names = lambda: triage.owner_names(self.store, getattr(self, "people", None))
+        self.live = live_mod.Live(self.store, self.messages, signal=self.signal.service, index=self.index,
+                                  clock=self.clock)
+        self.signal.service.on_envelope = self.live.signal_ingest.on_envelope
+
+    def sources_status(self, _body):
+        """0.15.0 Setup → Connections → Sources: each source's freshness and Chat's search (the old index)."""
+        if not self.live:
+            raise Conflict("The message store isn't available.")
+        return self.live.status()
+
+    def patch_sources_settings(self, body):
+        if not self.live:
+            raise Conflict("The message store isn't available.")
+        body = body if isinstance(body, dict) else {}
+        if set(body) - {"backfill_days"}:
+            raise InputError("Only backfill_days can be changed here.")
+        if "backfill_days" in body:
+            v = body["backfill_days"]
+            if isinstance(v, bool) or v not in msgstore.BACKFILL_CHOICES:
+                raise InputError("Read back 7, 30, 90, 180 or 365 days.")
+            self.messages.set_backfill_days(v)
+        return self.live.status()
+
     def _chat_init(self, data_dir):
-        self.chat = chat.Chat(self.store, self.index, syncer=self.syncer, evaluator=self.evaluator,
+        # 0.15.0: Chat's search and get_item also read the message store (msgstore.ChatView; the same read-only tools)
+        view = msgstore.ChatView(self.index, self.messages) if self.index is not None and self.messages else self.index
+        self.chat = chat.Chat(self.store, view, syncer=self.syncer, evaluator=self.evaluator,
                               data_dir=data_dir, clock=self.clock)
 
     def _chat_routes(self):

@@ -5,8 +5,9 @@ explicit allowlist of (method, URL prefix) pairs. Gmail and Calendar are GET onl
 go to the OAuth token and revoke endpoints. 0.6.0 (Know me index): GET only to Drive's files.list
 (`/drive/v3/files`), files.get (`/drive/v3/files/<id>`, metadata or alt=media for plain text) and
 files.export (`/drive/v3/files/<id>/export`), with the drive.readonly scope the owner grants separately (0.12.1: the
-Reports Drive folders read through the same three). Anything else raises NotAllowed before any network I/O.
-Redirects are not followed.
+Reports Drive folders read through the same three). 0.15.0 (live reading into the message store): Gmail's
+users.history.list (`GET /gmail/v1/users/me/history`) for incremental reads, under the same gmail.readonly scope.
+Anything else raises NotAllowed before any network I/O. Redirects are not followed.
 
 Base URLs can be overridden by env for tests only: CALLSHEET_GOOGLE_AUTH_BASE,
 CALLSHEET_GOOGLE_TOKEN_URL, CALLSHEET_GOOGLE_API_BASE.
@@ -62,6 +63,7 @@ def allowlist():
         ("POST", token_url()),
         ("POST", revoke_url()),
         ("GET", api + "/gmail/v1/users/me/"),
+        ("GET", api + "/gmail/v1/users/me/history"),   # 0.15.0 live reading: users.history.list (exact; a GET)
         ("GET", api + "/calendar/v3/"),
         ("GET", api + "/drive/v3/files"),     # 0.6.0: files.list (exact)
         ("GET", api + "/drive/v3/files/"),    # 0.6.0: files.get / files.export, checked by _DRIVE_PATH below
@@ -321,6 +323,30 @@ def gmail_message_full(token, message_id):
     """One message with its body parts (format=full); the index keeps only the text parts."""
     return request("GET", api_base() + "/gmail/v1/users/me/messages/" + _q(message_id), token=token,
                    params={"format": "full"})
+
+
+# --- 0.15.0 live reading (live.py): incremental Gmail and Calendar reads, GET only --------------------------------
+def gmail_history(token, start_history_id, page_token=None, max_results=500):
+    """users.history.list since a historyId (messages added or deleted, labels changed). A 404 means the id expired."""
+    params = [("startHistoryId", str(start_history_id)), ("maxResults", str(max_results))] + \
+        [("historyTypes", t) for t in ("messageAdded", "messageDeleted", "labelAdded", "labelRemoved")]
+    if page_token:
+        params.append(("pageToken", page_token))
+    return request("GET", api_base() + "/gmail/v1/users/me/history", token=token, params=params)
+
+
+def calendar_events_changes(token, calendar_id, time_min, time_max, updated_min=None, page_token=None,
+                            max_results=250):
+    """events.list for the live reader: expanded instances, cancelled ones included (showDeleted), optionally only
+    those changed since updated_min."""
+    params = {"timeMin": time_min, "timeMax": time_max, "singleEvents": "true", "maxResults": max_results,
+              "showDeleted": "true"}
+    if updated_min:
+        params["updatedMin"] = updated_min
+    if page_token:
+        params["pageToken"] = page_token
+    return request("GET", api_base() + "/calendar/v3/calendars/" + _q(calendar_id) + "/events", token=token,
+                   params=params)
 
 
 def calendar_events_page(token, calendar_id, time_min, time_max, page_token=None, max_results=250, fields=None):
