@@ -48,6 +48,16 @@ Home Assistant app (add-on) that shows a Daily Brief through Ingress. Product na
   defanged links, instruction marking; a report's `importance` is a hint the owner's per-source choice overrides, so a
   report can never place itself above Needs you. Design: `~/project/daily-brief/wheatley/design.md` 3.9; injection test
   W-RP before release.
+- **Rework: the message store and live reading (owner approved 2026-11-11).** Isaac stopped Callsheet on 2026-11-11 and
+  asked for a rework into a real personal assistant (`~/project/daily-brief/rework/PLAN.md`, evidence in
+  `data-findings.md`). Callsheet keeps every message it reads, from every connected source and in both directions
+  (received and sent: Gmail incl. Sent, Signal incl. his own messages, Slack incl. his own, later texts and notes), with
+  text, thread, people and time, in its own database under `/data` (no deletion by default: "more information is just
+  better context"; it is included in Home Assistant backups, which go encrypted to the NAS). Sources are read live
+  (Signal continuously, Gmail/Slack every few minutes, Calendar every 15 minutes) instead of only at brief times, using
+  the same read-only access as before plus Gmail `GET users/me/history` for incremental reads (no new host, no write
+  scope). Setup shows each source's freshness, and a source that stops advancing is reported, never silent. Everything
+  stays read-only: nothing sends, posts, archives or deletes in any account.
 - **Relative URLs only.** Ingress serves the app under `/api/hassio_ingress/<token>/`. In HTML, CSS and
   JS write `app.css`, `api/brief`, `fonts/x.woff2`, never `/app.css`. The server never redirects to
   absolute paths. `tests/test_server.py` checks this.
