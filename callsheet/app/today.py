@@ -281,12 +281,102 @@ class Today:
         self.cal = None        # 0.21.0 Add to calendar (calwrite.CalWrite), set by api.App
         # 0.21.0 Google Contacts (contacts.Contacts), set by api.App: birthdays(first, last) for Coming up
         self.contacts = None
+        self.areas = None      # 0.22.0 areas.Areas, set by api.App: each row's area id (area_res / area_of)
         self.alerter = alerter
         self.tidy = None       # 0.21.4 Tidy up (tidy.Tidy), set by api.App: the banner's count
         self.refreshed_at = None   # 0.21.4: the owner's last Refresh (Today and the day's brief rebuilt)
         self.reader = reader or (lambda: {})
         self.log = log or (lambda line: None)
         ms.write(lambda db: [db.execute(s) for s in _SCHEMA.split(";") if s.strip()])
+        ms.write(self._migrate)
+
+    def _migrate(self, db):
+        """0.22.0 one reminder store: `push` (0: a snooze, hidden until then with no phone reminder), and the snoozes
+        and reminders Chat kept in prefs' owner_actions (0.17.0) moved here once, each row marked with where it went."""
+        if "push" not in {r[1] for r in db.execute("PRAGMA table_info(today_reminders)")}:
+            db.execute("ALTER TABLE today_reminders ADD COLUMN push INTEGER NOT NULL DEFAULT 1")
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_actions'").fetchone():
+            return
+        now = self.clock()
+        for r in db.execute("SELECT * FROM owner_actions WHERE action IN ('snooze','remind') AND undone_at IS NULL "
+                            "AND fired_at IS NULL AND until_ts IS NOT NULL ORDER BY until_ts, id").fetchall():   # the latest stays open
+            try:
+                f = json.loads(r["fields"] or "{}")
+            except ValueError:
+                f = {}
+            if not isinstance(f, dict) or "moved" in f:
+                continue
+            rid = None
+            if r["action"] == "remind" or r["until_ts"] > now:   # a past snooze has nothing left to carry
+                rid = self._set_aside(db, r["item"], r["until_ts"], r["at"], r["action"] == "remind")
+            db.execute("UPDATE owner_actions SET fields=? WHERE id=?", (json.dumps(dict(f, moved=rid)), r["id"]))
+
+    @staticmethod
+    def _set_aside(db, item, due, now, push=True, batch=None):
+        """Hide one item until `due`, then remind the owner (push) or just show it again (a snooze). Replaces the
+        item's open reminder. Today's "Remind me tomorrow" and Chat's snooze and remind (actions.py) both land here."""
+        db.execute("UPDATE today_reminders SET state='replaced' WHERE state='open' AND item=?", (item,))
+        return db.execute("INSERT INTO today_reminders (item, due_ts, hide, state, created_at, batch, push) "
+                          "VALUES (?,?,1,'open',?,?,?)", (item, due, now, batch, int(bool(push)))).lastrowid
+
+    def set_aside(self, items, until, remind=True):
+        """0.22.0: Chat's snooze (remind False) and remind me at (remind True) on items, through the same store and
+        tick as Today's buttons. Returns {reminders: [ids], items, at}."""
+        its = self._ids(items)
+        now = self.clock()
+        if isinstance(until, bool) or not isinstance(until, (int, float)) or not now < until <= now + 400 * 86400:
+            raise Invalid("Pick a time in the future.")
+
+        def run(db):
+            out = []
+            for i in its:
+                L.history(db, i, "owner_" + ("remind" if remind else "snooze"), now, note=f"until {until:.0f}")
+                out.append(self._set_aside(db, i, until, now, remind))
+            return out
+        rids = self.ms.write(run)
+        return {"reminders": rids, "items": sorted(its), "at": self._due_word(until, now, self.tz())}
+
+    def cancel_reminders(self, rids):
+        """Undo a snooze or reminder (actions.py): the open ones among `rids` are cancelled; returns how many."""
+        ids = [int(r) for r in rids or [] if isinstance(r, int) and not isinstance(r, bool)]
+        if not ids:
+            return 0
+        now = self.clock()
+
+        def run(db):
+            n = 0
+            for r in db.execute(f"SELECT id, item FROM today_reminders WHERE state='open' AND id IN "
+                                f"({','.join('?' * len(ids))})", ids).fetchall():
+                db.execute("UPDATE today_reminders SET state='cancelled' WHERE id=?", (r["id"],))
+                if r["item"] is not None:
+                    L.history(db, r["item"], "owner_undo", now, note="undid set aside")
+                n += 1
+            return n
+        return self.ms.write(run)
+
+    def snoozed(self, now=None):
+        """{item: until} for items hidden until a snooze or reminder is due (the ledger view's "snoozed")."""
+        now = self.clock() if now is None else now
+        return {r["item"]: r["u"] for r in self._read(
+            "SELECT item, max(due_ts) AS u FROM today_reminders WHERE state='open' AND hide=1 AND due_ts > ? AND "
+            "item IS NOT NULL GROUP BY item", (now,))}
+
+    def area_res(self):
+        """0.22.0: one read of the areas (areas.Resolver), or None. An area is a nicety: never fails a view."""
+        try:
+            return self.areas.resolver() if self.areas is not None else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def area_of(res, src, calendar=None):
+        """The area id of a source message or event row ({source, account, ts}), "" when none."""
+        if res is None or not src:
+            return ""
+        try:
+            return res.at(src["source"], src["account"], src["ts"], calendar) or ""
+        except (KeyError, IndexError, TypeError):
+            return ""
 
     def tz(self):
         return self.lv.tz()
@@ -848,6 +938,8 @@ class Today:
 
     def _needs(self, lv, skip, now, tz):
         rows, older = [], []
+        res = self.area_res()   # 0.22.0: each row's area (its first message's connection then)
+        osrc = self._srcs([it["id"] for it in lv["needs_you"] if it["id"] not in skip]) if res is not None else {}
         # 0.21.4 (tidy.older_of): long-past asks and quiet items from the first catch-up go to "Older, still open?"
         back = TY.backfill_before(self.ms)
         quiet = TY.quiet_items(self.ms, [it["id"] for it in lv["needs_you"] if it["id"] not in skip]) if back else set()
@@ -865,7 +957,8 @@ class Today:
                    "who": who or "Someone", "age": waited(now - (f.get("ts") or it["created_at"])),
                    "why": it["purpose"] or it["what"], "mine": mine, "likely": it["confidence"] != "sure",
                    "never_hide": it["never_hide"], "seconds": int(now - (f.get("ts") or it["created_at"])),
-                   "vip": bool(it.get("vip")), "invite": None, "late": "", "amount": ""}
+                   "vip": bool(it.get("vip")), "invite": None, "late": "", "amount": "",
+                   "area": self.area_of(res, self._origin(osrc.get(it["id"], [])))}
             if it.get("late"):                             # 0.22.0: a passed deadline (a past-due bill): urgent, late
                 row.update(late=it["late"]["word"], amount=it.get("amount") or "", urgent=True)
             if it.get("subtype") == "invite":              # 0.21.0 (heads.py): an invite to answer
@@ -1487,6 +1580,39 @@ class Today:
             raise Invalid("There's no such clash.")
         return {"dismissed": got}
 
+    def reopen(self, cid, followups=(), reminders=()):
+        """0.22.0 Undo a Dismiss (actions.py): the clash opens again with the follow-ups and reminders that Dismiss
+        closed (only those, and only when nothing else changed them since). True when it opened."""
+        now = self.clock()
+        fus, rems = [int(f) for f in followups], [int(r) for r in reminders]
+
+        def run(db):
+            n = db.execute("UPDATE ledger_conflicts SET state='open', resolved_at=NULL, resolved_why='', updated_at=? "
+                           "WHERE id=? AND state='resolved' AND resolved_why='dismissed'", (now, cid)).rowcount
+            if n and fus:
+                db.execute(f"UPDATE ledger_followups SET state='open', cleared_at=NULL WHERE state='dismissed' AND "
+                           f"id IN ({','.join('?' * len(fus))})", fus)
+            if n and rems:
+                db.execute(f"UPDATE today_reminders SET state='open' WHERE state='cancelled' AND "
+                           f"id IN ({','.join('?' * len(rems))})", rems)
+            return bool(n)
+        return self.ms.write(run)
+
+    def told(self, fid):
+        """0.22.0: the owner says he told them (a follow-up marked told; Undo: untold). Its reminder clears at tick."""
+        if isinstance(fid, bool) or not isinstance(fid, int):
+            raise Invalid("Send the follow-up id as a number.")
+        now = self.clock()
+        n = self.ms.write(lambda db: db.execute("UPDATE ledger_followups SET state='told', cleared_at=? WHERE id=? AND "
+                                                "state='open'", (now, fid)).rowcount)
+        if not n:
+            raise Invalid("That follow-up isn't open.")
+        return {"told": fid}
+
+    def untold(self, fid):
+        return bool(self.ms.write(lambda db: db.execute("UPDATE ledger_followups SET state='open', cleared_at=NULL "
+                                                        "WHERE id=? AND state='told'", (fid,)).rowcount))
+
     def due_at(self, when, now=None):
         """'noon', '5pm', 'tomorrow' (9:00 am), 'HH:MM' (today, else tomorrow) or 'YYYY-MM-DDTHH:MM' (local)."""
         now = self.clock() if now is None else now
@@ -1568,9 +1694,7 @@ class Today:
                 if files and it["status"] not in L.CLOSED:
                     L.set_status(db, i, "done", now, note="filed by your note", kind="owner")
                 if later:
-                    db.execute("UPDATE today_reminders SET state='replaced' WHERE state='open' AND item=?", (i,))
-                    db.execute("INSERT INTO today_reminders (item, due_ts, hide, state, created_at, batch) "
-                               "VALUES (?,?,1,'open',?,?)", (i, due, now, nid))
+                    self._set_aside(db, i, due, now, True, nid)
             return nid
         nid = self.ms.write(run)
         return {"note": nid, "label": label, "filed": sorted(items) if files else [],
@@ -1611,6 +1735,10 @@ class Today:
                 it = self._item(r["item"])
                 if not it or it["status"] in L.CLOSED:
                     self._set_rem(r["id"], "cleared", now)
+                    continue
+                if not r["push"]:   # 0.22.0: a snooze ends: the item shows again, no phone reminder
+                    self._set_rem(r["id"], "ended", now)
+                    out.append((r["id"], "ended"))
                     continue
                 batches.setdefault(r["batch"] or -r["id"], []).append((r, it))
             elif r["conflict"] is not None:

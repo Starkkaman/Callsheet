@@ -28,7 +28,9 @@ def _row(kind, **f):
 
 class LiveTextsFollowTextRules(unittest.TestCase):
     def test_vip_for_texts_covers_live_texts(self):
-        r = prefs.Rules([_row("vip", person="Lena", sources=["sms"])])
+        # 0.22.0 VIPs in one store: a VIP for texts is a VIP on Setup's list with its options (test_vips_0220.py)
+        r = prefs.Rules([], vips=[{"id": "vip_1", "name": "Lena", "email": "", "area_id": "personal",
+                                   "opts": {"sources": ["sms"]}}])
         for src in ("sms", "sms_live"):
             self.assertIsNotNone(r.vip(src, "+15550100", ["Lena Park"]), src)
         self.assertIsNone(r.vip("slack", "U1", ["Lena Park"]))

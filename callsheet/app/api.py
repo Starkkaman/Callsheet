@@ -21,6 +21,7 @@ import signal_api
 import slack
 from oauth import OAuthFlows
 import library as library_mod        # 0.21.0: messages.db as one library (replaced index.py and scan.py)
+import actions as actions_mod         # 0.22.0 Chat does what the owner can: the registry and its journal
 import oldata                        # 0.21.0 Setup › Advanced › Old data from earlier versions (owner-pressed)
 import sources as index_sources      # Drive, notes and GitHub readers (live.DocsReader), the Drive grant
 import know_profile                  # 0.6.0 profile
@@ -55,6 +56,8 @@ import gdrafts  # noqa: E402 (0.21.0 Put in Gmail Drafts)
 import contacts as contacts_mod  # noqa: E402 (0.21.0 Google Contacts, read-only)
 import replydraft  # noqa: E402 (0.21.0 Draft a reply)
 import voiceapi  # noqa: E402 (0.21.0 the voice assistant's read-only API, its own listener)
+import areas as areas_mod  # noqa: E402 (0.22.0 Areas: rename, colour, move connections)
+import palette  # noqa: E402 (0.22.0 area colours)
 from scheduler import Scheduler
 from store import Conflict, InputError, NotFound, Store
 from sync import Syncer
@@ -63,7 +66,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.21.4"
+APP_VERSION = "0.22.0"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -161,6 +164,8 @@ class App:
         self.chat.msgstore, self.chat.ledger, self.chat.prefs = self.messages or None, self.ledger, self.prefs
         self.chat.calwrite = self.calwrite   # 0.21.0: Chat's "add to calendar" card (owner's Confirm only)
         self.chat.tidy = getattr(self, "tidy", None)   # 0.21.4: Chat's Tidy up card (owner's Confirm only)
+        self.chat.actions = getattr(self, "actions", None)   # 0.22.0: the action registry (actions.py)
+        self.chat.oldata = getattr(self, "oldata", None)     # 0.22.0: Clear old data by Chat (always Confirm)
         self.gdrafts.messages, self.chat.gdrafts = self.messages or None, self.gdrafts   # 0.21.0 Gmail drafts
         self.routes = [
             ("GET", r"brief", self.brief),
@@ -170,6 +175,10 @@ class App:
             ("GET", r"state", self.state),
             ("POST", r"google-client", self.set_client),
             ("DELETE", r"google-client", self.delete_client),
+            ("GET", r"areas", self.get_areas),               # 0.22.0 Areas: the board
+            ("POST", r"areas/move", self.move_connection),   # 0.22.0 one connection to another area
+            ("POST", r"areas/undo", self.undo_area),         # 0.22.0 Undo of an area change
+            ("POST", r"areas/colour-check", self.colour_check),  # 0.22.0 More colours: AA shades and warnings
             ("POST", r"areas", self.add_area),
             ("PATCH", r"areas/([\w-]+)", self.patch_area),
             ("DELETE", r"areas/([\w-]+)", self.delete_area),
@@ -219,6 +228,10 @@ class App:
                         ("POST", r"today/done", self.today_done),
                         ("POST", r"today/undone", self.today_undone),
                         ("POST", r"today/dismiss", self.today_dismiss),
+                        ("POST", r"today/related", self.today_related),       # 0.22.0 related clashes
+                        ("POST", r"today/related/dismiss", self.today_related_dismiss),
+                        ("GET", r"actions/recent", self.actions_recent),      # 0.22.0 Recent changes
+                        ("POST", r"actions/undo", self.actions_undo),
                         ("POST", r"today/notes", self.today_note),
                         ("POST", r"today/remind", self.today_remind),
                         ("POST", r"today/refresh", self.today_refresh),        # 0.21.4 Refresh at the top of Today
@@ -248,6 +261,10 @@ class App:
         # 0.21.0 Setup › Advanced › Old data from earlier versions: listed by GET, removed only by the owner's POST
         self.oldata = oldata.OldData(self.store, lambda: self.messages, clock=clock)
         self.routes += self.oldata.routes()
+        if getattr(self, "actions", None) is not None:   # 0.22.0: Clear old data by Chat (always the owner's Confirm)
+            self.actions.oldata = self.oldata
+        if getattr(self, "chat", None) is not None:
+            self.chat.oldata = self.oldata
         self.routes += [("GET", r"web-search", self.web_search),            # 0.14.0 Setup → AI → Web search
                         ("PATCH", r"web-search", self.patch_web_search),
                         ("POST", r"web-search/check", self.web_search_check)]
@@ -318,7 +335,8 @@ class App:
             return dict(load_sample(), sample=True)
         fmt = rules.time_format(s)
         out = {"sample": False, "time_format": fmt, "kind": "Today",
-               "areas": [{"id": a["id"], "name": a["name"], "colour": a["colour"]} for a in self.store.areas()]}
+               "areas": [{"id": a["id"], "name": a["name"], "colour": a["colour"], "swatch": a["swatch"]}
+                         for a in self.store.areas()]}
         out.update(rules.date_fields(now.date()))
         try:
             out["schedule"] = today_mod.agenda(getattr(self, "messages", None), getattr(self, "ledger", None), tz,
@@ -651,7 +669,7 @@ class App:
             a["signal"] = a["id"] == signal_area  # Signal (0.5.1)
             a["chat_available"] = a["chat_available"] or a["signal"]
             areas.append(a)
-        return {"google_client": client, "areas": areas, "vips": self.store.vips(),
+        return {"google_client": client, "areas": areas, "vips": [dict(v, how=prefs_mod.vip_words(v)) for v in self.store.vips()],
                 "people": {"open": self.people.open_count()},  # 0.8.2: Setup home's People card
                 "background": {"model": self.background.settings()["model"]},  # Setup home's AI card
                 "suppress": self.store.suppress_rules(),
@@ -677,17 +695,59 @@ class App:
         return dict(area, accounts=self.store.accounts(area["id"]), slack=ws, signal=sig,
                     chat_available=sig or any(w["status"] != "needs_reconnect" for w in ws))
 
+    def _areas(self):
+        if getattr(self, "areas", None) is None:
+            self.areas = areas_mod.Areas(self.store, getattr(self, "messages", None) or None, self.clock)
+        return self.areas
+
+    @staticmethod
+    def _area_do(fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except (areas_mod.AreaError, palette.Invalid) as e:
+            raise InputError(str(e)) from None
+
+    def get_areas(self, _body=None):
+        """0.22.0 GET api/areas: the areas with their connections, those not in an area, the palette, the last Undo."""
+        return self._areas().board()
+
     def add_area(self, body):
         b = _obj(body)
-        return self._area_out(self.store.add_area(b.get("name"), b.get("colour")))
+        area, token = self._area_do(self._areas().add, b.get("name"), b.get("colour"))
+        return dict(self._area_out(area), undo=token)
 
     def patch_area(self, body, area_id):
-        return self._area_out(self.store.update_area(area_id, _obj(body)))
+        b = _obj(body)
+        if set(b) & {"name", "colour"}:   # 0.22.0: rename and colour with Undo (what it may read: no Undo, as before)
+            rest = {k: v for k, v in b.items() if k not in ("name", "colour")}
+            if rest:
+                self.store.update_area(area_id, rest)
+            area, token = self._area_do(self._areas().update, area_id, b.get("name"), b.get("colour"))
+            return dict(self._area_out(area), undo=token)
+        return self._area_out(self.store.update_area(area_id, b))
 
-    def delete_area(self, _body, area_id):
-        for acc in self.store.delete_area(area_id):
-            google.revoke(acc.get("refresh_token") or acc.get("access_token"))
-        return {"ok": True}
+    def delete_area(self, body, area_id):
+        """0.22.0: the area's connections move to `to` (Personal by default) with Undo; {disconnect: true} is the old
+        way (Callsheet signs out of its accounts and forgets them; no Undo)."""
+        b = body if isinstance(body, dict) else {}
+        if b.get("disconnect") is True:
+            for acc in self.store.delete_area(area_id):
+                google.revoke(acc.get("refresh_token") or acc.get("access_token"))
+            return {"ok": True}
+        res, token = self._area_do(self._areas().delete, area_id, b.get("to") or "personal")
+        return dict(res, ok=True, undo=token)
+
+    def move_connection(self, body):
+        """0.22.0 POST api/areas/move {conn, to, past}: past (default true) moves the items it already read too."""
+        b = _obj(body)
+        res, token = self._area_do(self._areas().move, b.get("conn"), b.get("to"), b.get("past", True))
+        return dict(res, ok=True, undo=token)
+
+    def undo_area(self, body):
+        return self._area_do(self._areas().undo, _obj(body).get("token"))
+
+    def colour_check(self, body):
+        return self._area_do(palette.check_hex, _obj(body).get("hex"))
 
     # --- accounts ---------------------------------------------------------
     def start_account(self, body):
@@ -1116,6 +1176,13 @@ class App:
                                         prefs=self.prefs, names=lambda s, h: [person(s, h)[1]])
         self.ledger.snoozed = self.prefs.snoozed
         self.ledger.vip_of = alerter.needs_you_vip
+        self.prefs.areas = self._areas()   # 0.22.0: Chat's area cards (prefs.AREA_KINDS)
+        self.prefs.vip_store = self.store   # 0.22.0 VIPs in one store: Chat's VIPs go on Setup's list
+        try:
+            if self.prefs.migrate_vips():   # VIPs earlier versions kept as Chat rules move onto the list, once
+                print("Callsheet: VIPs set in Chat moved onto Setup's VIP list", file=sys.stderr, flush=True)
+        except Exception as e:  # noqa: BLE001 (the rules stay; it tries again at the next start)
+            print(f"Callsheet: moving Chat's VIPs onto the list failed ({type(e).__name__})", file=sys.stderr, flush=True)
         self.ledger.cleanup_rule = lambda handle, names, text: self.prefs.rules().cleanup_rule(handle, names, text)
         self.extractor = extract_mod.Extractor(self.messages, tz_name, owner, None,
                                                model=lambda: self.background.settings()["model"], clock=self.clock,
@@ -1137,10 +1204,17 @@ class App:
             self.messages, self._confirmed_emails()), owner_names=lambda: background.owner_names(
                 self.store, getattr(self, "people", None)))
         self.today.tidy = self.tidy
+        # 0.22.0 (owner approved 2026-11-16): the action registry and its journal (actions.py), shared with Chat
+        self.actions = actions_mod.Actions(self.messages, self.clock, today=self.today, prefs=self.prefs,
+                                           tidy=self.tidy, store=self.store, oldata=getattr(self, "oldata", None),
+                                           tz=self.ledger.tz)
+        if getattr(self, "chat", None) is not None:
+            self.chat.actions = self.actions
         # 0.21.0 Add to calendar (approved 2026-11-11): the one write, only on the owner's press (calwrite.py)
         self.calwrite = calwrite_mod.CalWrite(self.store, self.messages, tz_name, clock=self.clock)
         self.today.cal = self.calwrite
         self.today.contacts = getattr(self, "contacts", None)   # 0.21.0: birthdays in Coming up
+        self.today.areas = self._areas()   # 0.22.0: each row's area (its colour on Today, Replies and the Agenda)
         # 0.21.0: security alerts, invites to answer and Reports into the store, by rule, model or not (heads.py)
         self.heads = heads_mod.Heads(self.messages, self.ledger.tz, self.clock, alerter=alerter,
                                      reports=conns.report_items if conns is not None else None,
@@ -1396,8 +1470,53 @@ class App:
     def today_undone(self, body):
         return self._today_do(self._today().undo, _obj(body).get("items"))
 
+    def _acts(self):
+        if getattr(self, "actions", None) is None:
+            raise Conflict("The message store isn't available.")
+        return self.actions
+
+    def _act_do(self, fn, *args):
+        try:
+            return fn(*args)
+        except (actions_mod.Invalid, today_mod.Invalid) as e:
+            raise InputError(str(e)) from None
+
     def today_dismiss(self, body):
-        return self._today_do(self._today().dismiss, _obj(body).get("clash"))
+        """0.22.0: Dismiss goes through the registry (journaled, with Undo) and says how many related clashes are
+        open (the page offers "Also dismiss N related clashes")."""
+        cid = _obj(body).get("clash")
+        if isinstance(cid, bool) or not isinstance(cid, int):
+            raise InputError("Send the clash id as a number.")
+        e = self._act_do(self._acts().run, "clash.dismiss", [cid], {}, "today")
+        return {"dismissed": cid, "log": e["id"], "label": e["label"], "related": self._acts().related(clash=cid)}
+
+    def today_related(self, body):
+        """0.22.0: the open clashes related to items the owner just finished or filed, or to a clash."""
+        b = _obj(body)
+        items, clash = b.get("items") or [], b.get("clash")
+        if not isinstance(items, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in items) or \
+                (clash is not None and (isinstance(clash, bool) or not isinstance(clash, int))) or len(items) > 500:
+            raise InputError("Send item ids or a clash id.")
+        return {"related": self._acts().related(items=items, clash=clash)}
+
+    def today_related_dismiss(self, body):
+        """0.22.0 "Also dismiss N related clashes": one press, one journal row, one Undo for all."""
+        ids = _obj(body).get("clashes")
+        if not isinstance(ids, list) or not ids or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
+            raise InputError("Send the clash ids as a list of numbers.")
+        e = self._act_do(self._acts().run, "clash.dismiss", ids, {}, "today")
+        return {"dismissed": e["result"]["dismissed"], "log": e["id"], "label": e["label"]}
+
+    def actions_recent(self, _body):
+        """0.22.0 Setup › Your rules › Recent changes: labels only, newest first."""
+        return {"changes": self._acts().recent()}
+
+    def actions_undo(self, body):
+        lid = _obj(body).get("id")
+        e = self._act_do(self._acts().undo, lid, "setup")
+        if e and e.get("ref") and getattr(self, "chat", None) is not None:
+            self.chat.card_undone("log", e["id"], e["ref"])   # the Chat card says Undone too
+        return {"ok": True, "change": e}
 
     def today_note(self, body):
         return self._today_do(self._today().note, _obj(body))

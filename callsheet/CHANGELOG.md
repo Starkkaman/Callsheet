@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.22.0
+
+- **Chat can do what you can.** Ask in your own words and Chat does it, through the same functions as the buttons:
+  "Dismiss the dentist alert", "The garden-club newsletter is not for me", "I've told Sam already", "Clear all the
+  shipping notices", "Clear the older ones", "Tidy up", "Clear the old data". One thing you name in your latest
+  message happens at once with Undo; anything broader waits for your Confirm, with one Undo for a whole batch.
+  Clearing old data always waits for Confirm and says it can't be undone. Nothing is ever sent.
+- Chat finds what you mean (a read-only `find`): when two alerts fit, a **Which one?** card lists them, each with its
+  own Confirm.
+- Chat's Done now works exactly like Today's: it closes that item's reminders and re-checks its clashes. "Not for me"
+  from Chat files the item, like the Not for me note on Today.
+- **Dismiss has Undo.** Dismissing a clash on Today, in Agenda or in Chat can be undone; its follow-ups and reminders
+  come back with it.
+- **Also dismiss related clashes.** After you dismiss a clash, or finish or file an item that is part of clashes,
+  Today offers "Also dismiss N related clashes", with one Undo for all. In Chat, say "and its clashes".
+- **Recent changes** in Setup › Your day › Your rules: every change made from Chat or Today's Dismiss, newest first,
+  with Undo once (refused if the thing changed since, so Undo never overwrites a later change).
+- A key, token or password pasted into Chat is never saved: it is masked before the chat is kept, and Chat points you
+  to Setup.
+- **Open in Setup.** For what Chat can't do itself (keys, sign-ins, a new voice token), Chat shows a card whose button
+  opens the right Setup section, on that setting.
+- **VIPs in one place.** A VIP you name in Chat goes on Setup's VIP list (by name when there's no address), with its
+  options shown there. VIPs saved as Chat rules before move onto the list once; everyone who was a VIP still is.
+  Alerts, quiet hours and Needs you all read the list.
+- **One set of reminders.** Snooze and Remind me from Chat now use Today's reminders, the same as Today's buttons;
+  reminders set from Chat before move over once. A snooze brings the item back without a phone reminder.
+- Phone: Chat's Ask button and the Back to brief button are 44 px targets.
+
+- Setup › Connections opens on **Areas**: every area as a card with its colour, its name and what it reads (Google
+  accounts and, one by one, their calendars, Slack, Signal, texts, GitHub, feeds and reports). Accounts and Connectors
+  are the next two tabs.
+- Rename an area in place: click its name, type, Enter saves and Esc cancels.
+- 10 colours that read well in Light and Dark, plus More colours: type a hex code and Callsheet checks it in both
+  themes, offers a deeper or lighter shade when it's too faint, and warns when it looks like the amber, red, green or
+  orange Callsheet uses for warnings, alerts, done and now. Areas saved before keep their colour (Blue, Teal, Violet or
+  Walnut).
+- Move to… (and, on a computer, drag and drop) moves a connection to another area through one box. What it already
+  read moves too, unless you pick Leave as it is. A Google account's calendars can each go to their own area.
+- Add an area, or delete one: its connections move to Personal (or the area you pick). Personal can't be deleted.
+- Every change shows Done with Undo.
+- Chat: "rename Work to Studio and make it teal" or "move sam@example.com to Family" make a setting card. A guessed
+  name, or a colour areas don't use (green means done), waits for you to Confirm.
+- Nothing in your messages or tasks is rewritten: an item's area comes from when its connection moved.
 ## 0.21.4
 
 - **Fewer things on Today.** Promotions that slipped through no longer show up as asks, bills, events or clashes.

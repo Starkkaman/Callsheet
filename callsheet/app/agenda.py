@@ -77,6 +77,7 @@ class Agenda:
         s0, _ = L.day_bounds(first, tz)
         _, s1 = L.day_bounds(last, tz)
         out, seen = [], set()
+        res = self.today.area_res()   # 0.22.0: each event's area (its calendar's connection then)
         for e in self.ms.events(since=s0, until=s1):
             if e["start_ts"] is None and not e["all_day"]:
                 continue
@@ -89,7 +90,9 @@ class Agenda:
                 continue                          # the owner said no: not on the owner's day
             base = {"kind": "item", "k": "cal", "event": e["id"], "item": None, "title": _cap(e["title"]) or "(No title)",
                     "icon": "cal", "from": "", "tag": "", "on": False, "link": T.safe_cal_link(e["link"]),
-                    "rsvp": st if st and st["answer"] in ("", "maybe") else None, "likely": False}
+                    "rsvp": st if st and st["answer"] in ("", "maybe") else None, "likely": False,
+                    "area": T.Today.area_of(res, {"source": "calendar", "account": e["account"], "ts": e["start_ts"]},
+                                            e.get("calendar"))}
             if base["rsvp"]:
                 base["tag"] = "Invite"
             if e["all_day"]:
@@ -134,6 +137,7 @@ class Agenda:
             (s1, s0, last.isoformat(), first.isoformat()))
         rows = [r for r in rows if r.get("subtype") != "security"]
         srcs = self.today._srcs([r["id"] for r in rows])
+        res = self.today.area_res()   # 0.22.0
         today = T.local(now, tz).date()
         out = []
         for it in rows:
@@ -157,7 +161,8 @@ class Agenda:
                     "title": _cap(it.get("what")) or "(No title)", "meta": " · ".join(m for m in meta if m),
                     "icon": T.SOURCES.get(src, ("mail", ""))[0], "from": frm,
                     "tag": "You said" if mine else "Asks you" if ask else "", "on": False, "link": None, "rsvp": None,
-                    "likely": it.get("confidence") != "sure", "subtype": it.get("subtype") or ""}
+                    "likely": it.get("confidence") != "sure", "subtype": it.get("subtype") or "",
+                    "area": T.Today.area_of(res, o)}
             if it.get("all_day") and it.get("start_date"):
                 try:
                     d0 = dt.date.fromisoformat(it["start_date"])
@@ -335,6 +340,7 @@ class Agenda:
     def _invites(self, now, tz):
         rows = self.lv.items("status='open' AND merged_into IS NULL AND subtype='invite'")
         srcs = self.today._srcs([r["id"] for r in rows])
+        res = self.today.area_res()   # 0.22.0
         today = T.local(now, tz).date()
         out = []
         for it in rows:

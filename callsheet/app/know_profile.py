@@ -931,7 +931,7 @@ class Profile:
         """(Re)computes the deterministic draft from the index. Suggestions, removals and saved fields stay."""
         settings = self.store.settings()
         emails, names = self._owner()
-        draft = build_draft(self.index, emails, names, self._areas(), [v["email"] for v in self.store.vips()],
+        draft = build_draft(self.index, emails, names, self._areas(), [v["email"] for v in self.store.vips() if v["email"]],
                             rules.tzinfo(settings), self.clock(), rules.time_format(settings))
         with self.lock:
             s = self._state()
@@ -961,7 +961,7 @@ class Profile:
             s = self._state()
         d, areas = s["draft"], self._areas()
         entries = self._saved_entries()
-        vips = {v["email"].lower() for v in self.store.vips()}
+        vips = {v["email"].lower() for v in self.store.vips() if v["email"]}
         ai = s["ai"] or {}
         sp, sj = ai.get("people") or {}, ai.get("projects") or {}
 
@@ -1126,7 +1126,7 @@ class Profile:
         x = self._find("people", key)
         if not x["emails"]:
             raise ValueError("Callsheet has no email address for this person, so they can't be a VIP.")
-        mine = [v for v in self.store.vips() if v["email"].lower() in x["emails"]]
+        mine = [v for v in self.store.vips() if v["email"] and v["email"].lower() in x["emails"]]
         if on and not mine:
             areas = self._areas()
             self.store.add_vip(x["name"][:80], x["emails"][0], x["area"] if x["area"] in areas else next(iter(areas)))

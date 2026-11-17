@@ -255,9 +255,17 @@
   /* ----- data helpers ----- */
   function areaOf(id) {
     var a = ((B && B.areas) || []).filter(function (x) { return x.id === id; })[0];
-    return a ? { id: a.id, name: a.name, cls: 'a' + clampColour(a.colour) } : { id: id, name: String(id || ''), cls: 'an' };
+    return a ? { id: a.id, name: a.name, cls: aColour(a).cls, style: aColour(a).style } : { id: id, name: String(id || ''), cls: 'an' };
   }
-  function tagOf(id) { var a = areaOf(id); return a.name ? h('span', { class: 'tag ' + a.cls }, a.name) : null; }
+  /* 0.22.0 an item's area on Today, Replies and the Agenda (mockup areas-v1 "where it shows"): its dot and name, only
+     when there is more than one area; the colour is the area's (palette tokens or its two checked shades) */
+  function areaMark(id) {
+    var all = (B && B.areas) || [];
+    if (!id || all.length < 2) return null;
+    return all.filter(function (x) { return x.id === id; })[0] || null;
+  }
+  function areaLead(id) { var a = areaMark(id); return a ? [adot(a), h('span', { class: 'arn' }, a.name), ' · '] : []; }
+  function tagOf(id) { var a = areaOf(id); return a.name ? sty(h('span', { class: 'tag ' + a.cls }, a.name), a.style) : null; }
   function events() { return ((B && B.schedule) || []).filter(function (e) { return !isDismissed('ev:' + (e.key || e.id)); }); }
   function eventById(id) { return ((B && B.schedule) || []).filter(function (e) { return e.id === id; })[0] || null; }
   /* minutes since midnight from a display or HH:MM string ("9:30 am", "4:00–5:00 pm", "14:30"); null if none */
@@ -354,11 +362,12 @@
   /* one box: solid = on the calendar, dashed = only in a message, teal edge = the owner said it; withTime for the week */
   function agBox(r, withTime) {
     var k = r.k || 'cal', kids = [withTime && r.time ? h('span', { class: 'etm' }, r.time) : null,
-      h('span', { class: 'et' }, (r.likely ? 'Likely: ' : '') + r.title), r.meta ? h('span', { class: 'em' }, r.meta) : null,
+      h('span', { class: 'et' }, (r.likely ? 'Likely: ' : '') + r.title), r.meta || areaMark(r.area) ? h('span', { class: 'em' }, (areaMark(r.area) ? [areaMark(r.area).name, r.meta ? ' · ' : ''] : []).concat([r.meta || ''])) : null,
       r.from || r.tag ? h('span', { class: 'ef' }, [r.from ? h('span', { class: 'fm' }, [tdIco(r.icon), r.from]) : null, agTag(r.tag)]) : null];
-    var cls = 'eb ' + k + (r.on ? ' on' : '');
-    if (r.item) return btn(cls, kids, { 'aria-label': [r.time, r.title, r.meta, r.from, r.tag, r.on ? 'now' : ''].filter(Boolean).join(', ') }, function () { tdGo('item', r.item); });
-    return h('div', { class: cls }, kids);
+    var am = areaMark(r.area), ac = am ? aColour(am) : null;   /* 0.22.0: the area's bar on the block's left */
+    var cls = 'eb ' + k + (r.on ? ' on' : '') + (ac ? ' arb ' + ac.cls : '');
+    if (r.item) return sty(btn(cls, kids, { 'aria-label': [r.time, r.title, am ? am.name : '', r.meta, r.from, r.tag, r.on ? 'now' : ''].filter(Boolean).join(', ') }, function () { tdGo('item', r.item); }), ac && ac.style);
+    return sty(h('div', { class: cls }, kids), ac && ac.style);
   }
   function agInvited(v, ev) { return (v.invites || []).some(function (x) { return x.rsvp && x.rsvp.event === ev; }); }
   function agAddCard(r, v) { return r.add && r.add.on && TD.addc && TD.addc.item === r.item ? tdAddCard(r.add, v.cal_targets || []) : null; }
@@ -1026,15 +1035,35 @@
       return tdRefresh().then(function () { renderLayer(); return r; });
     }, function (e) { TD.busy = false; failToast(e); });
   }
+  function tdRel(u, items) {   /* 0.22.0: open clashes that share an item with what was just finished or filed */
+    return api('POST', 'api/today/related', { items: items }).then(function (r) { u.related = (r && r.related) || []; if (TD.undo === u) renderBrief(); }, function () {});
+  }
   function tdDone(ids, label) {
     return tdPost('done', { items: ids }, null).then(function (r) {
-      if (r && r.done && r.done.length) { TD.undo = { ids: r.done, label: label }; renderBrief(); }
+      if (r && r.done && r.done.length) { TD.undo = { ids: r.done, label: 'Done: ' + label }; renderBrief(); tdRel(TD.undo, r.done); }
     });
+  }
+  function tdDismiss(cid) {   /* 0.22.0: Dismiss is journaled, with Undo, and offers the related clashes */
+    return tdPost('dismiss', { clash: cid }, null).then(function (r) {
+      if (r && r.log) { TD.undo = { log: r.log, label: r.label, related: r.related || [] }; renderBrief(); }
+      return r;
+    });
+  }
+  function tdUndoLog(id) {
+    return mutate(function () { return api('POST', 'api/actions/undo', { id: id }); }).then(function () {
+      showToast('Undone.', ''); return tdRefresh().then(function () { renderBrief(); });
+    }, failToast);
   }
   function tdUndoBar() {
     if (!TD.undo) return null;
-    return h('div', { class: 'tdy-undo', role: 'status' }, [h('span', null, 'Done: ' + TD.undo.label),
-      btn('k q', 'Undo', null, function () { var u = TD.undo; TD.undo = null; tdPost('undone', { items: u.ids }, 'Back on your list.'); }),
+    var u = TD.undo, rel = u.related || [];
+    return h('div', { class: 'tdy-undo', role: 'status' }, [h('span', null, u.label),
+      btn('k q', 'Undo', null, function () { TD.undo = null; if (u.log) tdUndoLog(u.log); else tdPost('undone', { items: u.ids }, 'Back on your list.'); }),
+      rel.length ? btn('k', 'Also dismiss ' + rel.length + ' related clash' + (rel.length === 1 ? '' : 'es'), { 'data-relx': String(rel.length) }, function () {
+        tdPost('related/dismiss', { clashes: rel.map(function (c) { return c.id; }) }, null).then(function (r) {
+          if (r && r.log) { TD.undo = { log: r.log, label: r.label, related: [] }; renderBrief(); }
+        });
+      }) : null,
       btn('k q', 'Close', { 'aria-label': 'Close this message' }, function () { TD.undo = null; renderBrief(); })]);
   }
   /* "Remind me at…": Noon, 5 pm, Tomorrow 9 am or a time the owner picks */
@@ -1067,7 +1096,9 @@
         });
       })), ta,
       h('div', { class: 'keys' }, [btn('k', 'Save note', null, function () {
-        tdPost('notes', { items: n.ids, chips: n.chips, text: n.text || '' }, 'Noted for ' + aname() + '.');
+        tdPost('notes', { items: n.ids, chips: n.chips, text: n.text || '' }, 'Noted for ' + aname() + '.').then(function (r) {
+          if (r && r.filed && r.filed.length) { TD.undo = { ids: r.filed, label: 'Filed: ' + r.label }; renderBrief(); tdRel(TD.undo, r.filed); }   /* 0.22.0 */
+        });
       }), btn('k q', 'Cancel', null, function () { TD.note = null; renderBrief(); })])]);
   }
   function tdNoteOpen(key, ids, label) { TD.note = { key: key, ids: ids, label: label, chips: [], text: '' }; renderBrief('#td-note-text'); }
@@ -1314,7 +1345,7 @@
     if (!main1) keys.push(btn('k' + lead, 'Open both', null, function () { tdGo('clash', c.id); }));
     else keys.push(btn('k', 'Open both', null, function () { tdGo('clash', c.id); }));
     if (fu) keys.push(btn('k', fu.remind_at ? 'Reminder ' + fu.remind_at : 'Remind me at…', { 'aria-expanded': String(TD.rem === key) }, function () { TD.rem = TD.rem === key ? null : key; renderBrief(); }));
-    keys.push(btn('k q', 'Dismiss', null, function () { tdPost('dismiss', { clash: c.id }, 'Clash dismissed.'); }));
+    keys.push(btn('k q', 'Dismiss', null, function () { tdDismiss(c.id); }));
     var al = tdAlertLine(c);
     return h('div', { class: 'clb' + (red ? ' al' : ''), role: 'group', 'aria-label': 'Clash ' + c.when }, [
       h('div', { class: 'clh' }, [h('p', { class: 'cl' }, [red ? h('span', { class: 'led al', 'aria-hidden': 'true' }) : '▲ ', 'Clash · ' + c.when]),
@@ -1343,7 +1374,7 @@
       })),
       al ? h('p', { class: 'fu dim' }, al) : null,
       c.more ? null : h('div', { class: 'keys' }, [btn('k' + lead, 'Open', null, function () { tdGo('clash', c.id); }),
-        btn('k q', 'Dismiss', null, function () { tdPost('dismiss', { clash: c.id }, 'Clash dismissed.'); })])]);
+        btn('k q', 'Dismiss', null, function () { tdDismiss(c.id); })])]);
   }
   function tdClashLine(c) {
     return btn('cll', [h('span', { class: 'cl' }, '▲ ' + c.when), h('span', { class: 'ct' }, segs(c.line)), h('span', { class: 'until' }, c.until)],
@@ -1370,8 +1401,8 @@
   }
   function tdNeedRow(r) {
       var b = btn('nr', [tdIco(r.icon, r.source), h('span', { class: 'who' }, [r.who, r.mine ? h('span', { class: 'mine' }, 'You said') : null]),
-        h('span', { class: 'ag' }, tdAge(r)), h('span', { class: 'why' }, [r.late ? h('b', { class: 'late' }, r.late + ' · ') : null,   /* 0.22.0: past its deadline */
-          (r.likely ? 'Likely: ' : '') + r.why + (r.amount ? ' · ' + r.amount : '')])], null, function () { tdGo('item', r.id); });
+        h('span', { class: 'ag' }, tdAge(r)), h('span', { class: 'why' }, areaLead(r.area).concat([r.late ? h('b', { class: 'late' }, r.late + ' · ') : null,   /* 0.22.0: past its deadline; its area */
+          (r.likely ? 'Likely: ' : '') + r.why + (r.amount ? ' · ' + r.amount : '')]))], null, function () { tdGo('item', r.id); });
       var l = r.invite ? tdLink(r.invite.link, 'k nrl') : null;   /* 0.21.0: an invite, answered where it lives */
       var rs = r.invite && r.invite.rsvp ? rsvpBox(r.invite.rsvp, r.id, 'today') : null;   /* or here: Yes, No, Maybe */
       return l || rs ? h('div', { class: 'nrw' + (rs ? ' hasrs' : '') }, [b, l, rs]) : b;
@@ -1661,7 +1692,7 @@
     }
     if (d.kind === 'item' && !d.open) keys.push(btn('k', 'Put back on my list', null, function () { tdPost('undone', { items: [d.id] }, 'Back on your list.'); }));
     if (d.open) keys.push(btn('k q', d.remind_at ? 'Reminder ' + d.remind_at : 'Remind me', { 'aria-expanded': String(TD.rem === 'd') }, function () { TD.rem = TD.rem === 'd' ? null : 'd'; renderBrief(); }));
-    if (d.kind === 'clash' && d.open) keys.push(btn('k q', 'Dismiss', null, function () { tdPost('dismiss', { clash: d.id }, 'Clash dismissed.').then(function () { tdGo('today'); }); }));
+    if (d.kind === 'clash' && d.open) keys.push(btn('k q', 'Dismiss', null, function () { tdDismiss(d.id).then(function () { tdGo('today'); }); }));
     var target = d.followup ? ['followup', d.followup.id] : [d.kind === 'clash' ? 'clash' : 'item', d.id];
     return [h('div', { class: 'keys' }, keys), tdRemind('d', target, d.followup ? d.followup.who : ''), tdNoteBox('d' + d.id)];
   }
@@ -1710,7 +1741,7 @@
     var list = h('section', { class: 'card rpl', 'aria-labelledby': 'td-rp' }, [h('h2', { class: 'lab', id: 'td-rp' }, ['Waiting on you', h('span', { class: 'r' }, r.total + ' · oldest first')]),
       r.err ? h('p', { class: 'dim' }, r.err) : r.total ? r.rows.map(function (x) {
         var b = btn('rpr' + (x.id === TD.rsel ? ' sel' : ''), [tdIco(x.icon, x.source), h('span', { class: 'who' }, [x.who, x.mine ? h('span', { class: 'mine' }, 'You said') : null]),
-          h('span', { class: 'ag' }, x.age), h('span', { class: 'why' }, x.why), h('span', { class: 'bar', 'aria-hidden': 'true' })],
+          h('span', { class: 'ag' }, x.age), h('span', { class: 'why' }, areaLead(x.area).concat([x.why])), h('span', { class: 'bar', 'aria-hidden': 'true' })],
           { 'aria-current': x.id === TD.rsel ? 'true' : null }, function () { TD.rsel = x.id; TD.rd = null; renderBrief(); tdReplyDetail().then(function () { renderBrief(); window.scrollTo(0, 0); }); });
         b.querySelector('.bar').style.setProperty('--w', String(x.bar));
         return b;
@@ -2060,7 +2091,7 @@
     view: null, place: 'home', wiz: null,  /* 0.9.0: the Setup place; the first-run step (0..2) or null */
     adv: {},             /* Advanced section id -> open (all closed by default) */
     acctOpen: {},        /* account id -> its switches shown (one line otherwise) */
-    areaSel: null, newAreaOpen: false, tzOpen: false,
+    areaSel: null, tzOpen: false,
     openCals: {},        /* account id -> calendars disclosure open */
     connect: {},         /* area id -> {flow_id, auth_url} while a sign-in runs */
     confirm: null,       /* 'key' | 'acct:<id>' | 'area:<id>' */
@@ -2074,8 +2105,7 @@
     profMode: null,      /* 'copy' | 'rename' while that inline form is open */
     wdraft: {},          /* '<profile id>:<section>' -> unsaved text */
     wexOpen: false,      /* Writing instructions: the fixed style examples unfolded */
-    focusNext: null,     /* focus target for the next Setup render (the brief's "Manage" link) */
-    newArea: { name: '', colour: 2 }
+    focusNext: null      /* focus target for the next Setup render (the brief's "Manage" link) */
   };
   function applyServerLook() {
     var st = S && S.settings;
@@ -2701,7 +2731,7 @@
     return live && a.signal ? 'Slack and Signal' : a.signal ? 'Signal' : 'Slack';
   }
   function areaCard(a) {
-    var c = clampColour(a.colour), reads = a.reads || {}, err = errBox();
+    var c = aColour(a), reads = a.reads || {}, err = errBox();
     function readChip(key, label) {
       var b = btn('chip', label, { 'aria-pressed': String(key === 'writer' ? reads[key] !== false : !!reads[key]) }, function () {
         var next;
@@ -2717,7 +2747,7 @@
     }
     function later(label, why) { return h('button', { type: 'button', class: 'chip later', disabled: true, 'aria-pressed': 'false' }, [label, h('span', { class: 'cl' }, ' · ' + why)]); }
     var accts = a.accounts || [], key = 'area:' + a.id;
-    return h('div', { class: 'acard a' + c }, [
+    return sty(h('div', { class: 'acard ' + c.cls }, [
       h('h3', { class: 'areahead', tabindex: '-1', 'data-fk': 'areah:' + a.id }, a.name),
       accts.length ? h('div', { class: 'accts' }, accts.map(function (x) { return accountRow(a, x); })) : h('p', { class: 'note none' }, 'No Google account yet.'),
       connectBlock(a),
@@ -2728,33 +2758,8 @@
         err, a.chat_available ? h('p', { class: 'note' }, 'Chat is ' + chatNames(a) + '.') : null]),
       a.fixed ? null : ui.confirm === key ? confirmRow('Delete ' + a.name + '? Its accounts are disconnected and Callsheet forgets their data.', 'Delete', function (y, cn, e) {
         run([y, cn], e, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id)); }, function () { ui.confirm = null; return reload('add-name'); });
-      }) : h('div', { class: 'acct-f' }, askBtn(key, 'Delete area'))]);
+      }) : h('div', { class: 'acct-f' }, askBtn(key, 'Delete area'))]), c.style);
   }
-  function addAreaCard() {
-    var err = errBox(), na = ui.newArea;
-    var name = on(h('input', { class: 'inp', type: 'text', id: 'f-area', value: na.name, autocomplete: 'off', 'data-fk': 'add-name' }), 'input', function () { na.name = name.value; });
-    var sws = h('div', { class: 'swatches', role: 'group', 'aria-labelledby': 'lbl-swatch' }, [1, 2, 3, 4].map(function (k) {
-      return btn('a' + k, null, { 'aria-pressed': String(na.colour === k), 'aria-label': 'Colour ' + k }, function (e) {
-        na.colour = k; sws.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === e.currentTarget)); });
-      });
-    }));
-    var addB = h('button', { type: 'submit', class: 'btn primary' }, 'Add');
-    return on(h('form', { class: 'acard addcard', novalidate: '' }, [
-      h('h3', { class: 'big' }, '+ Add an area'),
-      h('div', null, [h('label', { class: 'label', for: 'f-area' }, 'Name'), name]),
-      h('div', null, [h('span', { class: 'label', id: 'lbl-swatch' }, 'Header colour'), sws]),
-      h('div', { class: 'btns' }, addB), err]), 'submit', function (e) {
-      e.preventDefault();
-      var nm = name.value.trim();
-      if (!nm) { err.textContent = 'Give the area a name.'; return; }
-      run([addB], err, function () { return api('POST', 'api/areas', { name: nm, colour: na.colour }); }, function (r) {
-        ui.newArea = { name: '', colour: na.colour % 4 + 1 };
-        if (r && r.id) { ui.areaSel = r.id; ui.newAreaOpen = false; }  /* 0.9.0: the new area's chip is picked */
-        return reload(r && r.id ? 'areah:' + r.id : 'add-name');
-      });
-    });
-  }
-
   /* step 3: VIPs */
   function areaById(id) { return S.areas.filter(function (a) { return a.id === id; })[0] || { name: String(id || ''), colour: 4 }; }
   function stepVips() {
@@ -2764,8 +2769,10 @@
       var rm = btn('rm', '×', { 'aria-label': 'Remove ' + (v.name || v.email) }, function () {
         run([rm], rmErr, function () { return api('DELETE', 'api/vips/' + encodeURIComponent(v.id)); }, function () { return reload('vip-name'); });
       });
-      return h('tr', null, [h('td', { class: 'who' }, v.name), h('td', { class: 'em' }, v.email),
-        h('td', null, h('span', { class: 'tag a' + clampColour(a.colour) }, a.name)), h('td', { class: 'x' }, [rm, rmErr])]);
+      /* 0.22.0 VIPs in one store: a VIP Chat added by name has no address; what Chat set for them shows under the name */
+      return h('tr', null, [h('td', { class: 'who' }, v.how ? [h('span', null, v.name), h('span', { class: 'sub muted' }, String(v.how))] : v.name),
+        h('td', { class: 'em' }, v.email || h('span', { class: 'muted' }, 'By name')),
+        h('td', null, sty(h('span', { class: 'tag ' + aColour(a).cls }, a.name), aColour(a).style)), h('td', { class: 'x' }, [rm, rmErr])]);
     });
     var nm = h('input', { class: 'inp', type: 'text', id: 'f-vname', autocomplete: 'off', 'data-fk': 'vip-name' });
     var em = h('input', { class: 'inp', type: 'email', id: 'f-vemail', autocomplete: 'off', spellcheck: 'false' });
@@ -3025,7 +3032,7 @@
     AIS.loading = true;
     return api('GET', 'api/ai').then(function (r) { if (seq === AIS.seq) { AIS.v = r; AIS.err = null; } },
       function (e) { if (seq === AIS.seq) AIS.err = e && e.message ? e.message : 'error'; })
-      .then(function () { AIS.loading = false; AIS.at = Date.now(); aiRedraw(); });
+      .then(function () { var f = AIS.want; AIS.want = null; AIS.loading = false; AIS.at = Date.now(); aiRedraw(f || undefined); });
   }
   function aiRedraw(focus) {
     if (!inPlace('ai')) return;
@@ -3449,9 +3456,20 @@
   var RL_GROUPS = [['Alerts', ['alert_rule', 'alerts']], ['VIPs', ['vip', 'vip_through_quiet']], ['Quiet hours', ['quiet_hours']],
     ['Clean up', ['cleanup']], ['Digests', ['digest']], ['Brief', ['brief', 'brief_schedule']]];
   var RL_ACT = { done: 'Marked done', snooze: 'Snoozed', remind: 'Reminder', note: 'Note' };
+  function rlChange(c) {   /* 0.22.0: one journal row (actions.py): what, where from, when; Undo once (refused when it changed since) */
+    var via = { chat: 'From Chat', today: 'From Today', setup: 'From Setup' }[c.via] || '';
+    return h('div', { class: 'alr' + (c.undone_at ? ' off' : ''), 'data-rlc': String(c.id) }, [
+      h('b', null, String(c.label)), c.undone_at ? h('span', { class: 'tag' }, 'Undone') : h('span', { class: 'ag' }, fmtWhen(c.at * 1000, true)),
+      h('span', { class: 'sub' }, [via, c.note].filter(Boolean).join(' · ')),
+      h('div', { class: 'rlacts' }, c.can_undo ? [btn('tbtn', 'Undo', { 'data-fk': 'rlc:' + c.id + ':undo', 'aria-label': 'Undo ' + c.label }, function () {
+        mutate(function () { return api('POST', 'api/actions/undo', { id: c.id }); }).then(function () { RL.said = 'Undone: ' + c.label + '.'; rlLoad(); },
+          function (e) { RL.said = e.message; rlLoad(); });
+      })] : [])]);
+  }
   function rlLoad(focus) {
     RL.loading = true;
     api('GET', 'api/preferences').then(function (v) { RL.v = v; RL.err = null; }, function (e) { RL.err = e.message; })
+      .then(function () { return api('GET', 'api/actions/recent').then(function (r) { RL.recent = (r && r.changes) || []; }, function () { RL.recent = []; }); })   /* 0.22.0 */
       .then(function () {
         RL.loading = false; RL.at = Date.now();
         if (!inPlace('day')) return;
@@ -3525,35 +3543,312 @@
     var acts = (v.actions || []).slice(0, 10);
     if (acts.length) { any = true; kids.push(h('div', { class: 'rlgrp', 'data-rlg': 'Done to items' }, [h('h3', { class: 'label' }, 'Done to items')].concat(acts.map(rlAction)))); }
     if (!any) kids.push(h('p', { class: 'muted' }, 'No rules yet. Ask in Chat, like “Treat Lena’s Slack DMs as VIP” or “' + RL_ASK + '”.'));
+    var rc = (RL.recent || []).slice(0, 12);   /* 0.22.0 Recent changes (actions.py's journal): labels only, Undo once */
+    if (rc.length) kids.push(h('div', { class: 'rlgrp rcent', 'data-rlg': 'Recent changes' }, [h('h3', { class: 'label' }, 'Recent changes')].concat(rc.map(rlChange))));
     kids.push(RL.errEl, RL.said ? h('p', { class: 'muted', role: 'status' }, RL.said) : null);
     return h('section', { class: 'where rules', 'aria-labelledby': 'rules-h' }, kids);
   }
   function dayPeople() { return h('section', { class: 'where ppl', 'aria-labelledby': 'vip-h' }, [h('h2', { class: 'h3', id: 'vip-h' }, 'VIPs and replies')].concat(stepVips())); }
 
   /* ----- Connections: one policy line, the areas as chips (one area's accounts at a time), Signal, notes and code ----- */
+  /* ---------- 0.22.0 Setup › Connections › Areas (mockup areas-v1, owner approved 2026-11-16): every area as a card
+     (colour, name, connections), inline rename (Enter saves, Esc cancels), the palette of 10 and More colours, Move to…
+     and desktop drag and drop ending in the same box, delete with where its connections go, Add an area, the line with
+     Undo. Phone: menus and pickers as bottom sheets. textContent only (h()); every change is the server's (api/areas). */
+  var AR = { b: null, loading: false, err: '', menu: null, cal: null, mv: null, pop: null, hex: null, edit: null, editV: '',
+    more: null, del: null, add: null, done: false, flash: null, drag: null, tab: 'areas' };
+  function aColour(a) {   /* {cls, style} for an area: a palette key (.ak-*) or a free colour (.ax with its two shades) */
+    var sw = a && a.swatch, k = sw ? sw.key : (a && typeof a === 'object' ? a.colour : a);
+    if (/^[1-4]$/.test(String(k))) return { cls: 'a' + clampColour(k), style: null };
+    if (sw && sw.custom && /^#[0-9a-f]{6}$/.test(sw.light) && /^#[0-9a-f]{6}$/.test(sw.dark)) return { cls: 'ax', style: '--al:' + sw.light + ';--ad:' + sw.dark };
+    return { cls: /^[a-z]{2,12}$/.test(String(k)) ? 'ak-' + k : 'a4', style: null };
+  }
+  function sty(el, s) {   /* inline custom properties through CSSOM (h() never writes a style attribute) */
+    if (s) s.split(';').forEach(function (p) { var i = p.indexOf(':'); if (i > 0) el.style.setProperty(p.slice(0, i).trim(), p.slice(i + 1).trim()); });
+    return el;
+  }
+  function adot(a, cls) { var c = aColour(a); return sty(h('span', { class: 'adot ' + c.cls + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' }), c.style); }
+  function arFlat(x) { return x.reduce(function (o, y) { return o.concat(y); }, []); }
+  function arLoad(focus) {
+    return api('GET', 'api/areas').then(function (b) { AR.b = b; AR.err = ''; }, function (e) { AR.err = e.message; })
+      .then(function () { if (inPlace('connections')) renderSetup(focus ? '[data-fk="' + cssq(focus) + '"]' : null); });
+  }
+  function arAfter(focus, flash) {   /* after a change: the state (Today, the chips) and the board, then the Undo line */
+    AR.menu = AR.cal = AR.mv = AR.more = AR.del = AR.add = AR.hex = null; AR.edit = null; AR.done = true; AR.flash = flash || null;
+    return Promise.resolve(loadState()).then(function () { return arLoad(focus); });
+  }
+  function arClose() { AR.menu = AR.cal = AR.mv = AR.pop = AR.hex = AR.more = AR.del = null; }
+  function arAll() { return AR.b ? AR.b.areas.reduce(function (o, a) { return o.concat(a.conns); }, []).concat(AR.b.loose) : []; }
+  function arConn(id) {
+    var all = arAll(), i, c;
+    for (i = 0; i < all.length; i++) { c = all[i]; if (c.conn === id) return c; var k = (c.calendars || []).filter(function (x) { return x.conn === id; })[0]; if (k) return k; }
+    return null;
+  }
+  function arArea(id) { return (AR.b ? AR.b.areas : []).filter(function (a) { return a.id === id; })[0]; }
+  function arKey(label, cls, attrs, fn) { return btn('k' + (cls ? ' ' + cls : ''), label, attrs, fn); }
+  function arSeg(opts, cur, fn) {
+    return h('div', { class: 'arseg', role: 'group' }, opts.map(function (o) {
+      return btn('', o[1], { 'aria-pressed': String(o[0] === cur), 'data-fk': 'ar-seg:' + o[0] }, function () { fn(o[0]); });
+    }));
+  }
+  function arDoneLine() {
+    var u = AR.done && AR.b && AR.b.last_undo, err = errBox();
+    if (!u) return null;
+    var undo = arKey('Undo', 'q', { 'data-fk': 'ar-undo' }, function () {
+      run([undo], err, function () { return api('POST', 'api/areas/undo', { token: u.token }); }, function () { AR.done = false; AR.flash = null; return Promise.resolve(loadState()).then(function () { return arLoad('ar-add'); }); });
+    });
+    return h('div', { class: 'ardone', role: 'status' }, [h('span', { class: 'st' }, [h('i', null, '✓'), ' Done']), h('span', { class: 'what' }, u.label), undo, err]);
+  }
+  function arMoveBox(c, to, key) {
+    var a = arArea(to), err = errBox(), past = AR.mv.past;
+    var go = arKey(key || 'Move', 'go', { 'data-fk': 'ar-go' }, function () {
+      run([go], err, function () { return api('POST', 'api/areas/move', { conn: c.conn, to: to, past: past }); }, function () { return arAfter('ar-undo', c.conn); });
+    });
+    return h('div', { class: 'armv', role: 'group', 'aria-label': 'Move' }, [
+      h('div', { class: 'to' }, [h('span', { class: 'ar' }, 'Move to'), adot(a), a ? a.name : '']),
+      h('ul', null, [h('li', null, [h('i', null, '✓'), h('span', null, c.name + ' belongs to ' + (a ? a.name : '') + '.')]),
+        h('li', null, [h('i', null, '✓'), h('span', null, 'Its new ' + (c.kind === 'google' ? 'mail and events are' : c.kind === 'calendar' ? 'events are' : 'items are') + ' tagged ' + (a ? a.name : '') + ' from now on.')])]),
+      c.past && c.past.n ? h('div', { class: 'past' }, [h('span', { class: 'fl' }, 'What it already read'),
+        arSeg([['leave', 'Leave as it is'], ['move', 'Move it too']], past ? 'move' : 'leave', function (v) { AR.mv.past = v === 'move'; renderSetup('[data-fk="ar-seg:' + v + '"]'); }),
+        h('span', { class: 'sub' }, c.past.text + '. People and projects keep their own area.')]) : null,
+      h('div', { class: 'keys' }, [go, arKey('Cancel', 'q', { 'data-fk': 'ar-cancel' }, function () { AR.mv = null; renderSetup('[data-fk="' + cssq('ar-m:' + c.conn) + '"]'); })]), err]);
+  }
+  function arPick(c, to) { AR.menu = AR.cal = null; AR.mv = { conn: c.conn, to: to, past: true }; renderSetup('[data-fk="ar-go"]'); }
+  function arMenuItems(c, phone) {   /* Move to: the areas (here now greyed), one calendar of a Google account, + New area… */
+    var tgt = AR.cal ? arConn(AR.cal) : c, cls = phone ? 'opt' : 'mi';
+    var items = AR.b.areas.map(function (a) {
+      var here = a.id === tgt.area_id;
+      return btn(cls + (here ? ' cur' : ''), [adot(a), a.name, here ? h('span', { class: 'r' }, 'here now') : null],
+        { role: 'menuitem', 'aria-disabled': here ? 'true' : null, 'data-fk': 'ar-to:' + a.id }, function () { if (!here) arPick(tgt, a.id); });
+    });
+    var cals = !AR.cal && c.kind === 'google' && (c.calendars || []).length > 1 ? [h('hr'), h('div', { class: 'mh' }, 'Or one calendar')].concat(c.calendars.map(function (k) {
+      return btn(cls, [h('span', { class: 'aric sm', 'aria-hidden': 'true' }, '▦'), k.name], { role: 'menuitem', 'data-fk': 'ar-cal:' + k.conn }, function () { AR.cal = k.conn; renderSetup('[data-fk^="ar-to:"]'); });
+    })) : [];
+    return [h('div', { class: 'mh' }, AR.cal ? 'Move ' + tgt.name + ' to' : 'Move to')].concat(items, cals, [h('hr'),
+      btn(cls, '+ New area…', { role: 'menuitem', 'data-fk': 'ar-new' }, function () { arClose(); AR.add = { name: '', colour: arFree(), conn: tgt.conn }; renderSetup('#ar-add-name'); })]);
+  }
+  function arFree() { var used = AR.b.areas.map(function (a) { return a.colour; }); var f = AR.b.palette.filter(function (p) { return used.indexOf(p.key) < 0; })[0]; return (f || AR.b.palette[0]).key; }
+  function arRow(c, a) {
+    var phone = phoneMq.matches, open = AR.menu === c.conn, fl = AR.flash === c.conn;
+    var mvk = arKey(phone ? 'Move' : 'Move to…', 'q mvk', { 'aria-haspopup': 'menu', 'aria-expanded': String(open), 'data-fk': 'ar-m:' + c.conn }, function () {
+      var was = open; arClose(); AR.menu = was ? null : c.conn; renderSetup(was ? '[data-fk="' + cssq('ar-m:' + c.conn) + '"]' : '[data-fk^="ar-to:"]');
+    });
+    var row = h('div', { class: 'arcn' + (fl ? ' flash' : ''), draggable: phone ? null : 'true', 'data-conn': c.conn }, [
+      h('span', { class: 'hd', 'aria-hidden': 'true' }, '⋮⋮'), h('span', { class: 'aric', 'aria-hidden': 'true' }, c.icon),
+      h('span', { class: 'cm' }, [h('b', null, c.name), h('span', { class: 'sub' }, [fl ? h('span', { class: 'new' }, 'Just moved') : null, fl ? ' · ' : null, c.line])]),
+      mvk, open && !phone ? h('div', { class: 'arpop armenu', role: 'menu', 'aria-label': 'Move ' + c.name }, arMenuItems(c, false)) : null]);
+    if (!phone) {
+      on(row, 'dragstart', function (e) { AR.drag = c.conn; arClose(); try { e.dataTransfer.setData('text/plain', c.conn); e.dataTransfer.effectAllowed = 'move'; } catch (x) { } setTimeout(function () { row.classList.add('ph'); }, 0); });
+      on(row, 'dragend', function () { AR.drag = null; row.classList.remove('ph'); document.querySelectorAll('.arcard.drop').forEach(function (x) { x.classList.remove('drop'); }); });
+    }
+    var mv = AR.mv && (AR.mv.conn === c.conn) && !phone ? arMoveBox(c, AR.mv.to) : null;
+    return [row, mv];
+  }
+  function arDropTarget(card, a) {
+    function ok() { var c = AR.drag && arConn(AR.drag); return c && c.area_id !== a.id; }
+    on(card, 'dragover', function (e) { if (!ok()) return; e.preventDefault(); if (!card.classList.contains('drop')) { document.querySelectorAll('.arcard.drop').forEach(function (x) { x.classList.remove('drop'); }); card.classList.add('drop'); } });
+    on(card, 'dragleave', function (e) { if (!card.contains(e.relatedTarget)) card.classList.remove('drop'); });
+    on(card, 'drop', function (e) { if (!ok()) return; e.preventDefault(); var c = AR.drag; AR.drag = null; arClose(); AR.mv = { conn: c, to: a.id, past: true }; renderSetup('[data-fk="ar-go"]'); });
+  }
+  function arSwatches(sel, fn, self) {
+    return h('div', { class: 'arsws', role: 'radiogroup', 'aria-label': 'Colour' }, AR.b.palette.map(function (p) {
+      var u = AR.b.areas.filter(function (x) { return x.colour === p.key && x.id !== self; })[0];
+      return btn('arsw ak-' + p.key, [h('i', null, p.key === sel ? '✓' : ''), u ? h('span', { class: 'u' }) : null],
+        { role: 'radio', 'aria-checked': String(p.key === sel), 'aria-pressed': String(p.key === sel), 'aria-label': p.name + (u ? ', used by ' + u.name : ''), 'data-fk': 'ar-sw:' + p.key }, function () { fn(p.key); });
+    }));
+  }
+  function arColourBody(a, err) {
+    var p = AR.b.palette.filter(function (x) { return x.key === a.colour; })[0], used = AR.b.areas.filter(function (x) { return x.id !== a.id; });
+    var c = aColour(a);
+    return [h('div', { class: 'cpick' }, [h('div', { class: 'nm' }, [p ? p.name : a.swatch.name, h('span', { class: 'ratio' }, p ? p.light_ratio.toFixed(1) + ':1 Light · ' + p.dark_ratio.toFixed(1) + ':1 Dark' : 'Your colour')]),
+        h('div', { class: 'inuse' }, '○ In use: ' + used.map(function (x) { return x.swatch.name + ' · ' + x.name; }).join(', '))]),
+      sty(h('div', { class: 'arprev ' + c.cls }, [h('span', { class: 'chipx' }, [adot(a), a.name]), h('span', { class: 'blk' }, [h('b', null, 'Design review'), ' 10:00 am']), h('span', { class: 'ink' }, a.name)]), c.style),
+      h('div', { class: 'pfoot' }, [arKey('More colours…', 'q q0', { 'data-fk': 'ar-more-col' }, function () { AR.pop = null; AR.hex = { area: a.id, v: a.swatch.custom ? a.colour : '', r: null }; renderSetup('#ar-hex'); }), h('span', { class: 'sub' }, 'Saved as you pick')]), err];
+  }
+  function arSetColour(a, col, keepOpen) {
+    var err = document.querySelector('.arpop .err, .arsheet .err');
+    run([], err, function () { return api('PATCH', 'api/areas/' + encodeURIComponent(a.id), { colour: col }); }, function () {
+      var pop = keepOpen ? a.id : null; return arAfter('ar-sw:' + col).then(function () { AR.pop = pop; renderSetup('[data-fk="' + cssq('ar-sw:' + col) + '"]'); });
+    });
+  }
+  function arColourPop(a, phone) {
+    var err = errBox(), sws = arSwatches(a.colour, function (k) { arSetColour(a, k, true); }, a.id);
+    if (phone) return [h('div', { class: 'sh' }, ['Colour for ' + a.name, arKey('Done', 'q x', { 'data-fk': 'ar-pop-done' }, function () { AR.pop = null; renderSetup('[data-fk="' + cssq('ar-c:' + a.id) + '"]'); })]), sws].concat(arColourBody(a, err));
+    return h('div', { class: 'arpop cpop', role: 'dialog', 'aria-label': 'Colour for ' + a.name }, [h('div', { class: 'lab' }, 'Colour'), sws].concat(arColourBody(a, err)));
+  }
+  var arHexT = null;
+  function arHexPop(a, phone) {
+    var x = AR.hex, r = x.r, err = errBox();
+    var inp = on(h('input', { class: 'inp', id: 'ar-hex', type: 'text', maxlength: '7', value: x.v, autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Any colour, as a hex code', placeholder: '#2c6d7d', 'data-fk': 'ar-hex' }), 'input', function () {
+      x.v = inp.value; clearTimeout(arHexT);
+      arHexT = setTimeout(function () {
+        if (!/^#?[0-9a-fA-F]{6}$/.test(x.v.trim())) { x.r = null; renderSetup(); return; }
+        api('POST', 'api/areas/colour-check', { hex: x.v.trim() }).then(function (res) { x.r = res; x.e = ''; }, function (e) { x.r = null; x.e = e.message; }).then(function () { if (AR.hex === x) renderSetup(); });
+      }, 250);
+    });
+    function side(cls, label, hex, ratio, rawRatio, raw) {
+      var okr = raw === hex;
+      /* 0.22.0: the shade on its own ground (Light on the light ground, Dark on the dark one), as the area's name */
+      return h('div', { class: cls }, [h('span', { class: 'm' }, label + ' · ' + hex), h('span', { class: 's' }, [sty(h('span', { class: 'adot', 'aria-hidden': 'true' }), 'background:' + hex), sty(h('span', null, a.name), 'color:' + hex)]),
+        h('span', { class: 'r' }, okr ? ratio.toFixed(1) + ':1 · ✓ reads well' : rawRatio.toFixed(1) + ':1 · ▲ uses ' + hex)]);
+    }
+    var body = [h('div', { class: 'hexrow' }, inp)];
+    if (r && /^#[0-9a-f]{6}$/.test(r.light) && /^#[0-9a-f]{6}$/.test(r.dark)) {
+      body.push(h('div', { class: 'hexprev' }, [side('lt', 'Light', r.light, r.light_ratio, r.raw_light, r.hex), side('dk', 'Dark', r.dark, r.dark_ratio, r.raw_dark, r.hex)]));
+      r.warnings.forEach(function (w) { body.push(h('p', { class: 'arwarn' }, [h('i', { 'aria-hidden': 'true' }, '▲'), h('span', null, w)])); });
+      var use = arKey(r.light === r.dark ? 'Use ' + r.light : 'Use ' + r.light + ' and ' + r.dark, 'go', { 'data-fk': 'ar-hex-use' }, function () {
+        run([use], err, function () { return api('PATCH', 'api/areas/' + encodeURIComponent(a.id), { colour: r.hex }); }, function () { return arAfter('ar-c:' + a.id); });
+      });
+      body.push(h('div', { class: 'keys' }, [use, arKey('Back to the palette', 'q', { 'data-fk': 'ar-hex-back' }, function () { AR.hex = null; AR.pop = a.id; renderSetup('[data-fk="' + cssq('ar-sw:' + a.colour) + '"]'); })]));
+    } else {
+      body.push(h('p', { class: 'sub' }, x.e || 'Type a hex code. Callsheet checks it in Light and Dark and offers a shade that reads well.'));
+      body.push(h('div', { class: 'keys' }, arKey('Back to the palette', 'q', { 'data-fk': 'ar-hex-back' }, function () { AR.hex = null; AR.pop = a.id; renderSetup(); })));
+    }
+    body.push(err);
+    if (phone) return [h('div', { class: 'sh' }, 'More colours')].concat(body);
+    return h('div', { class: 'arpop cpop hexp', role: 'dialog', 'aria-label': 'More colours for ' + a.name }, [h('div', { class: 'lab' }, 'More colours')].concat(body));
+  }
+  function arRename(a, inp, err) {
+    var v = inp.value.trim();
+    if (!AR.edit) return;
+    if (v === a.name || !v) { AR.edit = null; renderSetup('[data-fk="' + cssq('ar-n:' + a.id) + '"]'); return; }
+    AR.edit = null;
+    run([], err, function () { return api('PATCH', 'api/areas/' + encodeURIComponent(a.id), { name: v }); }, function () { return arAfter('ar-n:' + a.id); })
+      .then(function () { if (err.textContent) { AR.edit = a.id; AR.editV = v; renderSetup('#ar-name'); } });
+  }
+  function arDelete(a) {
+    var others = AR.b.areas.filter(function (x) { return x.id !== a.id; }), d = AR.del, err = errBox(), n = a.conns.length;
+    var hasAcc = a.conns.some(function (c) { return c.kind === 'google' || c.kind === 'slack'; });
+    var go = arKey('Delete area', 'dark', { 'data-fk': 'ar-del-go' }, function () {
+      run([go], err, function () { return api('DELETE', 'api/areas/' + encodeURIComponent(a.id), d.how === 'disconnect' ? { disconnect: true } : { to: d.to }); },
+        function () { return d.how === 'disconnect' ? (AR.del = null, AR.done = false, Promise.resolve(loadState()).then(function () { return arLoad('ar-add'); })) : arAfter('ar-undo'); });
+    });
+    function rad(id, label, kids) {
+      return h('div', { class: 'arrad' }, [btn('o' + (d.how === id ? ' on' : ''), null, { role: 'radio', 'aria-checked': String(d.how === id), 'aria-label': label, 'data-fk': 'ar-del:' + id }, function () { d.how = id; renderSetup('[data-fk="ar-del:' + id + '"]'); }), h('b', null, label)].concat(kids));
+    }
+    return h('div', { class: 'arconfirm', role: 'group', 'aria-label': 'Delete ' + a.name }, [h('span', { class: 'q' }, 'Delete ' + a.name + '?'),
+      h('span', { class: 'sub' }, n ? 'Where should ' + (n === 1 ? a.conns[0].name : 'its ' + n + ' connections') + ' go?' : 'Nothing is in it.'),
+      n ? rad('move', 'Move ' + (n === 1 ? 'it' : 'them') + ' to', [h('div', { class: 'achips' }, others.map(function (o) {
+        return btn('achip', [adot(o), o.name], { 'aria-pressed': String(d.to === o.id), 'data-fk': 'ar-delto:' + o.id }, function () { d.to = o.id; d.how = 'move'; renderSetup('[data-fk="' + cssq('ar-delto:' + o.id) + '"]'); });
+      })), h('span', { class: 'sub' }, 'With ' + (n === 1 ? 'its' : 'their') + ' past items.')]) : null,
+      n && hasAcc ? rad('disconnect', 'Disconnect ' + (n === 1 ? 'it' : 'them'), [h('span', { class: 'sub' }, 'Callsheet signs out of its accounts and forgets their messages. This can’t be undone.')]) : null,
+      h('div', { class: 'keys' }, [go, arKey('Keep it', 'q', { 'data-fk': 'ar-del-keep' }, function () { AR.del = null; renderSetup('[data-fk="' + cssq('ar-x:' + a.id) + '"]'); })]), err]);
+  }
+  function arMoreMenu(a) {
+    function item(label, fk, fn) { return btn('mi', label, { role: 'menuitem', 'data-fk': fk }, fn); }
+    return h('div', { class: 'arpop armenu right', role: 'menu', 'aria-label': 'More for ' + a.name }, [
+      item('Rename', 'ar-ren:' + a.id, function () { arClose(); AR.edit = a.id; AR.editV = a.name; renderSetup('#ar-name'); }),
+      item('Colour', 'ar-col:' + a.id, function () { arClose(); AR.pop = a.id; renderSetup('[data-fk="' + cssq('ar-sw:' + a.colour) + '"]'); }),
+      a.fixed ? null : h('hr'),
+      a.fixed ? null : item('Delete area', 'ar-delm:' + a.id, function () { arClose(); AR.del = { area: a.id, how: 'move', to: 'personal' }; renderSetup('[data-fk="ar-del-go"]'); })]);
+  }
+  function arCard(a) {
+    var c = aColour(a), phone = phoneMq.matches, err = errBox(), head;
+    var cb = btn('arcb', adot(a, 'big'), { 'aria-label': 'Colour: ' + a.swatch.name + '. Change', 'aria-expanded': String(AR.pop === a.id || (AR.hex && AR.hex.area === a.id) || false), 'data-fk': 'ar-c:' + a.id }, function () {
+      var was = AR.pop === a.id; arClose(); AR.pop = was ? null : a.id; renderSetup(was ? '[data-fk="' + cssq('ar-c:' + a.id) + '"]' : '[data-fk="' + cssq('ar-sw:' + a.colour) + '"]');
+    });
+    var pop = phone ? null : AR.pop === a.id ? arColourPop(a, false) : AR.hex && AR.hex.area === a.id ? arHexPop(a, false) : AR.more === a.id ? arMoreMenu(a) : null;
+    if (AR.edit === a.id) {
+      var inp = h('input', { class: 'inp', id: 'ar-name', type: 'text', maxlength: '40', value: AR.editV, autocomplete: 'off', 'aria-label': 'Name of ' + a.name, 'data-fk': 'ar-name' });
+      on(inp, 'input', function () { AR.editV = inp.value; });
+      on(inp, 'keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); arRename(a, inp, err); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); AR.edit = null; renderSetup('[data-fk="' + cssq('ar-n:' + a.id) + '"]'); }
+      });
+      on(inp, 'blur', function () { if (AR.edit === a.id) setTimeout(function () { if (AR.edit === a.id) arRename(a, inp, err); }, 0); });
+      head = [cb, h('span', { class: 'edit' }, [inp, h('span', { class: 'hint' }, [h('span', { class: 'kh' }, '↵'), ' saves · ', h('span', { class: 'kh' }, 'esc'), ' cancels'])]), pop];
+    } else {
+      head = [cb, btn('arnm', [a.name, h('span', { class: 'pen', 'aria-hidden': 'true' }, '✎')], { 'aria-label': 'Rename ' + a.name, 'data-fk': 'ar-n:' + a.id }, function () { arClose(); AR.edit = a.id; AR.editV = a.name; renderSetup('#ar-name'); }),
+        h('span', { class: 'cnt' }, String(a.conns.length)),
+        btn('armore', '⋯', { 'aria-label': 'More for ' + a.name, 'aria-haspopup': 'menu', 'aria-expanded': String(AR.more === a.id), 'data-fk': 'ar-x:' + a.id }, function () { var was = AR.more === a.id; arClose(); AR.more = was ? null : a.id; renderSetup(was ? '[data-fk="' + cssq('ar-x:' + a.id) + '"]' : '[data-fk="' + cssq('ar-ren:' + a.id) + '"]'); }), pop];
+    }
+    var rows = a.conns.length ? arFlat(a.conns.map(function (x) { return arRow(x, a); })) : [h('p', { class: 'none' }, 'Nothing here yet. Move a connection in, or connect one in Accounts.')];
+    var card = h('section', { class: 'arcard ' + c.cls, 'aria-label': a.name, 'data-area': a.id }, [h('div', { class: 'arh' }, head), err].concat(rows,
+      [AR.del && AR.del.area === a.id ? arDelete(a) : null, h('div', { class: 'ardrop' }, 'Drop to move to ' + a.name)]));
+    sty(card, c.style);
+    if (!phone) arDropTarget(card, a);
+    return card;
+  }
+  function arAddForm() {
+    if (!AR.add.colour) AR.add.colour = arFree();
+    var f = AR.add, err = errBox(), p = AR.b.palette.filter(function (x) { return x.key === f.colour; })[0];
+    var inp = on(h('input', { class: 'inp', id: 'ar-add-name', type: 'text', maxlength: '40', value: f.name, autocomplete: 'off', 'data-fk': 'ar-add-name' }), 'input', function () { f.name = inp.value; });
+    var go = arKey('Add area', 'go', { 'data-fk': 'ar-add-go' }, function () {
+      if (!f.name.trim()) { err.textContent = 'Give the area a name.'; inp.focus(); return; }
+      run([go], err, function () {
+        return api('POST', 'api/areas', { name: f.name.trim(), colour: f.colour }).then(function (r) {
+          return f.conn ? api('POST', 'api/areas/move', { conn: f.conn, to: r.id, past: true }) : r;
+        });
+      }, function () { return arAfter('ar-undo', f.conn); });
+    });
+    on(inp, 'keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go.click(); } else if (e.key === 'Escape') { AR.add = null; renderSetup('[data-fk="ar-add"]'); } });
+    var used = AR.b.areas.some(function (a) { return a.colour === f.colour; });
+    return h('section', { class: 'arcard addf ak-' + f.colour, 'aria-label': 'New area' }, [
+      h('div', { class: 'arh' }, [h('span', { class: 'arcb' }, adot(f.colour, 'big')), h('span', { class: 'arnm' }, 'New area')]),
+      h('label', { class: 'fl', for: 'ar-add-name' }, 'Name'), inp, h('span', { class: 'fl' }, 'Colour'),
+      arSwatches(f.colour, function (k) { f.colour = k; renderSetup('[data-fk="ar-sw:' + k + '"]'); }, null),
+      h('span', { class: 'sub' }, (p ? p.name : '') + (used ? ' is in use too.' : ' is free.') + ' ○ marks colours already in use.'),
+      f.conn && arConn(f.conn) ? h('span', { class: 'sub' }, arConn(f.conn).name + ' moves into it.') : null,
+      h('div', { class: 'keys' }, [go, arKey('Cancel', 'q', { 'data-fk': 'ar-add-cancel' }, function () { AR.add = null; renderSetup('[data-fk="ar-add"]'); })]), err]);
+  }
+  function arSheet() {   /* phone: Move to…, the box, the colour picker and More colours as a bottom sheet */
+    var c = AR.menu && arConn(AR.menu), m = AR.mv && arConn(AR.mv.conn), a = arArea(AR.pop || (AR.hex && AR.hex.area)), kids = null, label = '';
+    if (c) { label = 'Move ' + c.name; kids = [h('div', { class: 'sh' }, label), h('p', { class: 'sub' }, c.line)].concat(arMenuItems(c, true), [h('div', { class: 'keys' }, arKey('Cancel', 'q q0', { 'data-fk': 'ar-sh-x' }, function () { arClose(); renderSetup('[data-fk="' + cssq('ar-m:' + c.conn) + '"]'); }))]); }
+    else if (m) { label = 'Move ' + m.name; kids = [h('div', { class: 'sh' }, label), arMoveBox(m, AR.mv.to)]; }
+    else if (a && AR.pop) { label = 'Colour for ' + a.name; kids = arColourPop(a, true); }
+    else if (a && AR.hex) { label = 'More colours'; kids = arHexPop(a, true); }
+    else if (AR.more && arArea(AR.more)) { label = 'More'; kids = [arMoreMenu(arArea(AR.more))]; }
+    if (!kids) return null;
+    return h('div', { class: 'arsheetw' }, [btn('arscrim', null, { 'aria-label': 'Close', tabindex: '-1' }, function () { arClose(); renderSetup(); }),
+      h('div', { class: 'arsheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': label }, [h('div', { class: 'grab', 'aria-hidden': 'true' })].concat(kids))]);
+  }
+  function areasTab() {
+    if (!AR.b) {
+      if (!AR.loading) { AR.loading = true; arLoad().then(function () { AR.loading = false; }); }
+      return [h('p', { class: 'muted', role: 'status' }, AR.err || 'Loading…')];
+    }
+    var loose = AR.b.loose.length ? h('section', { class: 'arcard loose' }, [h('div', { class: 'lab' }, ['Not in an area', h('span', { class: 'r sub' }, 'Shown under every area')]),
+      h('div', { class: 'cns' }, arFlat(AR.b.loose.map(function (x) { return arRow(x, null); })))]) : null;
+    var grid = h('div', { class: 'agrid' }, AR.b.areas.map(arCard).concat([AR.add ? arAddForm() : btn('araddc', '+ Add an area', { 'data-fk': 'ar-add' }, function () { arClose(); AR.add = { name: '', colour: arFree(), conn: null }; renderSetup('#ar-add-name'); }), loose]));
+    return h('div', { class: 'arz' }, [h('p', { class: 'intro' }, 'Areas sort Today, Agenda and Replies. Each connection belongs to one.'), arDoneLine(), grid, AR.err ? h('p', { class: 'err', role: 'alert' }, AR.err) : null, phoneMq.matches ? arSheet() : null]);
+  }
+  document.addEventListener('keydown', function (e) {   /* Esc closes an open menu, picker or box on the Areas tab */
+    if (e.key !== 'Escape' || !inPlace('connections') || AR.tab !== 'areas' || AR.edit) return;
+    if (AR.menu || AR.mv || AR.pop || AR.hex || AR.more || AR.del) { arClose(); renderSetup(); }
+  });
+  function connTabs() {
+    return h('div', { class: 'arsub', role: 'tablist', 'aria-label': 'Connections' }, [['areas', 'Areas'], ['accounts', 'Accounts'], ['connectors', 'Connectors']].map(function (t) {
+      return btn('', t[1], { role: 'tab', 'aria-selected': String(AR.tab === t[0]), 'aria-current': AR.tab === t[0] ? 'page' : null, 'data-fk': 'ctab:' + t[0] }, function () {
+        AR.tab = t[0]; arClose(); AR.done = false; if (t[0] === 'areas') AR.b = null; renderSetup('[data-fk="ctab:' + t[0] + '"]');
+      });
+    }));
+  }
   function placeConnections() {
     var areas = S.areas, sel = areas.some(function (a) { return a.id === ui.areaSel; }) ? ui.areaSel : (areas[0] || {}).id;
     var chips = h('div', { class: 'chips areachips', role: 'group', 'aria-label': 'Areas' }, areas.map(function (a) {
       var n = (a.accounts || []).length + (a.slack || []).length + (a.signal ? 1 : 0);
-      return btn('chip', [h('span', { class: 'adot a' + clampColour(a.colour), 'aria-hidden': 'true' }), a.name, h('span', { class: 'cl' }, ' · ' + n)],
-        { 'aria-pressed': String(!ui.newAreaOpen && a.id === sel), 'data-fk': 'achip:' + a.id }, function () {
-          ui.areaSel = a.id; ui.newAreaOpen = false; renderSetup('[data-fk="' + cssq('achip:' + a.id) + '"]');
+      return btn('chip', [adot(a), a.name, h('span', { class: 'cl' }, ' · ' + n)],
+        { 'aria-pressed': String(a.id === sel), 'data-fk': 'achip:' + a.id }, function () {
+          ui.areaSel = a.id; renderSetup('[data-fk="' + cssq('achip:' + a.id) + '"]');
         });
-    }).concat([btn('chip', '+ Add area', { 'aria-pressed': String(!!ui.newAreaOpen), 'data-fk': 'achip:new' }, function () {
-      ui.newAreaOpen = !ui.newAreaOpen; renderSetup(ui.newAreaOpen ? '#f-area' : '[data-fk="achip:new"]');
+    }).concat([btn('chip', '+ Add area', { 'data-fk': 'achip:new' }, function () {   /* 0.22.0: in Areas, with the palette */
+      AR.tab = 'areas'; arClose(); AR.done = false; AR.add = { name: '', colour: null, conn: null }; AR.b = null; renderSetup('[data-fk="ctab:areas"]');
     })]));
-    var cur = areas.filter(function (a) { return a.id === sel; })[0];
-    return [
+    var cur = areas.filter(function (a) { return a.id === sel; })[0], tabs = connTabs();
+    /* 0.22.0: Areas first (the area cards), then Accounts (as before) and Connectors */
+    if (AR.tab === 'areas') return [tabs].concat(areasTab());
+    if (AR.tab === 'connectors') return [tabs,
+      connectorsSlot(),  /* 0.10.0 connectors */
+      voiceSection()];  /* 0.21.0 the voice assistant's read-only API */
+    return [tabs,
       sourcesPanel(),  /* 0.15.0: each source's freshness, first */
       h('p', { class: 'intro' }, 'What Callsheet may read, by area. Check your employer’s policy before adding work accounts.'),
       S.google_client.configured ? null : keyPanel(),
       chips,
-      ui.newAreaOpen ? addAreaCard() : cur ? areaCard(cur) : null,
+      cur ? areaCard(cur) : null,
       signalCard(),
       textsSection(),  /* 0.16.1 texts */
       otherSources(),
-      connectorsSlot(),  /* 0.10.0 connectors */
-      voiceSection(),  /* 0.21.0 the voice assistant's read-only API */
       h('div', { class: 'callout' }, [h('div', { class: 'h' }, 'Always'),
         h('p', null, 'The brief reads and drafts. Nothing is sent from here except an RSVP you press. It never accepts or deletes anything.')])];
   }
@@ -4000,10 +4295,10 @@
   /* ----- the settings index: every setting, its place (and Advanced section), what to focus, search words and
      the API fields it covers. Find a setting (Setup home) and Find or ask both use it. ----- */
   var SETTINGS = [
-    ['connections', null, 'Areas', '[data-fk="achip:new"]', 'area work personal employer add delete', ['areas']],
-    ['connections', null, 'Google accounts', '.areachips', 'gmail calendar mail connect sign in disconnect calendars', ['accounts', 'services', 'calendars']],
-    ['connections', null, 'What an area may read', '.areachips', 'calendar mail chat ai writer reads', ['reads']],
-    ['connections', null, 'Slack', '.areachips', 'workspace ignore channels', ['slack']],
+    ['connections', null, 'Areas', '[data-fk="ctab:areas"]', 'area work personal employer add delete', ['areas']],
+    ['connections', null, 'Google accounts', '[data-fk="ctab:accounts"]', 'gmail calendar mail connect sign in disconnect calendars', ['accounts', 'services', 'calendars']],
+    ['connections', null, 'What an area may read', '[data-fk="ctab:accounts"]', 'calendar mail chat ai writer reads', ['reads']],
+    ['connections', null, 'Slack', '[data-fk="ctab:accounts"]', 'workspace ignore channels', ['slack']],
     ['connections', null, 'Signal', '[data-fk="sig-h"]', 'link phone ignore chats unlink', ['signal']],
     ['connections', null, 'Notes folders', '[data-fk="src-notes"]', 'obsidian drive vault know me', ['index']],
     ['connections', null, 'GitHub', '[data-fk="src-gh"]', 'repos token projects code', ['github']],
@@ -4011,6 +4306,7 @@
     ['connections', null, 'Skip Shorts, how often', '.cnadvb', 'youtube shorts every hour daily advanced connector', ['skip_shorts', 'every_s']],  /* 0.10.0 */
     ['connections', null, 'What to watch for', '#cn-int', 'interests topics watch always big never rundown', ['interests']],  /* 0.10.0 */
     ['connections', null, 'Reports from other agents', '[data-fk="cn-add-rp"]', 'reports agent folder share media markdown digest audit', ['reports', 'tell']],  /* 0.10.2a */
+    ['connections', null, 'Voice assistant', '[data-fk="va-on"]', 'voice assistant phone api token tokens device siri', []],  /* 0.21.0; 0.22.0 Open in Setup */
     ['connections', null, 'Places Callsheet contacts', '#cn-h', 'hosts sites outbound places contacts network', ['hosts']],  /* 0.10.0 */
     ['day', null, 'Your name', '#f-name', 'name', ['name']],
     ['day', null, 'Assistant’s name', '#f-aname', 'assistant name bruce call rename', ['assistant_name']],
@@ -4063,7 +4359,11 @@
       return ws.every(function (w) { return hay.indexOf(w) >= 0; });
     });
   }
-  function openSetting(x) { ui.wiz = null; if (x[0] === 'ai' && /^advanced /.test(x[4])) AIS.adv = true; openSetup(x[0], x[3], x[1]); }
+  function openSetting(x) {
+    ui.wiz = null; if (x[0] === 'ai' && /^advanced /.test(x[4])) AIS.adv = true;
+    if (x[0] === 'ai' && (!AIS.at || Date.now() - AIS.at > 60000)) AIS.want = x[3];   /* 0.22.0: AI loads first; focus the setting once it has */
+    openSetup(x[0], x[3], x[1]);
+  }
   /* Setup home's "Find a setting" (the results update as you type; Enter opens the first) */
   function setFind() {
     var list = h('ul', { class: 'sfind-l', id: 'sfind-l', 'aria-live': 'polite' });
@@ -5575,6 +5875,7 @@
     if (m.proposal) kids.push(chatCard(m, i));  /* 0.8.1 Remember: the Save card (also after a failed answer) */
     if (m.setup) kids.push(scCard(m, i));       /* 0.11.1: the setup card */
     if (m.card) kids.push(ruleCard(m, i));      /* 0.17.0: a setting or action card */
+    if (m.open_setup) kids.push(osCard(m, i));  /* 0.22.0: Open in Setup (keys, sign-ins, voice tokens) */
     var steps = (m.steps || []).length ? h('p', { class: 'csteps' }, m.steps.join(' · ')) : null;
     kids.push(h('div', { class: 'macts' }, [steps, m.text ? h('button', { type: 'button', class: 'tbtn', 'data-ccopy': String(i) }, 'Copy') : null]));
     return h('div', { class: 'ma' }, kids);
@@ -5711,6 +6012,25 @@
       return h('div', { class: 'rr' + (r[0] === 'Guessed' ? ' guess' : '') }, [h('dt', { class: 'label' }, String(r[0])), h('dd', null, String(r[1]))]);
     })) : null;
   }
+  /* 0.22.0 Open in Setup: Chat never takes keys, tokens, passwords or sign-ins; this card's one button opens the Setup
+     section that does (SETTINGS names it). It writes nothing. */
+  var OPEN_SETUP = { voice: 'Voice assistant', claude: 'Claude key and model', github: 'GitHub', slack: 'Slack', signal: 'Signal',
+    google_key: 'Google sign-in key', google: 'Google accounts', model: 'Model server' };
+  function osCard(m, i) {
+    var o = m.open_setup;
+    if (!o || typeof o !== 'object') return null;
+    var id = 'os' + String(i);
+    return h('div', { class: 'csave rcard ask osetup', role: 'group', 'aria-labelledby': id + '-h' }, [
+      h('div', { class: 'label rchd', id: id + '-h' }, String(o.title || 'Keys and sign-ins')),
+      h('p', { class: 'rcwhy' }, String(o.why || '')),
+      h('div', { class: 'acts' }, [h('button', { type: 'button', class: 'act go', 'data-osopen': String(i) }, 'Open in Setup'),
+        h('span', { class: 'muted' }, String(o.label || 'Setup'))])]);
+  }
+  function osOpen(i) {
+    var m = CH.conv && CH.conv.messages && CH.conv.messages[Number(i)], o = m && m.open_setup;
+    var name = o && OPEN_SETUP[o.section], x = name && SETTINGS.filter(function (y) { return y[2] === name; })[0];
+    if (x) openSetting(x); else openSetup('home');
+  }
   function ruleCard(m, i) {
     var k = m.card;
     if (!k || typeof k !== 'object') return null;
@@ -5723,20 +6043,60 @@
     var head = h('div', { class: 'label rchd', id: id + '-h' }, String(k.title || 'New rule'));
     if (k.applied && k.kind === 'calendar') return rcCalDone(k, head, id, err);   /* 0.21.0: no Undo (no delete) */
     if (k.type === 'gdraft' && k.applied) return h('div', { class: 'csaved rcend', role: 'status' }, h('span', null, gdOk(k.applied.open_url)));  /* 0.21.0 */
+    if (k.area && (k.kind === 'area' || k.kind === 'area_move')) { var ac = rcArea(k, ix, st, head, err); if (ac) return ac; }   /* 0.22.0 */
     if (k.applied) {
       var done = (typeof k.applied === 'object' && k.applied.label) || lab;
       return h('div', { class: 'rcwrap' }, [
-        h('div', { class: 'csave rcard done', role: 'group', 'aria-labelledby': id + '-h' }, [head, h('p', { class: 'rcok' }, 'Done: ' + done + '.'), rcRows(k)]),
+        h('div', { class: 'csave rcard done', role: 'group', 'aria-labelledby': id + '-h' }, [head, h('p', { class: 'rcok' }, 'Done: ' + done + '.'), rcRows(k),
+          k.related ? h('p', { class: 'rcwhy' }, k.related + ' related clash' + (k.related === 1 ? ' is' : 'es are') + ' still open. Say “and its clashes” to dismiss them too.') : null]),
         h('div', { class: 'cact' }, (k.token ? [h('button', { type: 'button', class: 'tbtn', 'data-rcundo': ix, 'aria-busy': st.busy ? 'true' : null, disabled: st.busy ? true : null }, 'Undo'),
           h('span', { 'aria-hidden': 'true' }, '·')] : []).concat([see])), err]);
     }
     if (st.dismissed) return h('p', { class: 'muted csaved' }, 'Not changed.');
     if (k.expired || !k.token) return h('p', { class: 'muted csaved' }, 'Not changed. This card has expired; ask again.');
+    if (k.choices && k.choices.length) return h('div', { class: 'csave rcard ask', role: 'group', 'aria-labelledby': id + '-h' }, [head,   /* 0.22.0 Which one? */
+      h('p', { class: 'rcq' }, 'Which one?'), err, h('div', { class: 'rcpick' }, k.choices.map(function (c) {
+        return h('div', { class: 'rcrow' }, [h('span', null, String(c.label)), h('button', { type: 'button', class: 'k', 'data-rcpick': ix + ':' + c.pick, disabled: st.busy ? true : null, 'aria-label': 'Confirm: ' + c.label }, 'Confirm')]);
+      })), h('div', { class: 'acts' }, [h('button', { type: 'button', class: 'tbtn', 'data-rcdismiss': ix }, 'None of these')]),
+      h('p', { class: 'fine' }, 'Nothing changes until you press Confirm.')]);
     return h('div', { class: 'csave rcard ask' + (k.type === 'gdraft' ? ' gd' : ''), role: 'group', 'aria-labelledby': id + '-h' }, [head,
       h('p', { class: 'rcq' }, lab + '?'), k.why ? h('p', { class: 'rcwhy' }, String(k.why)) : null, rcRows(k), err,
-      h('div', { class: 'acts' }, [h('button', { type: 'button', class: 'act go', 'data-rcok': ix, 'aria-busy': st.busy ? 'true' : null, disabled: st.busy ? true : null }, 'Confirm'),
+      h('div', { class: 'acts' }, [h('button', { type: 'button', class: 'act go', 'data-rcok': ix, 'aria-busy': st.busy ? 'true' : null, disabled: st.busy ? true : null }, k.destructive ? 'Clear' : 'Confirm'),
         h('button', { type: 'button', class: 'tbtn', 'data-rcdismiss': ix }, 'Dismiss')]),
-      h('p', { class: 'fine' }, k.type === 'gdraft' ? 'Nothing is saved until you press Confirm. Nothing is sent from here except an RSVP you press.' : 'Nothing changes until you press Confirm.')]);
+      h('p', { class: 'fine' }, k.type === 'gdraft' ? 'Nothing is saved until you press Confirm. Nothing is sent from here except an RSVP you press.' : k.destructive ? 'This can’t be undone. Nothing changes until you press Clear.' : 'Nothing changes until you press Confirm.')]);
+  }
+  /* 0.22.0 Chat's area cards (mockup areas-v1): applied, the Done line with the area's dots (Undo · See it in Setup);
+     a move that waits, the Areas tab's move box (what moves, and "What it already read": Leave as it is / Move it too,
+     sent with Confirm). Display only: names and colours come from Setup through the card (k.area). */
+  function rcDot(x) { return x && x.swatch ? adot({ swatch: x.swatch }) : null; }
+  function rcArea(k, ix, st, head, err) {
+    var a = k.area, mv = k.kind === 'area_move', rows = Array.isArray(k.rows) ? k.rows : [];
+    var conn = mv && rows[0] ? String(rows[0][1]) : '', to = a.to || {}, past = st.past == null ? a.past !== false : st.past;
+    if (k.applied) {
+      var what = mv ? ['Moved ' + conn + ' to ', rcDot(to), to.name || '', past && a.past_n ? ', with ' + a.past_text : '']
+        : [rcDot(a.from), (a.from || {}).name || '', h('span', { 'aria-hidden': 'true' }, ' → '), rcDot(to), to.name || '',
+          to.swatch && a.from && a.from.swatch && to.swatch.key !== a.from.swatch.key ? ', ' + String(to.swatch.name || '').toLowerCase() : ''];
+      return h('div', { class: 'arz rcarz' }, h('div', { class: 'ardone', role: 'status' }, [h('span', { class: 'st' }, [h('i', null, '✓'), ' Done']),
+        h('span', { class: 'what' }, what),
+        k.token ? h('button', { type: 'button', class: 'k q', 'data-rcundo': ix, 'aria-busy': st.busy ? 'true' : null, disabled: st.busy ? true : null }, 'Undo') : null,
+        h('button', { type: 'button', class: 'k q', 'data-rcareas': ix }, 'See it in Setup ›'), err]));
+    }
+    if (!mv || st.dismissed || k.expired || !k.token) return null;
+    var verb = a.conn_kind === 'google' ? 'mail and events are' : a.conn_kind === 'calendar' ? 'events are' : 'items are';
+    var seg = h('div', { class: 'arseg', role: 'group', 'aria-label': 'What it already read' }, [['leave', 'Leave as it is'], ['move', 'Move it too']].map(function (o) {
+      return h('button', { type: 'button', 'aria-pressed': String(past === (o[0] === 'move')), 'data-rcpast': ix + ':' + o[0] }, o[1]);
+    }));
+    var box = h('div', { class: 'armv' }, [
+      h('div', { class: 'to' }, [h('span', { class: 'ar' }, 'Move to'), rcDot(to), to.name || '']),
+      h('ul', null, [h('li', null, [h('i', null, '✓'), h('span', null, conn + ' belongs to ' + (to.name || '') + '.')]),
+        h('li', null, [h('i', null, '✓'), h('span', null, 'Its new ' + verb + ' tagged ' + (to.name || '') + ' from now on.')])]),
+      a.past_n ? h('div', { class: 'past' }, [h('span', { class: 'fl' }, 'What it already read'), seg,
+        h('span', { class: 'sub' }, a.past_text + '. People and projects keep their own area.')]) : null,
+      h('div', { class: 'keys' }, [h('button', { type: 'button', class: 'k go', 'data-rcok': ix, 'aria-busy': st.busy ? 'true' : null, disabled: st.busy ? true : null }, 'Confirm'),
+        h('button', { type: 'button', class: 'k q', 'data-rcdismiss': ix }, 'Cancel')]), err]);
+    head.textContent = a.conn_kind === 'google' ? 'Move an account' : 'Move a connection';
+    return h('div', { class: 'csave rcard ask rcmove', role: 'group', 'aria-labelledby': head.id }, [head,
+      h('p', { class: 'rcwhy' }, String(k.why || 'Nothing changes until you press Confirm.')), h('div', { class: 'arz rcarz' }, box)]);
   }
   /* 0.21.0 Add to calendar from Chat (always the owner's Confirm): after it, "On your calendar ✓" with Open; there is
      no Undo, because Callsheet has no permission to delete events. */
@@ -5746,12 +6106,15 @@
       h('p', { class: 'rcok' }, ['On your calendar ✓', a.where ? ' · ' + a.where : '', a.link ? ' · ' : '', a.link ? tdLink(a.link, 'tbtn') : null]),
       rcRows(k), h('p', { class: 'fine' }, 'Callsheet can’t delete events: remove it in Google Calendar.'), err]);
   }
-  function rcPress(i, b, undo) {
+  function rcPress(i, b, undo, pick) {
     var m = rcMsg(i), k = m && m.card, cid = CH.conv && CH.conv.id;
     if (!k || !k.token || !cid) return;
     var st = rcState(k);
     st.busy = true; st.err = ''; b.disabled = true; b.setAttribute('aria-busy', 'true');
-    api('POST', undo ? 'api/chat/undo' : 'api/chat/apply', { chat: cid, turn: k.turn, token: k.token }).then(function (r) {
+    var body = { chat: cid, turn: k.turn, token: k.token };
+    if (!undo && k.kind === 'area_move' && k.area && st.past != null) body.past = st.past;   /* 0.22.0: as the owner pressed it */
+    if (!undo && pick != null) body.pick = pick;   /* 0.22.0: the Which one? card's choice */
+    api('POST', undo ? 'api/chat/undo' : 'api/chat/apply', body).then(function (r) {
       st.busy = false; RL.at = 0; nameSync(k);
       if (undo) { k.applied = null; k.undone = true; delete k.token; chatRender('[data-rcsee="' + i + '"]'); }
       else { k.applied = (r && r.applied) || { label: k.label }; chatRender('[data-rcundo="' + i + '"]'); }
@@ -5760,7 +6123,14 @@
   function rcClick(d, t) {
     if (d.rcok) rcPress(d.rcok, t, false);
     else if (d.rcundo) rcPress(d.rcundo, t, true);
+    else if (d.rcpick) { var pk = String(d.rcpick).split(':'); rcPress(pk[0], t, false, parseInt(pk[1], 10)); }
     else if (d.rcsee) { RL.at = 0; openSetup('day', '#rules-h'); }
+    else if (d.osopen) osOpen(d.osopen);   /* 0.22.0 Open in Setup */
+    else if (d.rcareas) { AR.tab = 'areas'; AR.b = null; arClose(); AR.done = false; openSetup('connections', '[data-fk="ctab:areas"]'); }   /* 0.22.0 */
+    else if (d.rcpast) {   /* 0.22.0: the move card's "What it already read" */
+      var pp = String(d.rcpast).split(':'), pm = rcMsg(pp[0]);
+      if (pm) { rcState(pm.card).past = pp[1] === 'move'; chatRender('[data-rcpast="' + d.rcpast + '"]'); }
+    }
     else if (d.rcdismiss) { var m = rcMsg(d.rcdismiss); if (m) { rcState(m.card).dismissed = true; chatRender('[data-ask-in]'); } }
     else return false;
     return true;

@@ -421,7 +421,7 @@ class TestPushAndPage(unittest.TestCase):
         api_src = (ROOT / "callsheet" / "app" / "api.py").read_text()
         for r in ('r"talk"', 'r"talk/start"', 'r"talk/reply"'):
             self.assertIn(r, api_src)
-        self.assertTrue(re.search(r'APP_VERSION = "0\.21\.4"', api_src))
+        self.assertTrue(re.search(r'APP_VERSION = "0\.22\.0"', api_src))
 
 
 if __name__ == "__main__":

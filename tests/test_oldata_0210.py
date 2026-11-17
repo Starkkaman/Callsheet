@@ -397,13 +397,19 @@ class ReadByNothing(unittest.TestCase):
 
     def test_only_the_api_route_reaches_it(self):
         users = sorted(n for n, s in self.src.items() if re.search(r"import oldata|oldata\.(?!py)|old-data", s))
-        self.assertEqual(users, ["api.py"])
+        # 0.22.0 (owner 2026-11-16, Clear old data by Chat: "Yes, with Confirm"): Chat's card reaches it through the
+        # action registry, only on the owner's Confirm (tests/test_chat_actions_0220.py)
+        self.assertEqual(users, ["actions.py", "api.py", "chat.py"])
         a = self.src["api.py"]
-        self.assertEqual(len(re.findall(r"self\.oldata\b", a)), 2)     # made once and its two routes, nothing else
+        # made once, its two routes, and (0.22.0) handed to the action registry and Chat for the Confirm card
+        self.assertEqual(len(re.findall(r"self\.oldata\b", a)), 4)
         js = (APP / "static" / "app.js").read_text(encoding="utf-8")
         self.assertEqual(len(re.findall(r"api\('POST', 'api/old-data/clear'", js)), 1)
-        for name in ("chat.py", "chatstore.py", "prefs.py", "scheduler.py", "background.py", "server.py"):
+        for name in ("prefs.py", "scheduler.py", "background.py", "server.py"):
             self.assertNotIn("old_data", self.src[name])
+        # 0.22.0: in Chat only as the clear_old_data card, which is always the owner's Confirm (WHY_DESTRUCTIVE)
+        self.assertIn('if card["action"] == "clear_old_data":\n        return "confirm", WHY_DESTRUCTIVE',
+                      self.src["chatstore.py"])
 
     def test_the_device_list_keeps_every_key_the_page_uses(self):
         """On this device: a callsheet.* key is offered only when it isn't one the page reads (odKept)."""

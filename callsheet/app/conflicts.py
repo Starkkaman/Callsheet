@@ -1158,13 +1158,6 @@ class Alerter:
         rule = rules.alert("asks", [s[:3] for s in senders], local) if rules is not None and vip else None
         return vip, through, rule
 
-    def remind_payload(self, it, a):
-        """A reminder the owner asked for: who and where from, never message text."""
-        src = it["from"][0] if it.get("from") else {}
-        who = it.get("who_name") or "An item"
-        return self.payload("Reminder", f"{who} ({SOURCE_WORD.get(src.get('source'), 'a message')}), as you asked",
-                            tag=f"callsheet-remind-{a['id']}", urgent=False)
-
     def clash_payload(self, c):
         names = []
         for s in c["sides"]:
@@ -1288,9 +1281,5 @@ class Alerter:
                 state = self._go(cfg, "vip_ask", self.ask_payload(it, cfg), now)
                 self._mark("ledger_items", r["id"], state, now)
                 out.append(("vip_ask", r["id"], state))
-        for a in (self.prefs.due_reminders(now) if self.prefs is not None else []):   # 0.17.0: "remind me at …"
-            it = self.lv.item(a["item"], detail=False)
-            state = self._go(cfg, "reminder", self.remind_payload(it, a), now) if it and cfg.get("targets") else "off"
-            self.prefs.fired(a["id"], now)
-            out.append(("reminder", a["id"], state))
+        # 0.22.0: Chat's "remind me at …" goes through Today's reminders (today.Today.tick), one store
         return out

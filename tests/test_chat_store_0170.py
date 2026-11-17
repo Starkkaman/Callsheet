@@ -89,6 +89,7 @@ class Base(unittest.TestCase):
         self.prefs = prefs.Prefs(self.ms, push_get=lambda: push.config_from(self.store.push_config()),
                                  push_set=self.store.update_push, clock=clock)
         self.lv.snoozed = self.prefs.snoozed
+        self.prefs.vip_store = self.store   # 0.22.0: VIPs in one store (Setup's list)
         self.logs = []
         self.chat = chat.Chat(self.store, self.index, data_dir=str(self.data), clock=clock, poll=0.01,
                               log=self.logs.append)

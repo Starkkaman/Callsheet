@@ -25,11 +25,13 @@ sys.path.insert(0, str(ROOT / "callsheet" / "app"))
 sys.path.insert(0, str(ROOT / "tests"))
 import api  # noqa: E402
 import chat  # noqa: E402
+import actions  # noqa: E402
 import chatstore  # noqa: E402
 import conflicts  # noqa: E402
 import prefs  # noqa: E402
 import push  # noqa: E402
 import server  # noqa: E402
+import today  # noqa: E402
 from store import InputError  # noqa: E402
 from test_chat_store_0170 import T0, UTC, Base, call, item, say, tool_msg, ts  # noqa: E402
 
@@ -107,10 +109,13 @@ class CardBase(Base):
         super().setUp()
         self.fixture()
         self.wire()
+        actions.ensure(self.ms)
 
     def writes(self):
         n = lambda sql: self.ms._read(sql)[0][0]  # noqa: E731,SLF001
-        return (n("SELECT COUNT(*) FROM preferences"), n("SELECT COUNT(*) FROM owner_actions"),
+        # 0.22.0: Chat's actions are journaled in action_log (actions.py); snooze and remind live in today_reminders
+        return (n("SELECT COUNT(*) FROM preferences"),
+                n("SELECT (SELECT COUNT(*) FROM owner_actions) + (SELECT COUNT(*) FROM action_log)"),
                 n("SELECT COUNT(*) FROM ledger_items WHERE status='done'"),
                 json.dumps(self.store.push_config(), sort_keys=True))
 
@@ -678,34 +683,43 @@ class AlertTest(CardBase):
         self.assertEqual(self.lv.item(self.truck)["status"], "done")
         self.prefs.undo_action(a["id"])
         self.assertEqual(self.lv.item(self.truck)["status"], "open")
-        s = self.prefs.act("snooze", [self.truck], {"until_ts": T0 + 86400}, "c_x:2", UTC)[0]
+        # 0.22.0 one reminder store: snooze and remind go through Today's (actions.py → Today.set_aside, Today.tick)
+        td = today.Today(self.ms, self.lv, self.clock, alerter=self.al)
+        A = actions.Actions(self.ms, self.clock, today=td, prefs=self.prefs, tz=lambda: UTC)
+        s = A.run("item.snooze", [self.truck], {"until_ts": T0 + 86400}, via="chat", ref="c_x:2")
         v = self.lv.view(now=T0)
         self.assertIn(self.truck, [r["id"] for r in v["snoozed"]])
         self.assertNotIn(self.truck, [r["id"] for g in ("needs_you", "coming_up", "now_next") for r in v[g]])
-        self.prefs.undo_action(s["id"])
+        A.undo(s["id"])
         self.assertIn(self.truck, [r["id"] for r in self.lv.view(now=T0)["needs_you"]])
         self.prefs.act("note", [self.dinner], {"note": "Marco is vegetarian"}, "c_x:3", UTC)
         self.assertIn("owner_note", [h["kind"] for h in self.lv.item(self.dinner)["history"]])
-        r = self.prefs.act("remind", [self.dinner], {"until_ts": T0 + 3600}, "c_x:4", UTC)[0]
-        self.assertEqual(self.al.flush(), [])
+        r = A.run("item.remind", [self.dinner], {"until_ts": T0 + 3600}, via="chat", ref="c_x:4")
+        self.assertEqual(td.tick(), [])
         self.now[0] = T0 + 3601
-        self.assertEqual(self.al.flush(), [("reminder", r["id"], "sent")])
-        self.assertEqual(self.al.flush(), [])                                        # once
+        rid = self.ms._read("SELECT json_extract(after, '$.reminders[0]') FROM action_log WHERE id=?",  # noqa: SLF001
+                            (r["id"],))[0][0]
+        self.assertEqual(td.tick(), [(rid, "sent")])
+        self.assertEqual(td.tick(), [])                                              # once
         kind, p = self.send.sent[-1]
-        self.assertEqual((kind, p["title"]), ("reminder", "Reminder"))
-        self.assertNotIn("dinner", p["message"].lower())
+        self.assertEqual(kind, "reminder")
+        self.assertTrue(p["title"].startswith("Reminder"))
+        self.assertNotIn("vegetarian", (p["title"] + p["message"]).lower())
+        with self.assertRaises(actions.Invalid):
+            A.run("item.snooze", [self.truck], {"until_ts": T0 - 5})
         with self.assertRaises(prefs.Invalid):
-            self.prefs.act("snooze", [self.truck], {"until_ts": T0 - 5})
-        self.assertEqual(len(self.prefs.listing()["actions"]), 4)
+            self.prefs.act("snooze", [self.truck], {"until_ts": T0 + 99})            # one store: not here any more
+        self.assertEqual(len(self.prefs.listing()["actions"]), 2)
+        self.assertEqual(self.ms._read("SELECT COUNT(*) FROM owner_actions WHERE action IN ('snooze','remind')")[0][0], 0)  # noqa: SLF001
 
     def test_an_action_card_applies_and_undoes(self):
         conv, m = self.action_turn("Mark the truck one done", {"action": "done", "items": [self.truck]})
         card = m["card"]
         self.assertEqual(card["mode"], "apply")                                     # the owner named it: done at once
         self.assertEqual(self.lv.item(self.truck)["status"], "done")
-        aid = card["applied"]["ids"][0]
-        r = self.prefs.undo_action(aid)                                             # Undo in Setup › Your rules
-        self.chat.card_undone("action", aid, r["ref"])
+        aid = card["applied"]["ids"][0]                         # 0.22.0: the journal row (actions.py, Today's Done)
+        r = self.chat.actions.undo(aid)                                             # Undo in Setup › Recent changes
+        self.chat.card_undone("log", aid, r["ref"])
         self.assertEqual(self.lv.item(self.truck)["status"], "open")
         self.assertTrue(self.chat.view(conv["id"])["messages"][-1]["card"]["undone"])
         # a later turn can act on an item shown earlier in the same chat; it doesn't name it: Confirm
@@ -713,9 +727,9 @@ class AlertTest(CardBase):
                                                                   "until": "2026-11-13T09:00"}, conv["id"], look=False)
         self.assertEqual((m["card"]["status"], m["card"]["mode"]), ("ready", "confirm"))
         self.assertEqual(m["card"]["rows"][-1], ["When", "Fri 13 Nov, 9:00 am"])
-        self.assertEqual(len(self.prefs.listing()["actions"]), 1)
+        self.assertEqual(len(self.prefs.listing()["actions"]), 0)   # 0.22.0: Done went through Today, not here
         out = self.chat.card_apply({"chat": conv["id"], "turn": m["card"]["turn"], "token": m["card"]["token"]})
-        self.assertEqual(self.prefs.action(out["applied"]["ids"][0])["action"], "remind")
+        self.assertEqual(self.chat.actions._row(out["applied"]["ids"][0])["action"], "item.remind")  # noqa: SLF001
         c2 = self.chat.view(conv["id"])["messages"][-1]["card"]
         self.assertTrue(c2["applied"] and c2["token"])                              # Undo on the card after Confirm
         self.chat.card_undo({"chat": conv["id"], "turn": c2["turn"], "token": c2["token"]})

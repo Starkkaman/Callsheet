@@ -25,7 +25,7 @@ import assistant
 import ledger as ledger_mod
 
 KINDS = ("vip", "alert_rule", "quiet_hours", "vip_through_quiet", "alerts", "cleanup", "digest", "brief", "brief_schedule",
-         "assistant_name", "model_quiet_times")
+         "assistant_name", "model_quiet_times", "area", "area_move")
 SOURCES = ("gmail", "slack", "signal", "sms")
 SOURCE_NAMES = {"gmail": "Email", "slack": "Slack", "signal": "Signal", "sms": "Texts"}
 WHAT = ("clashes", "asks", "all")
@@ -42,6 +42,9 @@ DIGEST_DEFAULT = "stands_out"   # the owner's answer (v4 review): mention a dige
 PUSH_DEFAULTS = {"clashes": True, "vip_asks": True, "vip_through_quiet": True}
 PUSH_KINDS = ("quiet_hours", "vip_through_quiet", "alerts")   # these change the phone-notification config itself
 SETTING_KINDS = ("brief_schedule", "assistant_name", "model_quiet_times")   # these change Store.settings itself (Undo puts `before` back)
+# 0.22.0 areas by chat (mockup areas-v1): rename / recolour an area, move a connection; applied through areas.Areas
+# (self.areas) with its own Undo token kept in `before`
+AREA_KINDS = ("area", "area_move")
 MAX_NAMES = 10
 MAX_NOTE = 500
 MAX_ITEMS = 10
@@ -122,6 +125,8 @@ def _one(v, allowed, what, default=None):
 
 
 def check(kind, f):
+    if kind in AREA_KINDS:
+        return _check_area(kind, f)
     """The normalized fields of one change, or Invalid."""
     f = f if isinstance(f, dict) else {}
     if kind == "vip":
@@ -217,7 +222,31 @@ _MENTION = {"always": "always mention", "stands_out": "only when something stand
 _BRIEF = {"include": "included", "skip": "left out", "short": "kept short", "first": "first"}
 
 
+def _check_area(kind, f):
+    def txt(k, n, req=True):
+        v = f.get(k)
+        if v in (None, "") and not req:
+            return ""
+        if not isinstance(v, str) or not v.strip() or len(v.strip()) > n:
+            raise Invalid("Say which area and what to change.")
+        return v.strip()
+    if kind == "area":
+        out = {"area_id": txt("area_id", 40), "area_name": txt("area_name", 60), "name": txt("name", 40, False),
+               "colour": txt("colour", 7, False), "colour_name": txt("colour_name", 20, False)}
+        if not out["name"] and not out["colour"]:
+            raise Invalid("Say the new name or colour.")
+        return out
+    return {"conn": txt("conn", 200), "conn_name": txt("conn_name", 200), "to": txt("to", 40),
+            "to_name": txt("to_name", 60), "past": _bool(f.get("past"), "past items", True)}
+
+
 def label(kind, f):
+    if kind == "area":
+        bits = ([f"{f['area_name']} renamed {f['name']}"] if f.get("name") else []) + \
+            ([f"{f.get('name') or f['area_name']} in {f['colour_name'] or f['colour']}"] if f.get("colour") else [])
+        return "; ".join(bits)
+    if kind == "area_move":
+        return f"Move {f['conn_name']} to {f['to_name']}" + (" with what it already read" if f["past"] else "")
     """One plain sentence for the card's "Done: …" and the rules list."""
     if kind == "vip":
         parts = [w for w, on in (("alerts", f["alerts"]), ("Needs you", f["needs_you"])) if on] or ["nothing yet"]
@@ -257,6 +286,12 @@ def label(kind, f):
 
 def rows(kind, f):
     """The card's rows: [field, value] pairs (as in the v4 mockup: Who, Alerts, Needs you, Quiet …)."""
+    if kind == "area":
+        return [["Area", f["area_name"]]] + ([["New name", f["name"]]] if f.get("name") else []) + \
+            ([["Colour", f["colour_name"] or f["colour"]]] if f.get("colour") else [])
+    if kind == "area_move":
+        return [["Connection", f["conn_name"]], ["Move to", f["to_name"]],
+                ["What it already read", "Moves too" if f["past"] else "Stays where it is"]]
     if kind == "vip":
         tq = {True: "Gets through quiet hours", False: "Waits for quiet hours to end",
               None: "Your VIP setting for quiet hours"}[f["through_quiet"]]
@@ -316,27 +351,79 @@ def _src(source):
     return "sms" if source == "sms_live" else source
 
 
-class Rules:
-    """A snapshot of the active preferences, for the alerter, the ledger view and later stages."""
+VIP_DEFAULTS = {"sources": [], "dm_only": False, "alerts": True, "needs_you": True, "through_quiet": None}
+VIP_OPTS = tuple(VIP_DEFAULTS)
 
-    def __init__(self, rows_):
+
+def vip_fields(v):
+    """0.22.0 VIPs in one store: one VIP of Setup's list (store.Store.vips) as the fields a VIP rule had: {person,
+    sources, dm_only, alerts, needs_you, through_quiet}. A VIP added in Setup has the defaults."""
+    o = v.get("opts") if isinstance(v.get("opts"), dict) else {}
+    f = {k: o.get(k, d) for k, d in VIP_DEFAULTS.items()}
+    f["sources"] = [s for s in (f["sources"] if isinstance(f["sources"], list) else []) if s in SOURCES]
+    f["through_quiet"] = f["through_quiet"] if isinstance(f["through_quiet"], bool) else None
+    for k in ("dm_only", "alerts", "needs_you"):
+        f[k] = bool(f[k])
+    f["person"] = v.get("name") or v.get("email") or ""
+    return f
+
+
+def vip_words(v):
+    """Setup's VIP list: what Chat set for this VIP, in a few words ("" for a VIP with the defaults)."""
+    f = vip_fields(v)
+    if all(f[k] == VIP_DEFAULTS[k] for k in VIP_OPTS):
+        return ""
+    bits = [_src_words(f["sources"], f["dm_only"])] if f["sources"] or f["dm_only"] else []
+    if not f["alerts"]:
+        bits.append("no alerts")
+    if not f["needs_you"]:
+        bits.append("usual order in Needs you")
+    if f["through_quiet"] is not None:
+        bits.append("gets through quiet hours" if f["through_quiet"] else "waits for quiet hours")
+    return ", ".join(bits)
+
+
+def find_vip(vips, person):
+    """The VIP on the list that `person` (as the owner named them, or an address) means, or None: the same name or
+    address first, else the one VIP whose name has all of its words ("Lena" for Lena Park); several: None."""
+    p = " ".join(str(person or "").split()).lower()
+    if not p:
+        return None
+    same = [v for v in vips if v["name"].strip().lower() == p or (v.get("email") and v["email"].lower() == p)]
+    if same:
+        return same[-1]
+    part = [v for v in vips if "@" not in p and name_matches(p, [v["name"]])]
+    return part[0] if len(part) == 1 else None
+
+
+class Rules:
+    """A snapshot of the active preferences, for the alerter, the ledger view and later stages. `vips`: Setup's VIP
+    list (store.Store.vips), the one VIP home since 0.22.0."""
+
+    def __init__(self, rows_, vips=()):
         self.rows = rows_
+        self.vips = list(vips or ())
         self.by_kind = {}
         for r in rows_:
-            self.by_kind.setdefault(r["kind"], []).append(r)
+            if r["kind"] != "vip":   # 0.22.0: a VIP set by Chat lives on Setup's list; its row is the journal only
+                self.by_kind.setdefault(r["kind"], []).append(r)
 
     def of(self, kind):
         return [r["fields"] for r in self.by_kind.get(kind, [])]
 
     def vip(self, source, handle, names=(), dm=False):
-        """The newest matching VIP rule's fields, or None. `names`: the sender's names (message, directory)."""
+        """The newest matching VIP's fields (vip_fields), or None. `names`: the sender's names (message, directory).
+        A VIP matches by its address; one Chat added or set options for matches by name too, as its rule did."""
         source = _src(source)
-        for f in reversed(self.of("vip")):
+        h = str(handle or "").strip().lower()
+        for v in reversed(self.vips):
+            f = vip_fields(v)
             if f["sources"] and source not in f["sources"]:
                 continue
             if f["dm_only"] and not (source == "slack" and dm):
                 continue
-            if name_matches(f["person"], names, handle):
+            em = str(v.get("email") or "").lower()
+            if (em and h == em) or ((not em or v.get("opts")) and name_matches(v.get("name"), names, handle)):
                 return f
         return None
 
@@ -413,6 +500,8 @@ class Prefs:
         self.ms, self.push_get, self.push_set, self.clock = ms, push_get, push_set, clock
         # brief_schedule changes the brief times themselves (Store.settings / Store.update_settings), like the push kinds
         self.settings_get, self.settings_set = settings_get, settings_set
+        self.areas = None   # 0.22.0: areas.Areas (api.App sets it)
+        self.vip_store = None   # 0.22.0: store.Store, Setup's VIP list, the one VIP home (api.App sets it)
         ensure(ms)
         ledger_mod.ensure(ms)
 
@@ -467,12 +556,84 @@ class Prefs:
                 self.settings_set({"model_quiet_times": new})
             except ValueError as e:   # store.InputError: too many, or a time it can't read
                 raise Invalid(str(e)) from None
+        elif kind in AREA_KINDS:
+            if getattr(self, "areas", None) is None:
+                raise Invalid("Areas aren't available.")
+            try:
+                if kind == "area":
+                    _, token = self.areas.update(f["area_id"], f["name"] or None, f["colour"] or None)
+                else:
+                    _, token = self.areas.move(f["conn"], f["to"], f["past"])
+            except (ValueError, LookupError) as e:   # areas.AreaError, store.InputError / NotFound: plain sentences
+                raise Invalid(str(e)) from None
+            before = {"area_undo": token}
+        elif kind == "vip":
+            before = self._vip_apply(f)
         now = self.clock()
         lab = label(kind, f)
         rid = self.ms.write(lambda db: db.execute(
             "INSERT INTO preferences (kind, fields, label, before, ref, created_at) VALUES (?,?,?,?,?,?)",
             (kind, json.dumps(f), lab, json.dumps(before) if before is not None else None, str(ref)[:80], now)).lastrowid)
         return self.get(rid)
+
+    def _vips(self):
+        st = getattr(self, "vip_store", None)
+        if st is None:
+            return []
+        try:
+            return st.vips()
+        except Exception:  # noqa: BLE001 (the usual settings still apply)
+            return []
+
+    def _vip_apply(self, f, add=True):
+        """0.22.0 VIPs in one store: Chat's VIP goes on Setup's list (a new one by name, in Personal, or the options
+        of the one it names). Returns `before` for Undo: {vip_id, prev: the options it had, or None when added}."""
+        st = getattr(self, "vip_store", None)
+        if st is None:
+            raise Invalid("The VIP list isn't available just now.")
+        opts = {k: f[k] for k in VIP_OPTS}
+        v = find_vip(st.vips(), f["person"])
+        try:
+            if v is not None:
+                st.set_vip_opts(v["id"], opts)
+                return {"vip_id": v["id"], "prev": v.get("opts") or {}}
+            p = f["person"]
+            v = st.add_vip(p, p.lower() if "@" in p else "", "personal", opts=opts, by_name=True)
+        except (ValueError, LookupError) as e:   # store.InputError / NotFound: a plain sentence
+            raise Invalid(str(e)) from None
+        return {"vip_id": v["id"], "prev": None}
+
+    def _vip_undo(self, before):
+        st = getattr(self, "vip_store", None)
+        if st is None or not isinstance(before, dict) or not before.get("vip_id"):
+            return
+        try:
+            if before.get("prev") is None:
+                st.delete_vip(before["vip_id"])
+            else:
+                st.set_vip_opts(before["vip_id"], before["prev"])
+        except LookupError:   # removed in Setup since: nothing to put back
+            pass
+
+    def migrate_vips(self):
+        """0.22.0, once per row: VIPs that earlier versions kept as Chat rules move onto Setup's VIP list (the same
+        person keeps being a VIP, with the rule's options). The rule row stays as the journal, with Undo."""
+        if getattr(self, "vip_store", None) is None:
+            return 0
+        n = 0
+        for r in self.ms._read("SELECT * FROM preferences WHERE kind='vip' AND undone_at IS NULL AND "  # noqa: SLF001
+                               "deleted_at IS NULL ORDER BY id"):
+            r = _row(r)
+            if isinstance(r["before"], dict) and r["before"].get("vip_id"):
+                continue
+            try:
+                before = dict(self._vip_apply(check("vip", r["fields"])), migrated=True)
+            except Invalid:
+                continue
+            self.ms.write(lambda db, b=before, i=r["id"]: db.execute("UPDATE preferences SET before=? WHERE id=?",
+                                                                     (json.dumps(b), i)))
+            n += 1
+        return n
 
     @staticmethod
     def _push_patch(kind, f):
@@ -490,7 +651,16 @@ class Prefs:
         r = self.get(pid)
         if r is None or r["deleted_at"] is not None or (col == "undone_at" and r["undone_at"] is not None):
             raise Invalid("That rule is already gone.")
-        if r["undone_at"] is None and r["before"] and r["kind"] in SETTING_KINDS:
+        if r["undone_at"] is None and r["kind"] == "vip":
+            self._vip_undo(r["before"])
+        elif r["undone_at"] is None and r["before"] and r["kind"] in AREA_KINDS:
+            if getattr(self, "areas", None) is None:
+                raise Invalid("Areas aren't available.")
+            try:
+                self.areas.undo(r["before"].get("area_undo"))
+            except ValueError as e:
+                raise Invalid(str(e)) from None
+        elif r["undone_at"] is None and r["before"] and r["kind"] in SETTING_KINDS:
             if self.settings_set is not None:
                 self.settings_set(r["before"])
         elif r["undone_at"] is None and r["before"] and self.push_set is not None:
@@ -512,11 +682,14 @@ class Prefs:
             "SELECT * FROM preferences WHERE undone_at IS NULL AND deleted_at IS NULL ORDER BY id")]
 
     def rules(self):
-        return Rules(self.active())
+        return Rules(self.active(), self._vips())
 
     def listing(self):
         """GET api/preferences: the active rules (newest first) and the last undone ones, plus recent ledger actions."""
-        live = [self.public(r) for r in reversed(self.active())]
+        have = {v["id"] for v in self._vips()}
+        # 0.22.0: a VIP set by Chat and since removed from Setup's list is no longer a live rule
+        live = [self.public(r) for r in reversed(self.active()) if r["kind"] != "vip" or
+                not isinstance(r["before"], dict) or r["before"].get("vip_id") in have]
         undone = [self.public(r) for r in self.ms._read(  # noqa: SLF001
             "SELECT * FROM preferences WHERE undone_at IS NOT NULL AND deleted_at IS NULL ORDER BY id DESC LIMIT 10")]
         acts = [self.public_action(r) for r in self.ms._read(  # noqa: SLF001
@@ -545,6 +718,8 @@ class Prefs:
         a time, then a phone reminder), note (the owner's note in the item's history). One row per item."""
         if action not in ACTIONS:
             raise Invalid("That isn't something Callsheet can do to an item.")
+        if action in ("snooze", "remind"):   # 0.22.0 one reminder store: today.Today.set_aside (actions.py)
+            raise Invalid("Snooze and Remind me go through Today.")
         if not isinstance(items, list) or not items or len(items) > MAX_ITEMS:
             raise Invalid("Pick one to ten items.")
         until = fields.get("until_ts")
@@ -595,6 +770,9 @@ class Prefs:
                                           note="Undone in Chat", kind="owner_undo")
             else:
                 ledger_mod.history(db, a["item"], "owner_undo", now, note=f"undid {a['action']}")
+                if (a["fields"] or {}).get("moved"):   # 0.22.0: moved to Today's reminders; cancel it there
+                    db.execute("UPDATE today_reminders SET state='cancelled' WHERE id=? AND state='open'",
+                               (a["fields"]["moved"],))
             db.execute("UPDATE owner_actions SET undone_at=? WHERE id=?", (now, a["id"]))
         self.ms.write(run)
         return self.action(aid)
@@ -609,23 +787,15 @@ class Prefs:
                 "chat": m.group(1) if m else None, "turn": int(m.group(2)) if m else None}
 
     def snoozed(self, now=None):
-        """{item id: until} for items the owner snoozed or asked to be reminded about, until that time."""
+        """{item id: until} for items hidden until a snooze or reminder is due. 0.22.0: one reminder store, Today's
+        (today_reminders, written by today.Today; the same read as Today.snoozed)."""
         now = self.clock() if now is None else now
-        out = {}
-        for r in self.ms._read("SELECT item, max(until_ts) AS u FROM owner_actions WHERE action IN ('snooze','remind') "  # noqa: SLF001
-                               "AND undone_at IS NULL AND until_ts > ? GROUP BY item", (now,)):
-            out[r["item"]] = r["u"]
-        return out
-
-    def due_reminders(self, now=None):
-        now = self.clock() if now is None else now
-        return [_row(r) for r in self.ms._read(  # noqa: SLF001
-            "SELECT * FROM owner_actions WHERE action='remind' AND undone_at IS NULL AND fired_at IS NULL AND until_ts <= ?",
-            (now,))]
-
-    def fired(self, aid, now=None):
-        now = self.clock() if now is None else now
-        self.ms.write(lambda db: db.execute("UPDATE owner_actions SET fired_at=? WHERE id=?", (now, int(aid))))
+        try:
+            rows = self.ms._read("SELECT item, max(due_ts) AS u FROM today_reminders WHERE state='open' AND hide=1 AND "  # noqa: SLF001
+                                 "due_ts > ? AND item IS NOT NULL GROUP BY item", (now,))
+        except Exception:  # noqa: BLE001 (Today hasn't made its table yet: nothing is set aside)
+            return {}
+        return {r["item"]: r["u"] for r in rows}
 
 
 def when_words(ts, tz):

@@ -19,6 +19,7 @@ import urllib.parse
 import zoneinfo
 
 import assistant
+import palette   # 0.22.0 area colours
 import push
 import writer
 
@@ -44,6 +45,13 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS areas (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, colour INTEGER NOT NULL, reads TEXT NOT NULL,
     fixed INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0);
+-- 0.22.0 areas: a connection's area when it has no area column of its own (texts, GitHub, a feed or reports folder,
+-- one Google calendar), the area its past items keep (items older than before_ts), and what Undo puts back
+CREATE TABLE IF NOT EXISTS conn_areas (conn TEXT PRIMARY KEY, area_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS area_history (conn TEXT NOT NULL, before_ts REAL NOT NULL, area_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS area_undo (
+    token TEXT PRIMARY KEY, at REAL NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL, diff TEXT NOT NULL,
+    undone INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY, area_id TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
     refresh_token TEXT, access_token TEXT, expires_at REAL NOT NULL DEFAULT 0,
@@ -235,10 +243,17 @@ class Store:
                 elif row["version"] > SCHEMA_VERSION:
                     raise StoreError(f"{self.path} was written by a newer Callsheet (database version "
                                      f"{row['version']}, this one knows {SCHEMA_VERSION}).")
+                # 0.22.0 VIPs in one store (owner 2026-11-16): Chat's VIP options (sources, Slack DMs only, alerts,
+                # Needs you, quiet hours) sit beside the VIP; no row is a VIP added in Setup (the defaults). A side
+                # table, so opening an older install rewrites none of its rows (tests/test_upgrade.py).
+                self.db.execute("CREATE TABLE IF NOT EXISTS vip_opts (vip_id TEXT PRIMARY KEY, opts TEXT NOT NULL)")
                 if self.db.execute("SELECT 1 FROM areas WHERE id='personal'").fetchone() is None:
                     self.db.execute(
                         "INSERT INTO areas (id, name, colour, reads, fixed, position) VALUES (?,?,?,?,1,0)",
-                        ("personal", "Personal", 1, json.dumps({k: True for k in READ_KEYS})))
+                        ("personal", "Personal", "blue", json.dumps({k: True for k in READ_KEYS})))
+                # 0.22.0: an area's colour is a palette key (or a free "#rrggbb"). The old numbers 1 to 4 read as the
+                # first four keys, the same colours (palette.info), and are written as keys on the next change, so
+                # opening an older install rewrites nothing.
         except sqlite3.Error as e:
             self.db.close()
             raise StoreError(f"Couldn't open or update {self.path} ({type(e).__name__}: {e}).") from None
@@ -404,8 +419,8 @@ class Store:
     def _area(row):
         reads = {k: True for k in READ_KEYS}  # keys added later (writer) default to on
         reads.update(json.loads(row["reads"]))
-        return {"id": row["id"], "name": row["name"], "colour": row["colour"],
-                "reads": reads, "fixed": bool(row["fixed"])}
+        return {"id": row["id"], "name": row["name"], "colour": palette.info(row["colour"])["key"],
+                "swatch": palette.info(row["colour"]), "reads": reads, "fixed": bool(row["fixed"])}
 
     def areas(self):
         with self.lock:
@@ -427,9 +442,10 @@ class Store:
 
     @staticmethod
     def _check_colour(colour):
-        if not isinstance(colour, int) or isinstance(colour, bool) or not 1 <= colour <= 4:
-            raise InputError("Colour must be 1, 2, 3 or 4.")
-        return colour
+        try:
+            return palette.clean(colour)   # 0.22.0: a palette key or a free colour that passes AA (old 1 to 4 read)
+        except palette.Invalid as e:
+            raise InputError(str(e)) from None
 
     def add_area(self, name, colour):
         name, colour = self._check_name(name), self._check_colour(colour)
@@ -453,6 +469,7 @@ class Store:
                     a["name"] = self._check_name(val)
                 elif key == "colour":
                     a["colour"] = self._check_colour(val)
+                    a["swatch"] = palette.info(a["colour"])
                 elif key == "reads":
                     if not isinstance(val, dict) or any(k not in READ_KEYS or not isinstance(v, bool)
                                                         for k, v in val.items()):
@@ -602,30 +619,71 @@ class Store:
         return a
 
     # --- VIPs -----------------------------------------------------------
+    # 0.22.0 (owner 2026-11-16, "VIPs in one store"): this list is the only VIP home. Setup adds by name and email;
+    # Chat (prefs.Prefs.apply kind vip) adds or changes one here, by name when it has no address (email ''), with
+    # its options in `opts` (the vip_opts table; prefs.vip_fields reads them). Alerts, quiet hours, Needs you and Setup all read it.
+    @staticmethod
+    def _vip_row(r):
+        d = dict(r)
+        try:
+            d["opts"] = json.loads(d.get("opts") or "{}")
+        except ValueError:
+            d["opts"] = {}
+        d["opts"] = d["opts"] if isinstance(d["opts"], dict) else {}
+        return d
+
     def vips(self):
         with self.lock:
-            rows = self.db.execute("SELECT * FROM vips ORDER BY rowid").fetchall()
-        return [dict(r) for r in rows]
+            rows = self.db.execute("SELECT v.*, o.opts FROM vips v LEFT JOIN vip_opts o ON o.vip_id = v.id ORDER BY v.rowid").fetchall()
+        return [self._vip_row(r) for r in rows]
 
-    def add_vip(self, name, email, area_id):
+    def vip(self, vip_id):
+        with self.lock:
+            r = self.db.execute("SELECT v.*, o.opts FROM vips v LEFT JOIN vip_opts o ON o.vip_id = v.id WHERE v.id=?", (vip_id,)).fetchone()
+        return self._vip_row(r) if r else None
+
+    def add_vip(self, name, email, area_id, opts=None, by_name=False):
+        """Adds a VIP. Setup needs an email address; `by_name` (Chat, which knows the person by name) allows none."""
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 80:
             raise InputError("A VIP needs a name of at most 80 characters.")
-        if not isinstance(email, str) or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip()) \
-                or len(email) > 254:
+        email = "" if email is None and by_name else email
+        if not (by_name and email == "") and (
+                not isinstance(email, str) or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email.strip())
+                or len(email) > 254):
             raise InputError("That email address doesn't look right.")
         if not isinstance(area_id, str):
             raise InputError("Pick an area for this VIP.")
         self.area(area_id)
-        vip = {"id": new_id("vip"), "name": name.strip(), "email": email.strip().lower(), "area_id": area_id}
+        if opts is not None and not isinstance(opts, dict):
+            raise InputError("Those VIP options don't look right.")
+        vip = {"id": new_id("vip"), "name": name.strip(), "email": email.strip().lower(), "area_id": area_id,
+               "opts": dict(opts or {})}
         with self.lock:
             self.db.execute("INSERT INTO vips (id, name, email, area_id) VALUES (?,?,?,?)",
                             (vip["id"], vip["name"], vip["email"], vip["area_id"]))
+            if vip["opts"]:
+                self.db.execute("INSERT OR REPLACE INTO vip_opts (vip_id, opts) VALUES (?,?)",
+                                (vip["id"], json.dumps(vip["opts"])))
         return vip
+
+    def set_vip_opts(self, vip_id, opts):
+        """Chat's options for one VIP (prefs.Prefs.apply), or back to what they were (Undo)."""
+        if not isinstance(opts, dict):
+            raise InputError("Those VIP options don't look right.")
+        with self.lock:
+            if self.db.execute("SELECT 1 FROM vips WHERE id=?", (vip_id,)).fetchone() is None:
+                raise NotFound("That VIP doesn't exist.")
+            if opts:
+                self.db.execute("INSERT OR REPLACE INTO vip_opts (vip_id, opts) VALUES (?,?)", (vip_id, json.dumps(opts)))
+            else:
+                self.db.execute("DELETE FROM vip_opts WHERE vip_id=?", (vip_id,))
+        return self.vip(vip_id)
 
     def delete_vip(self, vip_id):
         with self.lock:
             if self.db.execute("DELETE FROM vips WHERE id=?", (vip_id,)).rowcount == 0:
                 raise NotFound("That VIP doesn't exist.")
+            self.db.execute("DELETE FROM vip_opts WHERE vip_id=?", (vip_id,))
 
     # --- writer ---------------------------------------------------------
     def writer_config(self):

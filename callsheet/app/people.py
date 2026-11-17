@@ -322,7 +322,7 @@ class VipMap(dict):
 
 
 def vip_map(store, people=None):
-    v = VipMap({x["email"].lower(): x["name"] for x in store.vips()})
+    v = VipMap({x["email"].lower(): x["name"] for x in store.vips() if x["email"]})   # by name: no address
     if people is None:
         return v
     d = people.directory()
@@ -511,7 +511,7 @@ class People:
         """[(kind, value, name, label, source, n, extra, area, vip, verified)] from the VIPs, the Know me profile draft
         and the existing contacts (index: mail, calendar and Drive owners; Slack users the brief knows; Signal)."""
         out = []
-        for v in self.store.vips():
+        for v in (x for x in self.store.vips() if x["email"]):   # 0.22.0: a VIP Chat added by name has no address
             out.append(("email", v["email"].lower(), v["name"], v["email"].lower(), "vip", 0, {}, v["area_id"], True,
                         "owner"))
         if self.index is None:
@@ -785,7 +785,7 @@ class People:
         """A VIP person: the VIP flag, or one of their addresses is on the VIP list."""
         if row["vip"]:
             return True
-        vl = {v["email"].lower() for v in self.store.vips()}
+        vl = {v["email"].lower() for v in self.store.vips() if v["email"]}
         return any(h["kind"] == "email" and h["value"] in vl for h in self._handles(row["id"]))
 
     @staticmethod
@@ -965,7 +965,7 @@ class People:
             if sets.get("vip") == 0:
                 emails = {h["value"] for h in self._handles(p["id"]) if h["kind"] == "email"}
                 for v in self.store.vips():
-                    if v["email"].lower() in emails:
+                    if v["email"] and v["email"].lower() in emails:
                         self.store.delete_vip(v["id"])
             self._touch()
             return self.person(p["id"])

@@ -74,7 +74,7 @@ class StateAndSettingsTest(Base):
         self.assertEqual(st["google_client"], {"configured": False, "client_id_hint": None})
         self.assertEqual(len(st["areas"]), 1)
         p = st["areas"][0]
-        self.assertEqual((p["id"], p["name"], p["colour"], p["fixed"]), ("personal", "Personal", 1, True))
+        self.assertEqual((p["id"], p["name"], p["colour"], p["fixed"]), ("personal", "Personal", "blue", True))
         self.assertEqual(p["reads"], {"calendar": True, "mail": True, "chat": True, "tasks": True,
                                       "writer": True})
         self.assertEqual(p["accounts"], [])
@@ -124,7 +124,7 @@ class StateAndSettingsTest(Base):
 
     def test_areas_and_vips(self):
         a = self.ok("POST", "/api/areas", {"name": "CO. A", "colour": 2})
-        self.assertEqual((a["id"], a["colour"], a["fixed"], a["accounts"]), ("co-a", 2, False, []))
+        self.assertEqual((a["id"], a["colour"], a["fixed"], a["accounts"]), ("co-a", "teal", False, []))  # 0.22.0: 2 reads as teal
         a = self.ok("PATCH", "/api/areas/co-a", {"name": "Acme", "reads": {"chat": False}})
         self.assertEqual((a["name"], a["reads"]["chat"], a["reads"]["mail"]), ("Acme", False, True))
         self.assertEqual(self.call("POST", "/api/areas", {"name": "X", "colour": 5})[0], 400)
@@ -288,7 +288,7 @@ class SyncTest(Base):
         self.fake.add_user("work@acme.example")
         self.connect("work@acme.example", "work")
         rt = next(iter(self.fake.refresh_tokens))
-        self.ok("DELETE", "/api/areas/work")
+        self.ok("DELETE", "/api/areas/work", {"disconnect": True})   # 0.22.0: the old way, spelled out
         self.assertIn(rt, self.fake.revoked)
         self.assertFalse(self.app.store.has_accounts())
 

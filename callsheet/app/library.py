@@ -31,6 +31,7 @@ import sqlite3
 import sys
 import time
 
+import areas as areas_mod   # 0.22.0 an item's area (moves keep or take past items)
 import inject
 import msgstore
 from msgstore import (DOC_SOURCES, EVENT_ID_BASE, MAX_LIMIT, STORE_ID_BASE, cap_body, clip, fts_query, segments,
@@ -160,6 +161,20 @@ def _terms(people):
     return [str(p)[:100] for p in (people if isinstance(people, (list, tuple)) else [people]) if str(p).strip()][:12]
 
 
+class _AreaMap(dict):
+    """{account: area id}; at() gives one item's area (areas.Resolver when the store has one)."""
+    res = None
+
+    def at(self, source, account, ts=None, calendar=None):
+        if self.res is not None:
+            return self.res.at(source, account, ts, calendar)
+        return self.get(account, "")
+
+
+def _area_at(areas, source, account, ts=None, calendar=None):
+    return areas.at(source, account, ts, calendar) if isinstance(areas, _AreaMap) else (areas or {}).get(account, "")
+
+
 class Library:
     def __init__(self, ms, store=None, clock=None):
         self.ms, self.store = ms, store
@@ -191,10 +206,22 @@ class Library:
         return self.ms._owner()  # noqa: SLF001
 
     def _areas(self):
-        """{account or workspace id: area id} (a message's or an event's area is its account's)."""
-        out = {}
+        """{account or workspace id: area id} for filters, with .at(source, account, ts, calendar) for one item's area
+        (0.22.0: a connection moved with "Leave as it is" keeps its older items in their old area; areas.Resolver)."""
+        out = _AreaMap()
         if self.store is None:
             return out
+        try:
+            for a in self.store.accounts():
+                out[a["id"]] = a.get("area_id") or ""
+            for w in self.store.slack_workspaces():
+                if w.get("area_id"):
+                    out[w["id"]] = w["area_id"]
+            if hasattr(self.store, "db"):
+                out.res = areas_mod.Areas(self.store).resolver()
+        except Exception:  # noqa: BLE001 (an area is a nicety)
+            pass
+        return out
         try:
             for a in self.store.accounts():
                 out[a["id"]] = a.get("area_id") or ""
@@ -398,7 +425,7 @@ class Library:
         link = e["link"] if str(e["link"] or "").startswith("https://") else ""
         return {"id": EVENT_ID_BASE + e["id"], "source": "calendar", "account": e["account"], "kind": "event",
                 "thread": _series(e["event_id"]), "title": e["title"] or "(no title)", "people": people,
-                "area": areas.get(e["account"], ""), "ts": e["start_ts"] or 0, "date": _iso(e["start_ts"]),
+                "area": _area_at(areas, "calendar", e["account"], e["start_ts"], e["calendar"]), "ts": e["start_ts"] or 0, "date": _iso(e["start_ts"]),
                 "url": link, "snippet": snip, "highlight": [[snip, False]] if snip else [],
                 "instructions": bool(inject.keys(e["title"], e["location"], "calendar", self._owner(), False))}
 
@@ -535,7 +562,7 @@ class Library:
                                      limit=n, ids=mids, accounts=accounts, relax=relax)
                 ppl = self._people_of([r["id"] for r in got])
                 for r in got:
-                    r.update(area=areas.get(r["account"], ""), people=ppl.get(r["id"], r["people"]))
+                    r.update(area=_area_at(areas, r["source"], r["account"], r["ts"]), people=ppl.get(r["id"], r["people"]))
                     r.pop("source_id", None)
                     out.append(r)
             if want_cal and (eids is None or eids):
@@ -575,7 +602,7 @@ class Library:
         if v >= STORE_ID_BASE:
             r = self.ms.get(v)
             if r:
-                r.update(area=self._areas().get(r["account"], ""), people=self._people_of([v]).get(v, r["people"]))
+                r.update(area=_area_at(self._areas(), r["source"], r["account"], r["ts"]), people=self._people_of([v]).get(v, r["people"]))
             return r
         if v < 1:
             return None
@@ -621,7 +648,7 @@ class Library:
         kind = "sent" if out else ("email" if r["source"] == "gmail" else "message")
         return {"id": STORE_ID_BASE + r["id"], "source": r["source"], "account": r["account"], "kind": kind,
                 "thread": r["thread"], "title": msgstore.MessageStore.title_of(r),
-                "people": clip("; ".join(people), MAX_PEOPLE), "area": areas.get(r["account"], ""), "ts": r["ts"]}
+                "people": clip("; ".join(people), MAX_PEOPLE), "area": _area_at(areas, r["source"], r["account"], r["ts"]), "ts": r["ts"]}
 
     def _paged(self, sql, args, conv, batch):
         last_ts, last_id = float("-inf"), -1

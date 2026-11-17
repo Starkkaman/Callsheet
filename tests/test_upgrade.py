@@ -92,12 +92,14 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(s.settings(), dict(kept, time_format="12h", call_times=calls, assistant_name="Bruce",
                                             model_quiet_times=[]))
         self.assertEqual(s.accounts(), accounts)
-        self.assertEqual(s.vips(), vips)
+        self.assertEqual(s.vips(), [dict(v, opts={}) for v in vips])   # 0.22.0: Setup VIPs have no Chat options
         self.assertEqual(s.google_client(), client)
         self.assertEqual([s.account_secret(a) for a in (self.a1, self.a2)], self.secrets)
         new_areas = s.areas()
-        self.assertEqual([{k: v for k, v in a.items() if k != "reads"} for a in new_areas],
-                         [{k: v for k, v in a.items() if k != "reads"} for a in areas])
+        # 0.22.0: the colour numbers read as their palette keys (the same colours), with the swatch; nothing rewritten
+        legacy = {1: "blue", 2: "teal", 3: "violet", 4: "walnut"}
+        self.assertEqual([{k: v for k, v in a.items() if k not in ("reads", "swatch")} for a in new_areas],
+                         [dict({k: v for k, v in a.items() if k != "reads"}, colour=legacy[a["colour"]]) for a in areas])
         for old_a, new_a in zip(areas, new_areas):
             self.assertEqual(new_a["reads"], dict(old_a["reads"], writer=True))
         w = s.writer_public()

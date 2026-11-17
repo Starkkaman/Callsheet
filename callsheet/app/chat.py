@@ -40,6 +40,7 @@ import threading
 import time
 import urllib.parse
 
+import actions as actions_mod   # 0.22.0: Chat does what the owner can (the registry and its journal)
 import assistant      # the assistant's name (Setup › Your day; settings assistant_name)
 import conn_youtube   # 0.11.1: address parsing only (parse_address); nothing here reads or fetches
 import connectors     # 0.11.1: clean, clip, site_of (text helpers)
@@ -52,6 +53,7 @@ import calwrite as calwrite_mod   # 0.21.0: NO_DELETE (the card's Undo answer); 
 import gdrafts        # 0.21.0: Put in Gmail Drafts (the draft card; all Google I/O is in gdrafts.py/google.py)
 import chatstore      # 0.17.0: the store tools and the setting/action cards (approved 2026-11-11)
 import prefs as prefs_mod
+import today as today_mod    # 0.22.0: the buttons' own functions (actions.Actions over Today)
 import tidy as tidy_mod      # 0.21.4: Tidy up from Chat (the card; the run and its Undo are tidy.Tidy)
 import websearch      # 0.14.0: web search through the owner's SearXNG (all network I/O is in websearch.py/net.py)
 import writer
@@ -852,6 +854,8 @@ REGISTRY = (
     *(_from_def(d, "_" + d["name"], "store", "2026-11-11", "tests/test_chat_store_0170.py") for d in chatstore.TOOL_DEFS),
     _from_def(chatstore.SETTING_DEF, "_propose_setting", "setting", "2026-11-11", "tests/test_chat_cards_0170.py"),
     _from_def(chatstore.ACTION_DEF, "_propose_action", "action", "2026-11-11", "tests/test_chat_cards_0170.py"),
+    # 0.22.0 (approved 2026-11-16): find, read-only, so Chat can name the target in the owner's words (actions.py)
+    _from_def(chatstore.FIND_DEF, "_find", "action", "2026-11-16", "tests/test_chat_actions_0220.py"),
     # 0.21.0 (approved 2026-11-12): the Gmail draft card (writes nothing; the owner's Confirm makes the draft)
     _from_def(gdrafts.GDRAFT_DEF, "_propose_gmail_draft", "gdraft", "2026-11-12", "tests/test_gdrafts_0210.py"),
     _from_def(MEMORY_TOOL_DEF, "_propose", "remember", "2026-11-03", "tests/test_remember_081.py"),
@@ -1209,6 +1213,7 @@ class Tools(chatstore.StoreTools, gdrafts.DraftTools):
         self.ignored_setting = self.ignored_action = 0
         self.gdraft, self.gdraft_args, self.ignored_gdraft = gdraft, None, 0   # 0.21.0 the Gmail draft card
         self.seen_items = set()   # ledger item numbers a ledger tool showed in this turn
+        self.seen_clashes, self.seen_followups = set(), set()   # 0.22.0: clashes and follow-ups find/ledger_list showed
         self.preview = None   # 0.17.0 (set by Chat): what Callsheet does with a propose_setting/propose_action call
         self.owner = ()   # 0.14.0: the owner's names for inject's owner-voice rule (set by Chat)
         # 0.14.0: websearch.Turn when web search is on (Chat only, in the owner's turn), else None: then web_search and
@@ -1925,6 +1930,8 @@ class Chat:
         self.calwrite = None   # 0.21.0 Add to calendar (calwrite.CalWrite), set by api.App
         self.gdrafts = None   # 0.21.0: gdrafts.GmailDrafts (set by the API): the owner-confirmed Gmail draft card
         self.tidy = None      # 0.21.4: tidy.Tidy (set by the API): the owner-confirmed Tidy up card
+        self.actions = None   # 0.22.0: actions.Actions (set by the API; built here from the store when not set)
+        self.oldata = None    # 0.22.0: oldata.OldData for the Clear old data card (always the owner's Confirm)
         self.applied = {}
         self.turn_log = collections.deque(maxlen=TURN_STATS)   # 0.14.2: the last turns' numbers (memory only)
         try:
@@ -2258,11 +2265,27 @@ class Chat:
         aargs = tools.action_args if action_args is None else action_args
         if sintent is not None and sargs is not None:
             cfg = self.prefs.push_get() if self.prefs.push_get is not None else {}
-            card = chatstore.build_setting_card(sintent, sargs, owner_texts, cfg)
+            card = chatstore.build_setting_card(sintent, sargs, owner_texts, cfg,
+                                                areas=getattr(self.prefs, "areas", None))   # 0.22.0
             if card:
                 card["type"] = "setting"
                 if card["status"] == "ready":
                     card["mode"], card["why"] = chatstore.setting_mode(sintent, card)
+        if card is None and aintent is not None and aargs is not None and \
+                aargs.get("action") in chatstore.TASK_ACTIONS:   # 0.22.0: the registry verbs (actions.py)
+            seen = {"item": set(tools.seen_items), "clash": set(tools.seen_clashes),
+                    "followup": set(tools.seen_followups)}
+            for m in conv["messages"][-2 * HISTORY_TURNS:]:
+                if m.get("role") == "assistant":
+                    for k, key in (("item", "ledger_seen"), ("clash", "clash_seen"), ("followup", "followup_seen")):
+                        if isinstance(m.get(key), list):
+                            seen[k].update(i for i in m[key] if isinstance(i, int))
+            card = chatstore.build_task_card(aintent, aargs, seen, self._task_ctx())
+            if card:
+                card["type"] = "action"
+                if card["status"] == "ready":
+                    card["mode"], card["why"] = chatstore.task_mode(aintent, card)
+            return card
         if card is None and aintent is not None and aargs is not None:
             seen = set(tools.seen_items)
             for m in conv["messages"][-2 * HISTORY_TURNS:]:
@@ -2280,7 +2303,31 @@ class Chat:
                 card["type"] = "action"
                 if card["status"] == "ready":
                     card["mode"], card["why"] = chatstore.action_mode(aintent, card, self._items_of(card["items"]))
+                    if card["action"] in ("done", "note", "snooze", "remind") and self._actions() is not None:
+                        card["reg"] = chatstore.TASK_REG[card["action"]]   # 0.22.0: the buttons' own functions
         return card
+
+    def _actions(self):
+        """0.22.0: actions.Actions (the API's; else one over this chat's store and ledger, for tests and tools)."""
+        if self.actions is None and self.msgstore is not None and self.ledger is not None:
+            td = today_mod.Today(self.msgstore, self.ledger, self.clock)
+            td.tidy = self.tidy
+            self.actions = actions_mod.Actions(self.msgstore, self.clock, today=td, prefs=self.prefs, tidy=self.tidy,
+                                               store=self.store, oldata=self.oldata, tz=self.ledger.tz)
+        return self.actions
+
+    def _task_ctx(self):
+        A = self._actions()
+
+        def cleanup():
+            v = self.ledger.view(now=self.clock(), horizon_days=400)
+            return [{"id": r["id"], "label": prefs_mod.item_words(r)} for r in v["clean_up"]]
+
+        def older():
+            td = A.today if A is not None else None
+            return list(((td.view().get("needs_you") or {}).get("older") or {}).get("ids") or []) if td else []
+        return {"actions": A, "cleanup": cleanup, "older": older,
+                "old_data": (self.oldata.view if self.oldata is not None else None)}
 
     def _preview(self, conv, sintent, aintent, tools, what, args):
         """The propose tool's result for the model: what Callsheet will do with these arguments (so the answer says
@@ -2316,13 +2363,22 @@ class Chat:
         if failed and mode == "apply":
             mode, why = "confirm", chatstore.WHY_FAILED
         pid, _token, exp = self._issue(cid, turn, what=card["type"])
-        keep = ("kind", "fields", "label") if card["type"] == "setting" else ("action", "items", "fields", "label")
+        keep = ("kind", "fields", "label") if card["type"] == "setting" else ("action", "items", "fields", "label",
+                                                                               "reg", "choices")
         with self.lock:
-            self.proposals[pid]["change"] = {k: card[k] for k in keep}
+            self.proposals[pid]["change"] = {k: card[k] for k in keep if k in card}
         out = {"type": card["type"], "status": "ready", "title": card["title"], "label": card["label"],
                "rows": card["rows"], "guessed": card.get("guessed") or [], "turn": turn, "pid": pid, "expires": exp,
                "kind": card.get("kind") or card.get("action"), "mode": mode}
-        if mode == "confirm":
+        if card.get("area"):   # 0.22.0: the area cards' display (the move box, the Done line's dots)
+            out["area"] = card["area"]
+        if card.get("choices"):   # 0.22.0: the Which one? card (each choice has its own Confirm)
+            out["choices"] = [{"pick": n, "label": c["label"]} for n, c in enumerate(card["choices"])]
+        if card.get("related"):   # 0.22.0: "Also dismiss N related clashes" (say so in Chat, or on Today)
+            out["related"] = card["related"]
+        if card.get("action") == "clear_old_data":
+            out["destructive"] = True
+        if mode in ("confirm", "choose"):
             out["why"] = why
             return out
         with self.lock:
@@ -2412,6 +2468,18 @@ class Chat:
             with self.lock:
                 rec["applied"], rec["undone"], rec["calendar"] = applied["ids"], False, True
             return applied
+        if what == "action" and ch.get("reg") and self._actions() is not None:
+            # 0.22.0: the registry runs the button's own function and journals it (actions.py); Undo goes there too
+            try:
+                e = self.actions.run(ch["reg"], ch["items"], ch["fields"], via="chat", ref=ref, label=ch["label"])
+            except actions_mod.Invalid as ex:
+                raise prefs_mod.Invalid(str(ex)) from None
+            applied = {"ids": [e["id"]], "label": e["label"], "at": self.clock(), "log": e["id"]}
+            with self.lock:
+                rec["applied"], rec["undone"], rec["logs"] = applied["ids"], False, [e["id"]]
+                rec["exp"] = max(rec["exp"], self.clock() + PROPOSAL_TTL)
+                self.applied[("log", e["id"])] = (cid, pid)   # Undo in Recent changes marks this card too
+            return applied
         if what == "setting":
             row = self.prefs.apply(ch["kind"], ch["fields"], ref)
             applied = {"ids": [row["id"]], "label": row["label"], "at": self.clock()}
@@ -2446,13 +2514,32 @@ class Chat:
         """POST api/chat/apply {chat, turn, token}: the owner pressed Confirm on a setting or action card. The token
         must be the one Callsheet issued for that chat and turn, unused and unexpired (else InputError, nothing
         written); the change applied is the one kept with the token. Returns {ok, type, applied: {ids, label, at}}."""
-        b = body if isinstance(body, dict) else {}
+        b = dict(body) if isinstance(body, dict) else {}
         if self.prefs is None and self.gdrafts is None:
             raise Conflict("The message store isn't available.")
+        pick = b.pop("pick", None)   # 0.22.0: the Which one? card: the choice the owner pressed
+        if pick is not None and (isinstance(pick, bool) or not isinstance(pick, int)):
+            raise InputError(CARD_TOKEN_BAD)
+        past = b.pop("past", None)   # 0.22.0: the move card's "What it already read", as the owner pressed it
+        if past is not None and not isinstance(past, bool):
+            raise InputError(CARD_TOKEN_BAD)
         with self.lock:
             cid, turn, pid, rec = self._rule_rec(b)
             if rec["used"]:
                 raise InputError(CARD_TOKEN_BAD)
+            ch = rec["change"]
+            if past is not None and not (rec["what"] == "setting" and ch.get("kind") == "area_move"):
+                raise InputError(CARD_TOKEN_BAD)
+            if past is not None and past != ch["fields"]["past"]:
+                fields = dict(ch["fields"], past=past)
+                rec["change"] = dict(ch, fields=fields, label=prefs_mod.label("area_move", fields))
+            if bool(ch.get("choices")) != (pick is not None):
+                raise InputError(CARD_TOKEN_BAD)
+            if pick is not None:
+                if not 0 <= pick < len(ch["choices"]):
+                    raise InputError(CARD_TOKEN_BAD)
+                c = ch["choices"][pick]
+                rec["change"] = dict(ch, items=[c["id"]], choices=None, label=f"Dismissed: {c['label']}")
             rec["used"] = True   # one-time, before the write
         what = rec["what"]
         if what == "gdraft":   # 0.21.0: the owner confirmed the Gmail draft card
@@ -2486,6 +2573,20 @@ class Chat:
                 raise InputError(CARD_TOKEN_BAD)
             rec["undone"] = True   # one-time
         what, errors = rec["what"], []
+        if rec.get("logs"):   # 0.22.0: the registry's journal (actions.py); refused when it changed since
+            for lid in rec["logs"]:
+                try:
+                    self.actions.undo(lid, via="chat")
+                except actions_mod.Invalid as e:
+                    errors.append(str(e))
+            if errors and len(errors) == len(rec["logs"]) and errors[0] != actions_mod.DONE_ALREADY:
+                with self.lock:
+                    rec["undone"] = False
+                raise InputError(errors[0])
+            with self.lock:
+                self._mark_card(cid, pid, applied=None, undone=True)
+            self.log(f"Callsheet chat: an {what} card was undone")
+            return {"ok": True, "type": what, "undone": rec["applied"], "already": len(errors)}
         if rec.get("tidy"):   # 0.21.4: one Undo puts the whole Tidy up run back (tidy.Tidy.undo)
             for i in rec["applied"]:
                 if not self.tidy.undo(i)["restored"]:
@@ -2680,6 +2781,7 @@ class Chat:
         if not isinstance(text, str):
             raise InputError("Write a question first.")
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text).strip()
+        text = chatstore.mask_secrets(text)[0]   # 0.22.0: a pasted key or password is never saved (Setup takes it)
         if not text:
             raise InputError("Write a question first.")
         if len(text) > MAX_QUESTION:
@@ -2895,6 +2997,8 @@ class Chat:
                 aintent = chatstore.action_intent(question, aname) if self.ledger is not None else None
             # 0.21.0: the owner's own latest message asks to put a reply in Gmail Drafts (deterministic)
             dintent = gdrafts.draft_intent(question) if self.gdrafts is not None else None
+            # 0.22.0: keys, tokens, passwords, sign-ins and voice tokens: a card that opens Setup (owner's words only)
+            job["open_setup"] = chatstore.open_setup(question)
             tools = Tools(self.index, tz, self.store.areas(), fmt, clock=self.clock,
                           scope=sc.get("ids") or [] if sc else None,
                           project={"name": sc.get("name"), "status": sc.get("status")} if sc else None,
@@ -3009,6 +3113,8 @@ class Chat:
                 msg["setup"] = self._setup_card(cid, conv, cintent, tools)
             except Exception as e:  # noqa: BLE001
                 self.log(f"Callsheet chat: couldn't prepare the setup card ({type(e).__name__})")
+        if job.get("open_setup") and conv is not None and not msg.get("stopped"):
+            msg["open_setup"] = job["open_setup"]   # 0.22.0 Open in Setup (writes nothing, no token)
         if (sintent is not None or aintent is not None) and tools is not None and conv is not None \
                 and not msg.get("stopped"):
             try:  # 0.17.0: the setting or action card (only what the owner's own words support)
@@ -3026,6 +3132,10 @@ class Chat:
                 self.log(f"Callsheet chat: couldn't prepare the draft card ({type(e).__name__})")
         if tools is not None and tools.seen_items:
             msg["ledger_seen"] = sorted(tools.seen_items)[:100]
+        if tools is not None and tools.seen_clashes:
+            msg["clash_seen"] = sorted(tools.seen_clashes)[:100]
+        if tools is not None and tools.seen_followups:
+            msg["followup_seen"] = sorted(tools.seen_followups)[:100]
         if conv is not None and isinstance(conv["messages"][-1].get("brief_step"), dict):
             msg["brief_step"] = conv["messages"][-1]["brief_step"]   # 0.21.0: which step this answer belongs to
         with self.lock:

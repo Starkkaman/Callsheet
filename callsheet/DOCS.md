@@ -521,3 +521,12 @@ A change you ask for in Chat shows a card. When your own message says exactly th
 - The app only answers the Home Assistant ingress proxy. Its only other port is the voice assistant API, and only
   when you give it a host port.
 
+## Areas (0.22.0)
+
+Setup › Connections › Areas shows each area as a card. Click a name to rename it (Enter saves, Esc cancels); click the
+dot for its colour (10 colours that pass WCAG AA in Light and Dark, or More colours with a hex code, a checked shade
+for each theme and a warning near a state colour). Move to… on a connection (or drag it to another card on a computer)
+opens one box: its new items take the new area, and "What it already read" moves too unless you pick Leave as it is.
+A Google account's calendars can each have their own area. Deleting an area moves its connections to Personal, which
+can't be deleted. Each change has Undo. In Chat, "rename Work to Studio and make it teal" or "move sam@example.com to
+Family" make a setting card under the usual rule (at once with Undo, or Confirm when Callsheet guessed).
