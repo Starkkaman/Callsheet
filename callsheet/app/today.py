@@ -25,6 +25,7 @@ import rules
 import tidy as TY
 import heads
 import ledger as L
+import need as N
 
 SOURCES = {"gmail": ("mail", "Email"), "signal": ("signal", "Signal"), "slack": ("slack", "Slack"),
            "sms": ("text", "Text"), "calendar": ("cal", "Calendar"), "reports": ("note", "Report"),
@@ -38,6 +39,9 @@ HORIZON_DAYS = 30
 EXPAND_S = 48 * 3600            # a clash this near shows both sides; a later one is one line
 RED_S = 86400                   # under 24 h: the red treatment
 WEEK_S = 7 * 86400              # under a week: amber
+HEADSUP_DAYS = 10               # 0.23.0: heads-ups on Today: today and the next days (the mockup's "next 10 days")
+ASK_CARDS = 3                   # 0.23.0: "Does this need you?" cards at once
+_KEY = re.compile(r"[ei]:\d{1,12}")
 THREAD_SHOWN = 6                # the newest messages of a thread shown before "N earlier"
 THREAD_MAX = 60
 TEXT_MAX = 900
@@ -576,6 +580,15 @@ class Today:
     def _about(side):
         return side.get("for") or side.get("what") or side.get("title") or ""
 
+    @classmethod
+    def _line_part(cls, s):
+        """One side of a one-line clash: "Mira: school pickup", or a calendar entry by its title once (not
+        "Design review: Design review")."""
+        about = cls._about(s) or "busy"
+        if s["kind"] == "event" or about.strip().lower() == (s["first"] or "").strip().lower():
+            return ((s["first"] or about, True),)
+        return ((s["first"], True), (": " + about, False))
+
     def _clash_sides(self, rows, now, tz):
         ids = set()
         for c in rows:
@@ -646,10 +659,12 @@ class Today:
                "until": "now" if live else until(secs), "seconds": int(secs), "kind": c["kind"],
                "confidence": c["confidence"], "compact": not expand, "rows": rows, "reply": reply,
                "names": [s["first"] for s in sides],
-               "line": seg(*[p for s in sides for p in ((s["first"], True), (": " + (self._about(s) or "busy"), False),
-                                                         (" · ", False))][:-1]),
+               "line": seg(*[p for s in sides for p in self._line_part(s) + ((" · ", False),)][:-1]),
                "alert": {"state": c.get("alert") or "", "at": t12(local(c["alerted_at"], tz)) if c.get("alerted_at") else ""},
                "items": [s["id"] for s in sides if s["kind"] == "item"]}
+        if c["slot_start"]:                # 0.23.0: the phone's Next days lists a clash on its own day
+            d, today = local(c["slot_start"], tz).date(), local(now, tz).date()
+            out["day"], out["day_label"] = d.isoformat(), "Today" if d == today else day_word(d, today)
         if c["kind"] == "away":
             out["away"] = c.get("why") or "you may be away or off that day"
         g = self._group(c, sides, now, tz)
@@ -711,7 +726,10 @@ class Today:
         rows = [c for c in self._read("SELECT * FROM ledger_conflicts WHERE state='open' ORDER BY slot_start")
                 if (c["slot_end"] or c["slot_start"] or now) > now]
         rows, left_out = self._clash_rule(rows, now, tz)     # 0.21.4: no promo, closed or started side
+        # 0.23.0: a heads-up (a side that doesn't need him) is never a clash; it shows under Heads-up
+        rows = [c for c in rows if (c["verdict"] if "verdict" in c.keys() else "clash") in ("clash", "maybe")]
         sides = self._clash_sides(rows, now, tz)
+        nd = N.Need(N.ReadOnly(self.ms))
         fus = self._followups()
         rems = self._reminders()
         clashes, busy_items, busy_events = [], set(), set()
@@ -720,11 +738,15 @@ class Today:
             ids = {s["id"] for s in ss if s["kind"] == "item"}
             fu = next((f for f in fus if f["conflict"] == c["id"] or f["item"] in ids), None)
             secs = (c["slot_start"] or now) - now
-            clashes.append(self._clash(c, ss, fu, rems, now, tz, expand=bool(fu) or secs < EXPAND_S))
+            cl = self._clash(c, ss, fu, rems, now, tz, expand=bool(fu) or secs < EXPAND_S)
+            self._needs_of(cl, c, ss, nd, tz)
+            clashes.append(cl)
             busy_items |= ids
             busy_events |= {s["id"] for s in ss if s["kind"] == "event"}
         clashes = self._clash_cap(clashes, sides)          # 0.21.4: at most CLASH_PER_ITEM per item, the rest grouped
-        lead = next((c for c in clashes if c["level"] == "red"), clashes[0] if clashes else None)
+        clashes.sort(key=lambda c: (c.get("verdict") == "maybe", c["seconds"]))   # 0.23.0: Maybe ones after the sure
+        sure = [c for c in clashes if c.get("verdict") != "maybe"]
+        lead = next((c for c in sure if c["level"] == "red"), sure[0] if sure else None)
         for c in clashes:
             c["lead"] = c is lead
         in_clash = {f["id"] for c in clashes if c.get("followup") for f in [c["followup"]]}
@@ -753,11 +775,170 @@ class Today:
                              "clashes": clashes, "followups": loose, "cleared": self._cleared(day0, now, tz),
                              "clashes_left_out": left_out,
                              "timeline": self._timeline(day0, day1, now, tz, busy_events, busy_items, lv)},
+                "headsup": self.headsup(now, tz, clashes),
+                "day": self.day_lanes(today, now, tz, clashes),
                 "needs_you": self._needs(lv, busy_items | hidden, now, tz),
                 "coming_up": self._coming(lv, busy_items, busy_events, now, tz),
                 "clean_up": self._clean(lv, hidden, now, tz, samples=3),
                 "feeds": self._feeds(now, tz),
                 "calendar_write": False}
+
+    # --- 0.23.0: clashes vs heads-ups (need.py) -------------------------------------------------------------------
+    def _needs_of(self, cl, c, sides, nd, tz):
+        """The clash's two sides for direction A's card: what each one is, its time and why it needs him, and the
+        rule's verdict (clash / maybe). The words are the server's; the page only shows them."""
+        cl["verdict"] = c["verdict"] if "verdict" in c.keys() else "clash"
+        cl["word"] = "Maybe double-booked" if cl["verdict"] == "maybe" else "You’re double-booked"
+        out = []
+        for s in sides[:2] if not L.group_entries(c) else []:
+            if s["kind"] == "event":
+                r = self._read("SELECT * FROM events WHERE id=?", (s["id"],))
+                if not r:
+                    continue
+                e = r[0]
+                need, title = nd.event(e), e["title"] or "Calendar entry"
+                s0, s1, src = e["start_ts"], e["end_ts"], "Calendar · " + nd.cal_name(e)[:30]
+            else:
+                it = self._item(s["id"]) or {}
+                need = nd.item(it)
+                title = it.get("what") or s.get("what") or ""
+                s0, s1, src = it.get("start_ts"), it.get("end_ts"), s.get("chip") or "Message"
+                if s.get("subtype") == "invite":
+                    src = "Calendar · invite"
+            when = ""
+            if s0:
+                d0 = local(s0, tz)
+                when = t12(d0) + (f" – {t12(local(s1, tz))}" if s1 and s1 > s0 else "")
+            out.append({"kind": s["kind"], "id": s["id"], "title": title, "when": when, "need": need["need"],
+                        "why": need["why"], "src": src, "first": s.get("first") or "",
+                        "item": s["id"] if s["kind"] == "item" else None,
+                        "ask": s["kind"] == "item" and s.get("type") == "ask" and s.get("status") == "open"})
+        cl["sides"] = out
+
+    def headsup(self, now=None, tz=None, clashes=()):
+        """0.23.0 Heads-up · happening: what is on in the owner's days that doesn't need him (never red or orange, never
+        an alert), grouped by day; "Got it" per item hides one (`seen` counts them, `show` lists them); the
+        "Does this need you?" cards for entries the code can't place."""
+        now = self.clock() if now is None else now
+        tz = tz or self.tz()
+        today = local(now, tz).date()
+        day0 = L.day_bounds(today, tz)[0]
+        until = day0 + HEADSUP_DAYS * 86400 + 7200
+        ro = N.ReadOnly(self.ms)
+        rows, asks = N.headsups(ro, max(day0, now - 3600), until, tz, now)
+        rows = [r for r in rows if (r["end_ts"] or r["start_ts"] or now) > now]
+        seen = N.seen(ro)
+        shown, hidden = [], []
+        for r in rows:
+            (hidden if seen.get(r["key"]) == r["sig"] else shown).append(r)
+        trip_days = {}
+        for c in clashes or ():
+            if c.get("group") and c["group"].get("trip"):
+                trip_days[c["id"]] = c
+        days = {}
+        for r in shown:
+            d = max(dt.date.fromisoformat(r["day"]), today) if r["day"] else today
+            days.setdefault(d, []).append(r)
+        out = []
+        for d in sorted(days):
+            out.append({"day": d.isoformat(), "label": "Today" if d == today else day_word(d, today),
+                        "rows": [self._hu_row(r) for r in days[d]]})
+        ask_rows = [dict(self._hu_row(a), event=a["id"], why=a["sub"]) for a in asks
+                    if (a["end_ts"] or a["start_ts"] or now) > now][:ASK_CARDS]
+        return {"days": out, "count": len(shown), "seen": len(hidden),
+                "show": [self._hu_row(r) for r in hidden], "asks": ask_rows,
+                "line": f"{len(shown)} this week · nothing to decide" if shown else "Nothing happening around you"}
+
+    @staticmethod
+    def _hu_row(r):
+        return {"key": r["key"], "when": r["when"], "title": r["title"], "sub": r["sub"], "tag": r["tag"],
+                "word": r["word"], "day": r["day"], "kind": r["kind"], "id": r["id"], "all_day": r["all_day"],
+                "start_ts": r["start_ts"]}
+
+    def day_lanes(self, day, now=None, tz=None, clashes=None):
+        """0.23.0 the day drawing (direction B): Today's Day strip, the phone's vertical day and the Agenda day."""
+        now = self.clock() if now is None else now
+        tz = tz or self.tz()
+        d0, d1 = L.day_bounds(day, tz)
+        lanes = N.lanes(N.ReadOnly(self.ms), d0, d1, tz, C.blocks)
+        seen = N.seen(N.ReadOnly(self.ms))
+        for r in lanes["around"] + lanes["all_day"]:
+            r["seen"] = r["key"] in seen
+        if clashes is None:
+            clashes = []
+        keys = []
+        for c in clashes:
+            ks = set()
+            for s in c.get("sides") or []:
+                ks.add(("e:" if s["kind"] == "event" else "i:") + str(s["id"]))
+                if s["kind"] == "item":
+                    it = self._item(s["id"]) or {}
+                    if it.get("cal_ref") is not None:
+                        ks.add(f"e:{it['cal_ref']}")
+            keys.append((c, ks))
+        for m in lanes["clashes"]:
+            got = next((c for c, ks in keys if m["a"] in ks and m["b"] in ks), None)
+            m["clash"] = got["id"] if got else None
+            if got:
+                m["verdict"] = got.get("verdict") or m["verdict"]
+        lanes["now"] = now if d0 <= now < d1 else None
+        lanes["start"], lanes["end"] = d0, d1
+        lanes["label"] = f"{day:%a} {day.day}"
+        n_cl = sum(1 for m in lanes["clashes"] if m["verdict"] in ("clash", "maybe"))
+        n_hu = len(lanes["around"]) + sum(1 for r in lanes["all_day"] if not r["mine"])
+        lanes["line"] = (f"{n_cl} clash{'' if n_cl == 1 else 'es'} · " if n_cl else "") + f"{n_hu} happening around you"
+        return lanes
+
+    def gotit(self, key):
+        """0.23.0 "Got it" on one heads-up: hidden from Today and the brief until it changes (a new time or place).
+        Returns {id, key, label} for Undo."""
+        if not isinstance(key, str) or not _KEY.fullmatch(key):
+            raise Invalid("Send the heads-up's key.")
+        kind, rid = key.split(":")
+        if kind == "e":
+            r = self._read("SELECT * FROM events WHERE id=?", (int(rid),))
+            sig, title = (N.sig_of("event", r[0]), r[0]["title"]) if r else (None, "")
+        else:
+            it = self._item(int(rid))
+            sig, title = (N.sig_of("item", it), it.get("what")) if it else (None, "")
+        if sig is None:
+            raise Invalid("There's no such heads-up.")
+        now = self.clock()
+        sid = self.ms.write(lambda db: db.execute("INSERT INTO headsup_seen (key, sig, at) VALUES (?,?,?)",
+                                                  (key, sig, now)).lastrowid)
+        return {"id": sid, "key": key, "label": f"Got it: {title or 'heads-up'}"}
+
+    def gotit_undo(self, sid):
+        if isinstance(sid, bool) or not isinstance(sid, int):
+            raise Invalid("Send the Got it id as a number.")
+        now = self.clock()
+        n = self.ms.write(lambda db: db.execute("UPDATE headsup_seen SET undone_at=? WHERE id=? AND undone_at IS NULL",
+                                                (now, sid)).rowcount)
+        if not n:
+            raise Invalid("That Got it is already undone.")
+        return {"undone": sid}
+
+    def need_answer(self, event_id, answer, prefs):
+        """0.23.0 the owner pressed "Yes, needs me" or "No, just FYI" on a "Does this need you?" card: it teaches that
+        organizer (else that calendar) as a `need` preference (Setup › Your rules, Chat can change it, Undo), and the
+        clashes are re-checked at once. Only this press (or his own words in Chat) answers it."""
+        if isinstance(event_id, bool) or not isinstance(event_id, int):
+            raise Invalid("Send the calendar entry's id as a number.")
+        if answer not in (N.YES, N.NO):
+            raise Invalid("Answer yes or no.")
+        try:
+            fields = N.teach_fields(N.ReadOnly(self.ms), event_id, answer)
+        except (ValueError, LookupError) as e:
+            raise Invalid(str(e)) from None
+        row = prefs.apply("need", fields, ref=f"ask:{event_id}")
+        if getattr(prefs, "on_need", None) is None:
+            self.recheck()
+        return {"pref": row["id"], "label": row["label"], "need": answer}
+
+    def recheck(self):
+        """Re-check every clash after a calendar choice or an answer changed what needs him."""
+        now, tz = self.clock(), self.tz()
+        return self.ms.write(lambda db: C.sweep(db, now, tz))
 
     # --- 0.21.4: the clash rule, the banner, Refresh -------------------------------------------------------------
     def _clash_rule(self, rows, now, tz):
@@ -1180,7 +1361,8 @@ class Today:
         if it.get("predecessor"):
             items.update(self._items([it["predecessor"]]))
         side = self._side("item", it["id"], items, srcs, now, tz)
-        clashes = self._read("SELECT * FROM ledger_conflicts WHERE state='open' AND ((a_kind='item' AND a_ref=?) OR "
+        clashes = self._read("SELECT * FROM ledger_conflicts WHERE state='open' AND verdict IN ('clash','maybe') AND "
+                             "((a_kind='item' AND a_ref=?) OR "
                              "(b_kind='item' AND b_ref=?)) ORDER BY slot_start", (it["id"], it["id"]))
         sp = self._span(it)
         kicker = [t12(local(now, tz)), TYPE_WORD.get(it["type"], "Item")]

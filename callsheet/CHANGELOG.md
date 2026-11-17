@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.23.0
+
+- **Clashes are only the things that need you.** Callsheet now asks of each side of an overlap: does it need you
+  there? Two that do are a clash ("You're double-booked"); a maybe on either side is a maybe clash; anything only FYI
+  (a sofa delivery window, someone else's book club, an optional invite) is a heads-up instead.
+- **Today in two parts.** On a computer: "Clashes · you have to choose" with both sides, Keep (pick one; it sends
+  nothing), the reply, Move one…, Open both and Dismiss; and "Heads-up · happening", a quiet list by day with Got it on
+  each row (with Undo). A Day strip on top draws your day, open by default and remembered on this device. On a phone:
+  the day top to bottom, heads-ups as thin lines between your plans, a clash as a hatched pair, then the next days one
+  line each. Agenda's day view draws the same day.
+- **Per-calendar choice in Setup:** Mine, Ask me, Heads-up or Hide. When Callsheet can't tell, a "Does this need you?"
+  card asks (Yes, needs me / No, just FYI); your answer is remembered for that organizer or calendar, shows in Your
+  rules and can be changed in Chat. Text in a message can't answer it.
+- **Unanswered invites** count by context: a small meeting where you're required is a clash; a big or unclear one is
+  a maybe clash with the question.
+- **Phone alerts only for clashes and maybe clashes.** Talk it through has a "Choose" step for clashes and a short
+  "Happening" step for heads-ups. A trip's grouped clash lists only the entries that need you.
+
 ## 0.22.1
 
 - **What you tidied stays tidied.** After Tidy up, new mail from the same promo senders now goes straight to Clean up

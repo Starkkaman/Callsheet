@@ -377,9 +377,9 @@
     return h('div', { class: 'ebw' }, [agBox(r, false), add || link ? h('div', { class: 'ebx' }, [add, link]) : null, rs, agAddCard(r, v)]);
   }
   function agClash(r, small) {
-    var al = r.level === 'al';
-    return h('div', { class: 'clb agcl' + (al ? ' al' : '') + (small ? ' sm' : ''), role: 'group', 'aria-label': 'Clash ' + r.when + (r.group ? ': ' + r.group : '') + ', ' + r.until }, [
-      h('div', { class: 'clh' }, [h('p', { class: 'cl' }, [al ? h('span', { class: 'led al', 'aria-hidden': 'true' }) : '▲ ', 'Clash · ' + (small ? r.short : r.time)]),
+    var mb = r.verdict === 'maybe', al = r.level === 'al' && !mb;   /* 0.23.0: a Maybe is dashed and dim, never red */
+    return h('div', { class: 'clb agcl' + (al ? ' al' : '') + (mb ? ' maybe' : '') + (small ? ' sm' : ''), role: 'group', 'aria-label': (mb ? 'Maybe clash ' : 'Clash ') + r.when + (r.group ? ': ' + r.group : '') + ', ' + r.until }, [
+      h('div', { class: 'clh' }, [h('p', { class: 'cl' }, [al ? h('span', { class: 'led al', 'aria-hidden': 'true' }) : mb ? '△ ' : '▲ ', (mb ? 'Maybe · ' : 'Clash · ') + (small ? r.short : r.time)]),
         small ? null : h('p', { class: 'until' }, r.until)]),
       small ? h('p', { class: 'until' }, r.until) : null,
       h('div', { class: 'lanes' }, r.sides.map(function (s) { return agBox(s, false); })),
@@ -432,6 +432,7 @@
   function agDay(v) {
     var d = v.day;
     return h('div', { class: 'g75' }, [h('section', { class: 'card', 'aria-labelledby': 'ag-dl' }, [h('h2', { class: 'lab', id: 'ag-dl' }, d.label),
+      d.lanes ? (isPhone() ? dlPhone(d.lanes, [], true) : dlStrip(d.lanes)) : null,
       d.rows.length ? agRows(d.rows, v, 'ag') : h('p', { class: 'dim' }, 'Nothing on this day.')]),
     h('div', { class: 'agside' }, [agSaid(v), agInvites(v), agOnly(v)])]);
   }
@@ -1110,7 +1111,12 @@
     if (TD.sub === 'talk') return tkView();
     var v = TD.v;
     if (!v) return h('div', { class: 'tdy' }, h('p', { class: 'tdy-empty' }, TD.err ? 'Today isn’t ready: ' + TD.err : 'Loading Today…'));
-    return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdNow(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
+    /* 0.23.0 (mockup clash-vs-headsup-v1): desktop = direction A (Clashes · you have to choose, Heads-up · happening) under
+       the collapsible Day strip; phone = direction B (a vertical day, then the next days one line each) */
+    if (isPhone()) return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdPhoneDay(v), tdNextDays(v), tdNow(v, true), tdAsks(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
+    return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdDayStrip(v),
+      h('div', { class: 'tdy-ab' }, [h('div', { class: 'tdy-a' }, [tdNow(v), tdNeeds(v)]), h('div', { class: 'tdy-b' }, [tdHeadsup(v)])]),
+      tdComing(v), tdFeeds(v), tdClean(v)]);
   }
   /* 0.21.0 Talk it through (brief2.py, docs/brief.md): one step at a time, each a spoken turn and its picture, with
      quick replies and a reply field (a Chat turn on that step's items, saved in the day's Morning brief chat) */
@@ -1309,10 +1315,16 @@
         btn('k' + (!open && i === 0 ? ' red' : ''), 'See it', null, function () { tdGo('item', s.id); }),
         btn('k q', 'Done', null, function () { tdDone([s.id], 'security alert from ' + s.who); })])]);
   }
-  function tdNow(v) {
+  function tdNow(v, phone) {
     var nn = v.now_next, kids = [], sec = nn.security || [];
     sec.forEach(function (s, i) { kids.push(tdSec(s, i)); });
-    nn.clashes.forEach(function (c) { kids.push(c.group ? tdClashGroup(c, sec.length > 0) : c.compact ? tdClashLine(c) : tdClash(c, sec.length > 0)); });
+    if (phone) {   /* 0.23.0: on the phone the day and the next days hold the clashes; this card keeps the rest */
+      nn.followups.forEach(function (f) { kids.push(h('div', { class: 'clb' }, [h('p', { class: 'cl' }, '▲ Follow-up'), h('p', { class: 'ct' }, f.line ? [h('b', null, f.what), ' · ' + f.line] : [h('b', null, f.who), ' hasn’t heard from you: ' + f.what]),
+        h('div', { class: 'keys' }, [btn('k', 'Open', null, function () { tdGo('item', f.item); })])])); });
+      return kids.length ? h('section', { class: 'card', 'aria-labelledby': 'td-nn' }, [h('h2', { class: 'lab', id: 'td-nn' }, 'Now'), kids]) : null;
+    }
+    var sure = nn.clashes.filter(function (c) { return c.verdict !== 'maybe'; }).length, mb = nn.clashes.length - sure;
+    nn.clashes.forEach(function (c) { kids.push(c.group ? tdClashGroup(c, sec.length > 0) : c.compact ? tdClashLine(c) : tdClashA(c, sec.length > 0)); });
     nn.followups.forEach(function (f) {
       kids.push(h('div', { class: 'clb' }, [h('p', { class: 'cl' }, '▲ Follow-up'), h('p', { class: 'ct' }, f.line ? [h('b', null, f.what), ' · ' + f.line] : [h('b', null, f.who), ' hasn’t heard from you: ' + f.what]),
         f.reminded ? h('p', { class: 'fu dim' }, 'Reminded ' + f.reminded) : f.remind_at ? h('p', { class: 'fu dim' }, 'Reminder ' + f.remind_at) : null,
@@ -1321,14 +1333,155 @@
         tdRemind('lf' + f.id, ['followup', f.id], f.who)]));
     });
     nn.cleared.forEach(function (x) { kids.push(h('p', { class: 'clrd' }, [h('span', { class: 'led ok', 'aria-hidden': 'true' }), 'Cleared ' + x.at + ' · ' + x.why])); });
-    if (!nn.clashes.length && !nn.followups.length) kids.push(h('p', { class: 'dim' }, 'No clashes.'));
+    if (!nn.clashes.length && !nn.followups.length) kids.push(h('p', { class: 'dim' }, 'No clashes. Nothing to choose.'));
     if (nn.clashes_left_out) kids.push(h('p', { class: 'dim' }, plural(nn.clashes_left_out, 'clash', 'clashes') + ' with promotions, finished or started items not shown.'));
-    var tl = nn.timeline;
-    if (tl.length) kids.push(h('div', { class: 'tdl', role: 'list', 'aria-label': 'Today’s calendar' }, tl.map(function (r) {
-      if (r.kind === 'gap') return h('div', { class: 'gapr', role: 'listitem' }, [r.done ? h('span', { class: 'done' }, r.done + ' done') : null, r.text ? h('span', null, r.text) : null]);
-      return h('div', { class: 'tlr' + (r.on ? ' on' : ''), role: 'listitem' }, [h('span', { class: 'tt' }, r.time), h('span', { class: 'tw' }, r.title), h('span', { class: 'tm' }, r.meta)]);
+    var cnt = sure ? String(sure) + (mb ? ', and ' + mb + ' maybe' : '') : mb ? mb + ' maybe' : '';
+    return h('section', { class: 'card tdy-cl', 'aria-labelledby': 'td-nn' }, [h('h2', { class: 'lab', id: 'td-nn' }, ['Clashes · you have to choose', h('span', { class: 'r' }, cnt)]), kids]);
+  }
+  /* 0.23.0 direction A's clash: both sides side by side with what each asks of him, Keep (pick one; it sends and changes
+     nothing), the reply as the loud key (it opens the draft), Move one…, Open both, Dismiss. A Maybe is dashed and dim. */
+  TD.keep = TD.keep || {};
+  function tdClashA(c, calm) {
+    var red = c.level === 'red', mb = c.verdict === 'maybe', sides = c.sides || [];
+    if (sides.length < 2) return tdClash(c, calm);
+    var kept = TD.keep[c.id], other = kept === undefined ? null : sides[1 - kept];
+    var lead = c.lead && !mb ? (red ? ' red' : calm ? '' : ' go') : '';
+    var target = other || sides.filter(function (s) { return s.ask; })[0] || null, main;
+    if (target && target.item) main = btn('k' + lead, (target.ask ? 'Reply to ' : 'Message ') + (target.first || 'them'), null, function () { TD.autodraft = target.item; tdGo('item', target.item); });
+    else if (c.reply) main = tdLink(c.reply, 'k' + lead);
+    var box = function (s, i) {
+      var off = kept !== undefined && kept !== i;
+      return h('div', { class: 'cla-side' + (off ? ' off' : '') }, [h('p', { class: 'cla-t' }, [h('span', { class: 'dot', 'aria-hidden': 'true' }), s.title]),
+        h('p', { class: 'cla-w' }, s.when), off ? h('p', { class: 'cla-n' }, [h('b', null, 'Not keeping')]) : h('p', { class: 'cla-n' }, [h('b', null, (s.need === 'maybe' ? 'Maybe needs you: ' : 'Needs you: ')), s.why]),
+        h('p', { class: 'cla-s' }, s.src)]);
+    };
+    var keep = h('div', { class: 'cla-keep', role: 'group', 'aria-label': 'Keep one' }, [h('span', { class: 'lab' }, 'Keep')].concat(sides.map(function (s, i) {
+      return btn('seg' + (kept === i ? ' on' : ''), s.first && s.kind === 'item' && !s.ask ? s.title : (s.first || s.title), { 'aria-pressed': String(kept === i) }, function () { TD.keep[c.id] = kept === i ? undefined : i; renderBrief(); });
     })));
-    return h('section', { class: 'card', 'aria-labelledby': 'td-nn' }, [h('h2', { class: 'lab', id: 'td-nn' }, 'Now and next'), kids]);
+    var al = tdAlertLine(c);
+    return h('div', { class: 'clb cla' + (red && !mb ? ' al' : '') + (mb ? ' maybe' : ''), role: 'group', 'aria-label': (mb ? 'Maybe clash ' : 'Clash ') + c.when }, [
+      h('div', { class: 'clh' }, [h('p', { class: 'cl' }, [red && !mb ? h('span', { class: 'led al', 'aria-hidden': 'true' }) : (mb ? '△ ' : '▲ '), (mb ? 'Maybe · ' : 'Clash · ') + c.when]), h('p', { class: 'until' }, c.until)]),
+      h('p', { class: 'cla-h' }, c.word + (sides[0].when ? ', ' + c.when : '') + '.'),
+      h('div', { class: 'cla-pair' }, [box(sides[0], 0), h('span', { class: 'or', 'aria-hidden': 'true' }, 'or'), box(sides[1], 1)]),
+      keep, c.away ? h('p', { class: 'fu dim' }, c.away) : null, al ? h('p', { class: 'fu dim' }, al) : null,
+      h('div', { class: 'keys' }, [main, btn('k', 'Move one…', null, function () { tdGo('clash', c.id); }), btn('k', 'Open both', null, function () { tdGo('clash', c.id); }),
+        btn('k q', mb ? 'Not a clash' : 'Dismiss', null, function () { tdDismiss(c.id); })])]);
+  }
+  /* 0.23.0 Heads-up · happening: quiet rows grouped by day, "Got it" per item (no whole-day clear), with Undo */
+  function tdHuRow(r, seen) {
+    return h('div', { class: 'hu-r' + (r.word === 'FYI' ? ' fyi' : ''), role: 'listitem' }, [h('span', { class: 'hu-w' }, r.when),
+      h('div', { class: 'hu-m' }, [h('p', { class: 'hu-t' }, r.title), h('p', { class: 'hu-s' }, r.sub)]),
+      h('div', { class: 'hu-e' }, [h('span', { class: 'hu-tag' }, r.word === 'FYI' ? 'FYI' : r.tag),
+        seen ? null : btn('k q sm', 'Got it', { 'aria-label': 'Got it: ' + r.title }, function () { tdGotIt(r); })])]);
+  }
+  function tdGotIt(r) {
+    return mutate(function () { return api('POST', 'api/today/gotit', { key: r.key }); }).then(function (x) { TD.huUndo = x; return tdLoad(); }).then(renderBrief, function () {});
+  }
+  function tdHuUndo() {
+    var u = TD.huUndo;
+    if (!u) return null;
+    return h('div', { class: 'tdy-undo', role: 'status' }, [h('span', null, u.label), btn('k q', 'Undo', null, function () {
+      TD.huUndo = null; mutate(function () { return api('POST', 'api/today/gotit/undo', { id: u.id }); }).then(tdLoad).then(renderBrief, function () {}); }),
+      btn('k q', 'Close', { 'aria-label': 'Close this message' }, function () { TD.huUndo = null; renderBrief(); })]);
+  }
+  function tdAskCard(a) {
+    var ans = function (x) { mutate(function () { return api('POST', 'api/today/need', { event: a.event, answer: x }); }).then(function (r) { TD.huUndo = null; TD.needSaid = r; return tdLoad(); }).then(renderBrief, function () {}); };
+    return h('div', { class: 'ask-c', role: 'group', 'aria-label': 'Does this need you? ' + a.title }, [h('p', { class: 'lab' }, 'Does this need you?'),
+      h('p', { class: 'hu-t' }, a.title), h('p', { class: 'hu-s' }, a.when + ' · ' + a.why),
+      h('div', { class: 'keys' }, [btn('k', 'Yes, needs me', null, function () { ans('yes'); }), btn('k', 'No, just FYI', null, function () { ans('no'); })])]);
+  }
+  function tdAsks(v) {
+    var hu = v.headsup || {}, a = hu.asks || [];
+    if (!a.length && !TD.needSaid) return null;
+    return h('section', { class: 'card', 'aria-label': 'Does this need you?' }, [TD.needSaid ? h('p', { class: 'dim', role: 'status' }, TD.needSaid.label + '. Change it in Setup › Your rules or by asking in Chat.') : null, a.map(tdAskCard)]);
+  }
+  function tdHeadsup(v) {
+    var hu = v.headsup || { days: [], asks: [], show: [] }, open = !!TD.more.huseen;
+    return h('section', { class: 'card tdy-hu', 'aria-labelledby': 'td-hu' }, [h('h2', { class: 'lab', id: 'td-hu' }, ['Heads-up · happening', h('span', { class: 'r' }, hu.line)]),
+      TD.needSaid ? h('p', { class: 'dim', role: 'status' }, TD.needSaid.label + '. Change it in Setup › Your rules or by asking in Chat.') : null,
+      (hu.asks || []).map(tdAskCard),
+      hu.days.map(function (d) { return h('div', { class: 'hu-d' }, [h('p', { class: 'hu-dl' }, d.label), h('div', { role: 'list', 'aria-label': d.label }, d.rows.map(function (r) { return tdHuRow(r); }))]); }),
+      hu.seen ? btn('k q more', hu.seen + ' seen · ' + (open ? 'Hide' : 'Show'), { 'aria-expanded': String(open) }, function () { TD.more.huseen = !open; renderBrief(); }) : null,
+      open ? h('div', { role: 'list', 'aria-label': 'Seen' }, hu.show.map(function (r) { return tdHuRow(r, true); })) : null]);
+  }
+  /* 0.23.0 the B day timeline as a collapsible "Day" strip (open by default, remembered on this device) */
+  function tdDayStrip(v) {
+    var d = v.day; if (!d) return null;
+    var open = load('cs.daystrip') !== 'closed';
+    var head = btn('dl-head', [h('span', { class: 'lab' }, 'Day · ' + d.label), h('span', { class: 'dl-line' }, d.line), h('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▴' : '▾')],
+      { 'aria-expanded': String(open), 'aria-controls': 'td-day' }, function () { save('cs.daystrip', open ? 'closed' : 'open'); renderBrief(); });
+    return h('section', { class: 'card tdy-day' }, [head, open ? h('div', { id: 'td-day' }, dlStrip(d)) : null]);
+  }
+  function dlPct(t, a, b) { return Math.max(0, Math.min(100, (t - a) / (b - a) * 100)); }
+  function dlStrip(d) {
+    var all = d.you.concat(d.around), a = d.start + 7 * 3600, b = d.start + 21 * 3600;
+    all.forEach(function (r) { a = Math.min(a, Math.floor((r.s - d.start) / 3600) * 3600 + d.start); b = Math.max(b, Math.ceil((r.e - d.start) / 3600) * 3600 + d.start); });
+    var ticks = [];
+    for (var t = a; t <= b; t += 7200) { var hr = Math.round((t - d.start) / 3600) % 24; ticks.push(h('span', { class: 'dl-tick', style: 'left:' + dlPct(t, a, b) + '%' }, ((hr % 12) || 12) + (hr < 12 ? ' am' : ' pm'))); }
+    var pos = function (r) { return 'left:' + dlPct(r.s, a, b) + '%;width:' + Math.max(2, dlPct(r.e, a, b) - dlPct(r.s, a, b)) + '%'; };
+    /* a short block (a 15-minute stand-up) still shows its name: at least BLK of the track, and the rows count that width */
+    var BLK = 8, vEnd = function (r) { return Math.max(r.e, r.s + (b - a) * BLK / 100); };
+    var rowsOf = function (list) { var ends = []; return list.map(function (r) { var k = 0; while (ends[k] > r.s) k++; ends[k] = vEnd(r); return k; }); };
+    var bpos = function (r) { var l = dlPct(r.s, a, b); return 'left:' + Math.min(l, 100 - BLK) + '%;width:' + Math.max(BLK, dlPct(r.e, a, b) - l) + '%'; };
+    var yk = rowsOf(d.you);
+    return h('div', { class: 'dl', role: 'img', 'aria-label': 'The day: ' + d.line }, [
+      h('div', { class: 'dl-axis' }, ticks),
+      d.all_day.length ? h('div', { class: 'dl-lane' }, [h('span', { class: 'dl-lab' }, 'All day'), h('div', { class: 'dl-track' }, d.all_day.map(function (r) { return h('span', { class: 'dl-band' + (r.mine ? ' mine' : '') }, r.title); }))]) : null,
+      h('div', { class: 'dl-lane you' }, [h('span', { class: 'dl-lab' }, 'You'), h('div', { class: 'dl-track', style: 'height:' + (44 * (Math.max.apply(null, yk.concat([0])) + 1) + 8) + 'px' }, d.you.map(function (r, i) {
+        return h('span', { class: 'dl-blk' + (r.need === 'maybe' ? ' maybe' : ''), style: bpos(r) + ';top:' + (yk[i] * 44 + 4) + 'px', title: r.title }, [h('b', null, r.title), h('i', null, r.time)]);
+      }).concat(d.clashes.filter(function (m) { return m.verdict === 'clash' || m.verdict === 'maybe'; }).map(function (m) {
+        return h('span', { class: 'dl-x' + (m.verdict === 'maybe' ? ' maybe' : ''), style: pos(m) }, h('span', { class: 'dl-xl' }, (m.verdict === 'maybe' ? '△ Maybe' : '▲ Booked twice')));
+      })).concat(d.now ? [h('span', { class: 'dl-now', style: 'left:' + dlPct(d.now, a, b) + '%' })] : []))]),
+      h('div', { class: 'dl-lane around' }, [h('span', { class: 'dl-lab' }, 'Around you'), h('div', { class: 'dl-track' }, d.around.map(function (r) {
+        return h('span', { class: 'dl-ar' + (r.word === 'FYI' ? ' fyi' : ''), style: pos(r) }, [h('span', { class: 'dl-bar', 'aria-hidden': 'true' }), h('span', { class: 'dl-at' }, r.title + ' ' + r.time)]);
+      }))]),
+      h('p', { class: 'dl-key' }, [h('span', { class: 'k-y' }, 'Yours'), h('span', { class: 'k-h' }, 'Happening'), h('span', { class: 'k-f' }, 'FYI'), h('span', { class: 'k-x' }, '▲ Booked twice'), h('span', null, '△ Maybe')])]);
+  }
+  /* 0.23.0 direction B on the phone: a vertical day; heads-ups are thin lines between his own blocks; a clash is a
+     hatched pair with its keys */
+  function dlPhone(d, clashes, bare) {
+    var used = {}, rows = [];
+    d.clashes.forEach(function (m) { if (m.verdict === 'clash' || m.verdict === 'maybe') { used[m.a] = used[m.b] = true; rows.push({ t: m.s, m: m }); } });
+    d.you.forEach(function (r) { if (!used[r.key]) rows.push({ t: r.s, y: r }); });
+    d.around.forEach(function (r) { rows.push({ t: r.s, ar: r }); });
+    rows.sort(function (x, y) { return x.t - y.t; });
+    var byKey = {}; d.you.forEach(function (r) { byKey[r.key] = r; });
+    var kids = d.all_day.map(function (r) { return h('div', { class: 'pd-all' }, [h('span', { class: 'dl-bar', 'aria-hidden': 'true' }), r.title + (r.why ? ' · ' + r.why : '')]); });
+    rows.forEach(function (x) {
+      if (x.ar) kids.push(h('div', { class: 'pd-r pd-ar' }, [h('span', { class: 'pd-t' }, x.ar.time.replace(/ [ap]m$/, '')), h('p', { class: 'pd-line' }, [x.ar.title, h('span', { class: 'dim' }, ' · ' + x.ar.why)])]));
+      else if (x.y) kids.push(h('div', { class: 'pd-r' }, [h('span', { class: 'pd-t' }, x.y.time.replace(/ [ap]m$/, '')), h('div', { class: 'pd-blk' + (x.y.need === 'maybe' ? ' maybe' : '') }, [h('b', null, x.y.title), h('span', null, x.y.time + ' – ' + x.y.end)])]));
+      else {
+        var m = x.m, c = clashes.filter(function (k) { return k.id === m.clash; })[0], mb = m.verdict === 'maybe', sa = byKey[m.a] || {}, sb = byKey[m.b] || {};
+        var keys = c ? [c.sides && c.sides.filter(function (s) { return s.ask; })[0] ? btn('k' + (c.lead ? (c.level === 'red' ? ' red' : ' go') : ''), 'Reply to ' + c.sides.filter(function (s) { return s.ask; })[0].first, null, function () { var s = c.sides.filter(function (s) { return s.ask; })[0]; TD.autodraft = s.item; tdGo('item', s.item); }) : null,
+          btn('k', 'Keep one…', null, function () { tdGo('clash', c.id); }), btn('k q', mb ? 'Not a clash' : 'Dismiss', null, function () { tdDismiss(c.id); })] : [];
+        kids.push(h('div', { class: 'pd-r' }, [h('span', { class: 'pd-t' }, m.time.replace(/ [ap]m$/, '')), h('div', { class: 'pd-x' + (mb ? ' maybe' : '') }, [
+          h('p', { class: 'pd-xl' }, (mb ? '△ Maybe double-booked · ' : '▲ Booked twice · ') + m.time + ' – ' + m.end),
+          h('div', { class: 'pd-pair' }, [h('div', { class: 'pd-blk' }, [h('b', null, sa.title || ''), h('span', null, sa.why || '')]), h('div', { class: 'pd-blk' }, [h('b', null, sb.title || ''), h('span', null, sb.why || '')])]),
+          bare || !keys.length ? null : h('div', { class: 'keys' }, keys)])]));
+      }
+    });
+    return h('div', { class: 'pd', role: 'list', 'aria-label': 'The day' }, kids.length ? kids : [h('p', { class: 'dim' }, 'Nothing on this day.')]);
+  }
+  function tdPhoneDay(v) {
+    var d = v.day; if (!d) return null;
+    return h('section', { class: 'card tdy-pd', 'aria-labelledby': 'td-pd' }, [h('h2', { class: 'lab', id: 'td-pd' }, ['Today · ' + d.label, h('span', { class: 'r' }, d.line)]), dlPhone(d, v.now_next.clashes)]);
+  }
+  function tdNextDays(v) {
+    var days = {}, order = [], today = v.now.slice(0, 10);
+    var add = function (day, label) { if (!days[day]) { days[day] = { label: label, l: [] }; order.push(day); } return days[day]; };
+    v.now_next.clashes.forEach(function (c) { var day = (c.day || ''); if (!day || day === today) return; add(day, c.day_label || c.when.split(' ')[0]).l.push({ c: c }); });
+    (v.headsup.days || []).forEach(function (d) { if (d.day === today) return; d.rows.forEach(function (r) { add(d.day, d.label).l.push({ r: r }); }); });
+    order.sort();
+    if (!order.length) return null;
+    return h('section', { class: 'card', 'aria-labelledby': 'td-nd' }, [h('h2', { class: 'lab', id: 'td-nd' }, 'Next days'), h('div', { role: 'list' }, order.slice(0, 7).map(function (day) {
+      var x = days[day], cl = x.l.filter(function (y) { return y.c; });
+      var lines = x.l.slice(0, 4).map(function (y) {
+        if (y.c) return h('p', { class: y.c.verdict === 'maybe' ? 'nd-mb' : 'nd-cl' }, (y.c.verdict === 'maybe' ? '△ Maybe: ' : '▲ ') + (y.c.group ? y.c.group.plain : y.c.names.join(' and ')));
+        return h('p', { class: 'nd-hu' }, [h('span', { class: 'dl-bar', 'aria-hidden': 'true' }), (y.r.when === 'All day' ? '' : y.r.when.split(' – ')[0] + ' ') + y.r.title + (y.r.word === 'FYI' ? ' (FYI)' : '')]);
+      });
+      var row = [h('span', { class: 'nd-d' }, x.label), h('div', null, lines)];
+      return cl.length ? btn('nd-r', row, { role: 'listitem' }, function () { tdGo('clash', cl[0].c.id); }) : h('div', { class: 'nd-r', role: 'listitem' }, row);
+    }))]);
   }
   function tdAlertLine(c) {
     var a = c.alert || {};
@@ -1376,9 +1529,10 @@
       c.more ? null : h('div', { class: 'keys' }, [btn('k' + lead, 'Open', null, function () { tdGo('clash', c.id); }),
         btn('k q', 'Dismiss', null, function () { tdDismiss(c.id); })])]);
   }
-  function tdClashLine(c) {
-    return btn('cll', [h('span', { class: 'cl' }, '▲ ' + c.when), h('span', { class: 'ct' }, segs(c.line)), h('span', { class: 'until' }, c.until)],
-      { 'aria-label': 'Clash ' + c.when + ': ' + c.names.join(' and ') + ', ' + c.until }, function () { tdGo('clash', c.id); });
+  function tdClashLine(c) {   /* 0.23.0: a Maybe is dashed and dim, after the sure ones, with Open › (mockup A) */
+    var mb = c.verdict === 'maybe';
+    return btn('cll' + (mb ? ' maybe' : ''), [h('span', { class: 'cl' }, (mb ? '△ Maybe · ' : '▲ ') + c.when), h('span', { class: 'ct' }, segs(c.line)), h('span', { class: 'until' }, mb ? 'Open ›' : c.until)],
+      { 'aria-label': (mb ? 'Maybe clash ' : 'Clash ') + c.when + ': ' + c.names.join(' and ') + ', ' + c.until }, function () { tdGo('clash', c.id); });
   }
   function tdNeeds(v) {
     var n = v.needs_you, lim = TD.more.needs ? n.rows.length : (isPhone() ? 3 : 4);
@@ -2395,7 +2549,14 @@
         }).then(function () { if (calErr.textContent) box.checked = !!c.selected; });
       });
       /* 0.8.0: the box sits inside its label, so the whole row is the tap target ("Choose calendars" leads here) */
-      return h('li', null, h('label', { for: id, class: 'calrow' }, [box, h('span', null, [c.summary || c.id, c.primary ? h('span', { class: 'muted' }, ' · main') : null])]));
+      /* 0.23.0: Mine / Ask me / Heads-up / Hide: does what is on this calendar need you? */
+      var use = c.use || (c.primary ? 'mine' : 'ask');
+      var sel = on(h('select', { class: 'inp sm cal-use', 'aria-label': 'What ' + (c.summary || c.id) + ' is to you' }, [['mine', 'Mine'], ['ask', 'Ask me'], ['headsup', 'Heads-up'], ['hide', 'Hide']].map(function (o) {
+        return h('option', { value: o[0], selected: use === o[0] }, o[1]); })), 'change', function () {
+        var patch = {}; patch[c.id] = sel.value;
+        run([sel], calErr, function () { return api('PATCH', 'api/accounts/' + encodeURIComponent(acc.id), { calendar_use: patch }); }, function () { c.use = sel.value; });
+      });
+      return h('li', { class: 'calli' }, [h('label', { for: id, class: 'calrow' }, [box, h('span', null, [c.summary || c.id, c.primary ? h('span', { class: 'muted' }, ' · main') : null])]), c.selected ? sel : null]);
     }));
     var key = 'acct:' + acc.id, shown = !!ui.acctOpen[acc.id] || ui.confirm === key;
     /* 0.9.0: one line per account (what it reads) with Change; the switches, calendars and Disconnect behind it */

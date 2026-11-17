@@ -136,7 +136,8 @@ class Actions:
             return []
         q = ",".join("?" * len(ids))
         rows = self.ms._read(  # noqa: SLF001
-            f"SELECT * FROM ledger_conflicts WHERE state='open' AND ((a_kind='item' AND a_ref IN ({q})) OR "
+            f"SELECT * FROM ledger_conflicts WHERE state='open' AND verdict IN ('clash','maybe') AND ((a_kind='item' AND "
+            f"a_ref IN ({q})) OR "
             f"(b_kind='item' AND b_ref IN ({q}))) ORDER BY slot_start, id", tuple(ids) * 2)
         return [{"id": r["id"], "label": clash_words(dict(r))} for r in rows if r["id"] not in skip][:BATCH_MAX]
 

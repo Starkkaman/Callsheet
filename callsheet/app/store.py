@@ -585,7 +585,10 @@ class Store:
                 prev = old.get(it["id"])
                 cals.append({"id": it["id"], "summary": it.get("summary") or it["id"],
                              "primary": bool(it.get("primary")),
-                             "selected": prev["selected"] if prev else bool(it.get("primary"))})
+                             "selected": prev["selected"] if prev else bool(it.get("primary")),
+                             # 0.23.0: Mine / Ask me / Heads-up / Hide (need.py); the primary one is his by default
+                             "use": prev.get("use") if prev and prev.get("use") else
+                             ("mine" if it.get("primary") else "ask")})
             self.db.execute("UPDATE accounts SET calendars=? WHERE id=?", (json.dumps(cals), account_id))
 
     def update_account(self, account_id, patch):
@@ -605,6 +608,14 @@ class Store:
                         raise InputError("calendars must be a list of this account's calendar ids.")
                     for c in a["calendars"]:
                         c["selected"] = c["id"] in val
+                elif key == "calendar_use":       # 0.23.0: {calendar id: mine | ask | headsup | hide}
+                    known = {c["id"] for c in a["calendars"]}
+                    if not isinstance(val, dict) or any(k not in known or v not in ("mine", "ask", "headsup", "hide")
+                                                        for k, v in val.items()):
+                        raise InputError("calendar_use takes this account's calendar ids and mine, ask, headsup or hide.")
+                    for c in a["calendars"]:
+                        if c["id"] in val:
+                            c["use"] = val[c["id"]]
                 else:
                     raise InputError(f"Accounts can't change {str(key)[:40]}.")
             self.db.execute("UPDATE accounts SET services=?, calendars=? WHERE id=?",

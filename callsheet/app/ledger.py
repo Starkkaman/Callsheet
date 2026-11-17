@@ -15,6 +15,8 @@ import json
 import re
 import zoneinfo
 
+import need as need_mod
+
 TYPES = ("ask", "commitment", "event", "cleanup")
 STATUSES = ("open", "accepted", "tentative", "claimed", "waiting_on_them", "autopay", "moved", "postponed",
             "declined", "done", "cancelled")
@@ -136,6 +138,10 @@ def ensure(ms):
         if "entries" not in {r[1] for r in db.execute("PRAGMA table_info(ledger_conflicts)")}:
             # 0.22.x: the owner's trip's grouped clash lists the calendar entries during it (conflicts.check_item)
             db.execute("ALTER TABLE ledger_conflicts ADD COLUMN entries TEXT NOT NULL DEFAULT ''")
+        if "verdict" not in {r[1] for r in db.execute("PRAGMA table_info(ledger_conflicts)")}:
+            # 0.23.0: does it need you there? clash / maybe / headsup / none (need.py); old rows read as clashes
+            db.execute("ALTER TABLE ledger_conflicts ADD COLUMN verdict TEXT NOT NULL DEFAULT 'clash'")
+        need_mod.ensure(db)
         db.execute("UPDATE ledger_items SET subtype='gig' WHERE subtype='shoot'")   # 0.21.2: the subtype's new name
     ms.write(run)
 

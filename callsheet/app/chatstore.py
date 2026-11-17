@@ -111,7 +111,9 @@ SETTING_DEF = {
                    "false removes one; not the phone's quiet hours), area (area: the area as the owner named it; name: its new "
                    "name, only when he gave one; colour: the colour he named), area_move (connection: the account or "
                    "connection as the owner named it; to: the area; past: false only when he says to leave what it "
-                   "already read where it is). Times are HH:MM, 24-hour.",
+                   "already read where it is), need (0.23.0: scope organizer or calendar; value: the organizer or calendar as the "
+                   "owner named it; need: yes when he says those events need him, no when they are only FYI / heads-ups). "
+                   "Times are HH:MM, 24-hour.",
     "schema": {"type": "object", "properties": {
         "kind": {"type": "string", "enum": list(prefs_mod.KINDS), "description": "What to change."},
         "person": {"type": "string", "description": "vip: the person, as the owner named them."},
@@ -144,7 +146,9 @@ SETTING_DEF = {
         "colour": {"type": "string", "description": "area: the colour, as the owner named it."},
         "connection": {"type": "string", "description": "area_move: the account or connection, as the owner named it."},
         "to": {"type": "string", "description": "area_move: the area it goes to, as the owner named it."},
-        "past": {"type": "boolean", "description": "area_move: what it already read moves too (default true)."}},
+        "past": {"type": "boolean", "description": "area_move: what it already read moves too (default true)."},
+        "scope": {"type": "string", "enum": list(prefs_mod.NEED_SCOPES), "description": "need: an organizer or a calendar."},
+        "need": {"type": "string", "enum": list(prefs_mod.NEEDS), "description": "need: yes (needs him) or no (FYI)."}},
         "required": ["kind"], "additionalProperties": False}}
 ACTION_DEF = {
     "name": ACTION_TOOL,
@@ -297,7 +301,11 @@ _KIND_WORDS = {
     "assistant_name": r"name|call\s+(?:you|yourself)|rename",
     "model_quiet_times": r"(?:model|ai|llm)\s+server|gpu|server",
     "area": r"areas?|rename|colou?r\w*|teal|blue|violet|walnut|pine|plum|berry|indigo|olive|slate|green|red|orange|amber|yellow|purple|pink|brown|grey|gray|navy",   # 0.22.0
-    "area_move": r"move|put|areas?"}
+    "area_move": r"move|put|areas?",
+    "need": r"fyi|heads?-?ups?|needs?\s+me|need\s+me|clash\w*|busy|notices?|calendar"}   # 0.23.0
+# 0.23.0 need: words that say "only FYI" (else: it needs him)
+_FYI = re.compile(r"\b(?:fyi|heads?-?ups?|just\s+(?:a\s+)?notices?|only\s+(?:a\s+)?notices?|doesn'?t\s+need|don'?t\s+need|"
+                  r"not\s+(?:a\s+)?clash\w*|never\s+(?:a\s+)?clash\w*|not\s+mine|ignore)\b", re.I)
 # model_quiet_times: words that remove a quiet time ("drop the 1 am quiet time"); anything else adds one
 _QT_OFF = re.compile(r"\b(?:remove|drop|delete|clear|cancel|lift|no\s+more|no\s+longer|any\s+more|anymore)\b", re.I)
 _SRC_WORDS = {"gmail": r"e-?mails?|mail|gmail|inbox", "slack": r"slack", "signal": r"signal",
@@ -432,6 +440,20 @@ def build_setting_card(intent, args, owner_texts, push_cfg=None, areas=None):
         return {"status": "ready", "kind": kind, "fields": fields, "title": title, "label": prefs_mod.label(kind, fields),
                 "rows": prefs_mod.rows(kind, fields), "guessed": guessed, "changed": changed, "why_area": why,
                 "area": show}
+    if kind == "need":   # 0.23.0: "Mira's calendar is just FYI"; the name and the answer come from his words only
+        v = f.get("value") or f.get("name")
+        if not isinstance(v, str) or not v.strip() or not (_all_in(v, ow) or ("@" in v and v.lower() in every.lower())):
+            return refuse("I can only use the calendar or organizer as you named it. Which one?")
+        said = "no" if _FYI.search(latest) else "yes"
+        f2 = {"scope": f.get("scope") if f.get("scope") in prefs_mod.NEED_SCOPES else "calendar", "key": v.strip(),
+              "name": v.strip(), "need": said}
+        try:
+            fields = prefs_mod.check(kind, f2)
+        except prefs_mod.Invalid as e:
+            return refuse(str(e))
+        return {"status": "ready", "kind": kind, "fields": fields, "title": "Does it need you?",
+                "label": prefs_mod.label(kind, fields), "rows": prefs_mod.rows(kind, fields), "guessed": [],
+                "changed": ["need"] if f.get("need") not in (None, said) else []}
     changed = []   # what Callsheet had to change in the model's proposal (then it waits for the owner's Confirm)
     for k in ("person",):
         if k in f and not (isinstance(f[k], str) and (_all_in(f[k], ow) or (f[k].strip().lower() in every.lower()

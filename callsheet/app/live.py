@@ -347,11 +347,20 @@ def event_record(ev, aid, cal_id, tz, old=None):
             "all_day": bool(st.get("date") and not st.get("dateTime")), "title": ev.get("summary") or "",
             "location": ev.get("location") or "",
             "attendees": [{"name": a.get("displayName") or "", "address": a.get("email") or "",
-                           "response": a.get("responseStatus") or "", "self": bool(a.get("self"))}
+                           "response": a.get("responseStatus") or "", "self": bool(a.get("self")),
+                           "optional": bool(a.get("optional")), "organizer": bool(a.get("organizer"))}
                           for a in ev.get("attendees") or [] if isinstance(a, dict)][:200],
             "status": ev.get("status") or "confirmed", "updated": ev.get("updated") or "",
             "link": ev.get("htmlLink") or "", "transparency": ev.get("transparency") or "",
-            "event_type": ev.get("eventType") if ev.get("eventType") not in (None, "", "default") else ""}
+            "event_type": ev.get("eventType") if ev.get("eventType") not in (None, "", "default") else "",
+            # 0.23.0: who organizes and who made it ("self" for the owner): "does it need you?" (need.py)
+            "organizer": _person_of(ev.get("organizer")), "creator": _person_of(ev.get("creator"))}
+
+
+def _person_of(p):
+    if not isinstance(p, dict):
+        return ""
+    return "self" if p.get("self") else str(p.get("email") or "").lower()[:300]
 
 
 class CalendarReader:

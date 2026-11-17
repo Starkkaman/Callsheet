@@ -99,7 +99,7 @@
   var R = {};
   R.day = function (d) { return [el('p', 'vz-dl', d.date), gantt(d)]; };
   R.clash = function (d) {
-    return el('div', 'vz-cdv', [el('div', 'vz-cdh ' + d.lv, [d.lv === 'al' ? el('span', 'vz-led') : el('i', null, '▲'), el('span', null, d.when),
+    return el('div', 'vz-cdv', [el('div', 'vz-cdh ' + d.lv, [d.lv === 'al' ? el('span', 'vz-led') : el('i', null, d.lv === 'mb' ? '△' : '▲'), el('span', null, (d.lv === 'mb' ? 'Maybe · ' : '') + d.when),
       el('span', 'vz-until', d.until)]), gantt(d)]);
   };
   R.asks = function (d) {

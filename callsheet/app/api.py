@@ -45,6 +45,7 @@ import texts as texts_mod            # 0.16.1 texts
 import conflicts as conflicts_mod  # noqa: E402 (0.16.0)
 import extract as extract_mod  # noqa: E402 (0.16.0)
 import ledger as ledger_mod  # noqa: E402 (0.16.0)
+import need as need_mod  # noqa: E402 (0.23.0)
 import prefs as prefs_mod  # noqa: E402 (0.17.0)
 import today as today_mod  # noqa: E402 (0.18.0)
 import heads as heads_mod  # noqa: E402 (0.21.0)
@@ -66,7 +67,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.22.1"
+APP_VERSION = "0.23.0"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -237,7 +238,10 @@ class App:
                         ("POST", r"today/refresh", self.today_refresh),        # 0.21.4 Refresh at the top of Today
                         ("POST", r"today/tidy", self.today_tidy),              # 0.21.4 the owner's Tidy up
                         ("POST", r"today/tidy/undo", self.today_tidy_undo),
-                        ("POST", r"today/tidy/later", self.today_tidy_later)]
+                        ("POST", r"today/tidy/later", self.today_tidy_later),
+                        ("POST", r"today/gotit", self.today_gotit),            # 0.23.0 heads-ups: Got it per item
+                        ("POST", r"today/gotit/undo", self.today_gotit_undo),
+                        ("POST", r"today/need", self.today_need)]              # 0.23.0 "Does this need you?"
         self.routes += [("GET", r"calendar/access", self.cal_access),            # 0.21.0 Add to calendar (calwrite.py)
                         ("POST", r"calendar/access/check", self.cal_access_check),
                         ("POST", r"calendar/access/start", self.cal_access_start),
@@ -758,7 +762,19 @@ class App:
         return self.flows.finish(b.get("flow_id"), b.get("pasted"))
 
     def patch_account(self, body, account_id):
-        return self.store.update_account(account_id, _obj(body))
+        out = self.store.update_account(account_id, _obj(body))
+        self._sync_cals(recheck=True)          # 0.23.0: Mine / Ask me / Heads-up / Hide, where the ledger reads it
+        return out
+
+    def _sync_cals(self, recheck=False):
+        """0.23.0: Setup's calendar choices copied into messages.db (need.calendar_use); a change re-checks clashes."""
+        if not getattr(self, "messages", None):
+            return False
+        accounts = self.store.accounts()
+        changed = self.messages.write(lambda db: need_mod.sync_calendars(db, accounts))
+        if changed and recheck and getattr(self, "today", None):
+            self.today.recheck()
+        return changed
 
     def delete_account(self, _body, account_id):
         acc = self.store.delete_account(account_id)
@@ -1211,6 +1227,11 @@ class App:
                                   owner_names=lambda: background.owner_names(self.store, getattr(self, "people", None)))
         self.extractor.known_load = self._tidy_known
         self.today.tidy = self.tidy
+        self.prefs.on_need = self.today.recheck     # 0.23.0: an answer (a press, Chat, Undo) re-checks the clashes
+        try:
+            self._sync_cals()                  # 0.23.0: the calendar choices the ledger reads (need.py)
+        except Exception as e:  # noqa: BLE001
+            print(f"calendar choices: {type(e).__name__}", file=sys.stderr, flush=True)
         # 0.22.0 (owner approved 2026-11-16): the action registry and its journal (actions.py), shared with Chat
         self.actions = actions_mod.Actions(self.messages, self.clock, today=self.today, prefs=self.prefs,
                                            tidy=self.tidy, store=self.store, oldata=getattr(self, "oldata", None),
@@ -1475,6 +1496,30 @@ class App:
         except (TypeError, ValueError):
             raise InputError("Which tidy-up?") from None
         return self._tidy().undo(rid)
+
+    def today_gotit(self, body):
+        """0.23.0 POST api/today/gotit {key}: Got it on one heads-up (hidden from Today and the brief; Undo)."""
+        try:
+            return self._today().gotit(_obj(body).get("key"))
+        except today_mod.Invalid as e:
+            raise InputError(str(e)) from None
+
+    def today_gotit_undo(self, body):
+        try:
+            return self._today().gotit_undo(_obj(body).get("id"))
+        except today_mod.Invalid as e:
+            raise InputError(str(e)) from None
+
+    def today_need(self, body):
+        """0.23.0 POST api/today/need {event, answer: yes|no}: the owner's press on "Does this need you?". It teaches
+        that organizer or calendar (a `need` rule, Undo in Setup › Your rules) and re-checks the clashes."""
+        b = _obj(body)
+        if not self.prefs:
+            raise Conflict("The message store isn't available.")
+        try:
+            return self._today().need_answer(b.get("event"), b.get("answer"), self.prefs)
+        except today_mod.Invalid as e:
+            raise InputError(str(e)) from None
 
     def today_tidy_later(self, _body):
         """The banner's Not now: the offer doesn't come back (Tidy up stays in Chat)."""
@@ -1748,10 +1793,17 @@ class App:
         return r
 
     def prefs_undo(self, _body, rid):
-        return {"ok": True, "rule": prefs_mod.Prefs.public(self._pref_end(self._prefs().undo, "setting", rid))}
+        r = self._pref_end(self._prefs().undo, "setting", rid)
+        self._need_recheck(r)
+        return {"ok": True, "rule": prefs_mod.Prefs.public(r)}
 
     def prefs_delete(self, _body, rid):
-        return {"ok": True, "rule": prefs_mod.Prefs.public(self._pref_end(self._prefs().delete, "setting", rid))}
+        r = self._pref_end(self._prefs().delete, "setting", rid)
+        self._need_recheck(r)
+        return {"ok": True, "rule": prefs_mod.Prefs.public(r)}
+
+    def _need_recheck(self, r):
+        """0.23.0: a "Does this need you?" answer undone or deleted: Prefs.on_need re-checks the clashes."""
 
     def action_undo(self, _body, rid):
         return {"ok": True, "action": prefs_mod.Prefs.public_action(self._pref_end(self._prefs().undo_action, "action", rid))}

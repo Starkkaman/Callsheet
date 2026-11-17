@@ -31,6 +31,24 @@ tells the organizer). It never sends, replies, deletes or changes anything else 
 
 ## Today
 
+- **Clashes and heads-ups (0.23.0).** For each side of an overlap Callsheet asks one question: does it need you
+  there? Yes, Maybe or No. Two Yes sides are a clash ("You're double-booked"). A Maybe on either side is a maybe clash
+  (dashed, at the end of the list). Any No makes it a heads-up: something happening that you should know about, with
+  nothing to decide. On a computer Today shows **Clashes · you have to choose** (both sides, what each asks of you,
+  **Keep** to pick one, the reply, **Move one…**, **Open both**, **Dismiss**) and **Heads-up · happening** (a quiet list
+  by day; **Got it** on each row hides it from Today, with Undo; it comes back if its time or place changes). Above them
+  the **Day** strip draws your day: your plans on the "You" lane, the rest as thin lines on "Around you". Close it and
+  this device remembers. On a phone Today is the day drawn top to bottom, heads-ups as thin lines between your plans,
+  then the next days one line each. Agenda's day view shows the same drawing.
+- **Whose calendar is it?** In Setup, under each account, every calendar you show has a choice: **Mine** (its events
+  need you), **Ask me**, **Heads-up** (only FYI) or **Hide**. Example: a shared "Family" calendar set to Heads-up puts
+  Mira's book club under Heads-up, never in Clashes.
+- **Does this need you?** When Callsheet can't tell (an invite to a big meeting you haven't answered, an event on an
+  "Ask me" calendar), it asks with **Yes, needs me** or **No, just FYI**. Your answer is remembered for that organizer
+  (or that calendar) and shows in Your rules, where you can undo it; you can also say it in Chat ("events from the
+  school are just FYI"). Text inside a message can never answer it for you.
+- **Phone alerts** come only for clashes and maybe clashes, never for heads-ups.
+
 - **Clashes** say how long until they start and what each side is for, with buttons to reply (opens Gmail, Signal,
   Slack or Messages; Callsheet sends nothing), open both, or dismiss. Under 24 hours a clash turns red. After you say
   yes to one side, the card says who hasn't heard from you yet; it clears itself when Callsheet sees your message.
@@ -56,6 +74,9 @@ tells the organizer). It never sends, replies, deletes or changes anything else 
   ("tidy up"): it shows a card with how many items move, and nothing moves until you press **Confirm**.
 
 ## Talk it through
+
+Since 0.23.0 clashes get a **Choose** step ("You're double-booked", "Maybe double-booked") and heads-ups a short
+**Happening** step ("Happening", "FYI") with nothing to decide.
 
 **Talk it through** on Today opens the morning brief: the assistant (Bruce, unless you rename it) goes through your day one step at a time (your day,
 clashes, what needs you, coming up, bills and trips, your channels and reports when something stands out, clean up).

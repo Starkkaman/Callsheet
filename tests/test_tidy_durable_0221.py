@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from test_ledger_0160 import Base, Script, item, ts, upd, when  # noqa: E402
 
+import api  # noqa: E402
 import brief2  # noqa: E402
 import conflicts as C  # noqa: E402
 import extract  # noqa: E402
@@ -327,8 +328,9 @@ class TestLiveResolver(unittest.TestCase):
 class TestVersion(unittest.TestCase):
     def test_version_0221(self):
         root = pathlib.Path(__file__).resolve().parents[1]
-        self.assertIn('version: "0.22.1"', (root / "callsheet" / "config.yaml").read_text(encoding="utf-8"))
-        self.assertIn('APP_VERSION = "0.22.1"', (root / "callsheet" / "app" / "api.py").read_text(encoding="utf-8"))
+        ver = api.APP_VERSION                                               # 0.22.1 or later (test_design_090 pins it)
+        self.assertGreaterEqual(tuple(int(x) for x in ver.split(".")), (0, 22, 1))
+        self.assertIn(f'version: "{ver}"', (root / "callsheet" / "config.yaml").read_text(encoding="utf-8"))
         self.assertIn("0.22.1", (root / "callsheet" / "CHANGELOG.md").read_text(encoding="utf-8"))
 
 

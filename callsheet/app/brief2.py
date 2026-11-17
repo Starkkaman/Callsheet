@@ -35,15 +35,18 @@ import visuals
 import writer
 
 VERSION = 1
-MAX_STEPS = 8
-ORDER = ("day", "clashes", "needs", "coming", "money", "mail", "feeds", "cleanup")
-TITLES = {"day": "Your day", "clashes": "Clashes", "needs": "Needs you", "coming": "Coming up",
+MAX_STEPS = 9
+# 0.23.0 (direction A): "Choose" holds the clashes and Maybe clashes; "Happening" is a short step for the heads-ups
+ORDER = ("day", "clashes", "happening", "needs", "coming", "money", "mail", "feeds", "cleanup")
+HAPPENING_SAID = 3
+TITLES = {"day": "Your day", "clashes": "Choose", "happening": "Happening", "needs": "Needs you", "coming": "Coming up",
           "money": "Bills and trips", "mail": "From your mail", "feeds": "From your channels, feeds and reports",
           "cleanup": "Clean up"}
 FEEDS_SAID = 3            # feeds and reports one brief step names (titles and sources only)
 # words the owner may use for a step when the owner sets a brief preference in Chat ("skip clean up in the brief")
 TOPICS = {"day": ("day", "your day", "calendar", "schedule", "agenda", "today"),
-          "clashes": ("clash", "clashes", "conflict", "conflicts", "double booking"),
+          "clashes": ("clash", "clashes", "conflict", "conflicts", "double booking", "choose"),
+          "happening": ("happening", "heads-up", "heads-ups", "heads up", "fyi"),
           "needs": ("needs you", "asks", "replies", "requests", "waiting"),
           "coming": ("coming up", "upcoming", "next 30 days", "the month"),
           "money": ("bills", "bill", "money", "payments", "invoices", "trip", "trips", "travel", "flights"),
@@ -164,7 +167,8 @@ class Planner:
         lv = self.lv.view(now=now, horizon_days=30)
         rules = self._rules()
         per, extra = self.choices(rules)
-        built = {"day": self._day(v, now, tz), "clashes": self._clashes(v), "needs": self._needs(v),
+        built = {"day": self._day(v, now, tz), "clashes": self._clashes(v), "happening": self._happening(v),
+                 "needs": self._needs(v),
                  "coming": self._coming(v), "money": self._money(lv, now, tz),
                  "mail": self._mail(lv, v, rules, extra), "feeds": self._feeds(v, per.get("feeds")),
                  "cleanup": self._cleanup(now)}
@@ -227,13 +231,28 @@ class Planner:
         facts, refs = [], []
         for c in cs[:MAX_FACTS]:
             facts.append({"ref": f"clash:{c['id']}", "when": c["when"], "until": c["until"], "who": c["names"],
-                          "line": _segtext(c["line"]), "level": c["level"]})
+                          "line": _segtext(c["line"]), "level": c["level"],
+                          "word": c.get("word") or "You’re double-booked"})
             refs.append(f"clash:{c['id']}")
             refs += [f"item:{i}" for i in c["items"]]
         vis = [{"type": "clash", "ref": f"clash:{c['id']}"} for c in cs[:visuals.MAX_BLOCKS]]
-        names = [first(x) for x in cs[0]["names"] if x][:1]
+        # a person to ask about: the one who asks first, else whoever is on an item side (never a calendar title's first word)
+        sides = [x for x in cs[0].get("sides") or [] if x.get("kind") == "item" and x.get("first")]
+        sides.sort(key=lambda x: x.get("type") != "ask")
+        names = [first(x["first"]) for x in sides][:1] if cs[0].get("sides") else [first(x) for x in cs[0]["names"] if x][:1]
         chips = ["Remind me at noon"] + ([f"Tell me about {names[0]}"] if names else []) + ["Which one first?"]
         return self._step("clashes", facts, refs, vis, chips, count=len(cs))
+
+    def _happening(self, v):
+        """0.23.0: the heads-ups, one short step: what is on that doesn't need him ("Happening" / "FYI")."""
+        hu = v.get("headsup") or {}
+        rows = [r for d in hu.get("days") or [] for r in d["rows"]]
+        if not rows:
+            return None
+        facts = [{"ref": r["key"], "word": r["word"], "what": r["title"], "when": r["when"],
+                  "day": next((d["label"] for d in hu["days"] if d["day"] == r["day"]), ""), "why": r["sub"]}
+                 for r in rows[:MAX_FACTS]]
+        return self._step("happening", facts, [], [], ["Got it", "Which of these need me?"], count=len(rows))
 
     def _needs(self, v):
         rows = v["needs_you"]["rows"]
@@ -397,9 +416,16 @@ class Planner:
             free = next((x["free"] for x in f if "free" in x), "")
             return t + (f" {free} after that." if free and not short else "")
         if k == "clashes":
-            t = f"{count_word(len(f))} {plural(len(f), 'clash', 'clashes')}, soonest first."
+            n = len(f)
+            t = f"{count_word(n)} {plural(n, 'thing needs', 'things need')} you to choose."
             for x in f[:1 if short else 3]:
-                t += f" {x['when']}: {_join(x['who'])}."
+                t += f" {x.get('word') or 'You’re double-booked'} {x['when']}: {_join(x['who'])}."
+            return t
+        if k == "happening":
+            n = s["count"] or len(f)
+            t = f"{count_word(n)} {plural(n, 'thing is', 'things are')} happening, nothing to decide."
+            for x in f[:1 if short else HAPPENING_SAID]:
+                t += f" {x['word']}: {x['what']}, {(x['day'] + ' ' + x['when']).strip()}."
             return t
         if k == "needs":
             n = s["count"] or len(f)

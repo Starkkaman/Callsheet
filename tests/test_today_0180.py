@@ -42,9 +42,12 @@ class TestMorning(Base):
     stage = "0840"
 
     def test_clashes_soonest_first_with_urgency(self):
+        # 0.23.0 (mockup clash-vs-headsup-v1): a Maybe clash (Marco's "around 7" is a guessed time) comes after the sure
         cs = self.v["now_next"]["clashes"]
-        self.assertEqual([(c["level"], c["until"], c["compact"]) for c in cs],
-                         [("red", "in 9 h", False), ("amber", "in 34 h", False), ("amber", "in 3 days", True)])
+        self.assertEqual([(c["level"], c["until"], c["compact"], c["verdict"]) for c in cs],
+                         [("red", "in 9 h", False, "clash"), ("amber", "in 3 days", True, "clash"),
+                          ("amber", "in 34 h", False, "maybe")])
+        cs = [cs[0], cs[2], cs[1]]                                          # soonest first within each kind
         self.assertTrue(cs[0]["lead"])
         self.assertFalse(any(c["lead"] for c in cs[1:]))                  # one filled key: the red one
         self.assertEqual(cs[0]["when"], "Today 6:00 pm")
@@ -122,14 +125,16 @@ class TestFollowUp(Base):
     def test_red_clash_cleared_and_follow_up_state(self):
         nn = self.v["now_next"]
         self.assertEqual(nn["cleared"], [{"at": "8:55 am", "why": "you wrote to Ana"}])
-        c = nn["clashes"][0]
+        self.assertEqual([c["verdict"] for c in nn["clashes"]], ["clash", "maybe"])   # 0.23.0: Maybe after the sure
+        self.assertTrue(nn["clashes"][0]["lead"])                          # the sure one (Sat) takes the loud key
+        c = nn["clashes"][1]
         self.assertEqual(text(c["rows"][0]["text"]), "You told Dana yes: Dana's gallery set, Thu 7:00 pm")
         self.assertTrue(text(c["rows"][1]["text"]).startswith("Marco hasn’t heard from you"))
         self.assertNotIn("remind_at", c["followup"])                       # set at 9:10, after this moment
-        self.assertTrue(c["lead"])
+        self.assertFalse(c["lead"])
 
     def test_clash_view_shows_both_threads_with_the_ask_and_the_yes(self):
-        cid = self.v["now_next"]["clashes"][0]["id"]
+        cid = next(c["id"] for c in self.v["now_next"]["clashes"] if c.get("followup"))   # Dana's yes vs Marco
         v = self.td.clash_view(cid)
         self.assertEqual([s["badge"] for s in v["stand"]], ["You said yes", "No reply yet"])
         marks = {t["first"]: [m["mark"] for m in t["messages"] if m["mark"]] for t in v["threads"]}
@@ -156,7 +161,7 @@ class TestReminder(Base):
     stage = "1205"
 
     def test_reminder_went_out_with_names_sources_and_times_only(self):
-        fu = self.v["now_next"]["clashes"][0]["followup"]
+        fu = next(c["followup"] for c in self.v["now_next"]["clashes"] if c.get("followup"))
         self.assertEqual((fu["reminded"], fu["note"]), ("12:00 pm", "Marco still doesn’t know you’re busy then."))
         self.assertEqual(len(self.al.sent), 1)
         sent = json.dumps(self.al.sent)

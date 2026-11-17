@@ -594,7 +594,8 @@ class StoreFacts(Facts):
                  for k, ref in ((c["a_kind"], c["a_ref"]), (c["b_kind"], c["b_ref"]))]
         if not all(sides):
             return None
-        return {"slot_start": c["slot_start"], "slot_end": c["slot_end"], "state": c["state"], "sides": sides}
+        return {"slot_start": c["slot_start"], "slot_end": c["slot_end"], "state": c["state"], "sides": sides,
+                "verdict": c["verdict"] if "verdict" in c.keys() else "clash"}
 
     def _items(self, where, args=()):
         return [self._item_rec(it) for it in self._read(
@@ -771,6 +772,9 @@ def _when_word(c, ts):
     return f"{lead} {clock(d)}"
 
 
+_OWNER_WHO = ("owner", "the owner", "me", "you")
+
+
 def _clash(c, b):
     if b.get("ref"):
         kind, _, n = b["ref"].partition(":")
@@ -780,7 +784,7 @@ def _clash(c, b):
             raise Unfilled("no such clash")
         sides = cf["sides"]
     else:
-        sides = [c.rec(r) for r in b["sides"]]
+        sides, cf = [c.rec(r) for r in b["sides"]], None
     sides = [s for s in sides if s.get("start") is not None]
     if len(sides) != 2:
         raise Unfilled("a clash needs two timed sides")
@@ -791,14 +795,18 @@ def _clash(c, b):
     start = min(s["start"] for s in sides)
     a, z = math.floor(min(x for x, _ in sp)) - 1, math.ceil(max(y for _, y in sp)) + 1
     left = start - c.now
-    lanes = [{"l": s["who"] if s["kind"] != "cal" and s["who"] else s["title"],
-              "sub": " · ".join(x for x in (_src_word(s), s.get("purpose") or (s["title"] if s["who"] else "")) if x),
+    # 0.23.0: a side that is the owner's own (his yes, his plan) is named by what it is, never "the owner"
+    mine = [s["kind"] == "cal" or not s["who"] or str(s["who"]).strip().lower() in _OWNER_WHO for s in sides]
+    lanes = [{"l": s["title"] if own else s["who"],
+              "sub": " · ".join(x for x in (_src_word(s), s.get("purpose") or ("" if own else s["title"])) if x),
               "s": round(x, 3), "e": round(y, 3), "k": "cal" if s.get("on_calendar") or s["kind"] == "cal" else "msg"}
-             for s, (x, y) in zip(sides, sp)]
+             for s, own, (x, y) in zip(sides, mine, sp)]
     d = {"lv": "al" if left < 86400 else "wn", "when": _when_word(c, start), "until": until_words(max(0, left)),
          "a": a, "b": z, "ticks": _ticks(a, z), "ov": [round(ov[0], 3), round(ov[1], 3)] if ov[1] > ov[0] else None,
          "lanes": lanes}
-    alt = f"Clash {d['when']}, {d['until']}: " + " and ".join(f"{ln['l']} ({ln['sub']})" for ln in lanes) + "."
+    if (cf or {}).get("verdict") == "maybe":  # 0.23.0: a Maybe clash is quiet: △, dim, never the alert red
+        d["lv"] = "mb"
+    alt = f"{'Maybe clash' if d['lv'] == 'mb' else 'Clash'} {d['when']}, {d['until']}: " + " and ".join(f"{ln['l']} ({ln['sub']})" for ln in lanes) + "."
     return d, alt
 
 

@@ -192,7 +192,8 @@ class Agenda:
         s0, _ = L.day_bounds(first, tz)
         _, s1 = L.day_bounds(last, tz)
         rows = [c for c in self.today._read(
-            "SELECT * FROM ledger_conflicts WHERE state='open' AND slot_start IS NOT NULL AND slot_start < ? AND "
+            "SELECT * FROM ledger_conflicts WHERE state='open' AND verdict IN ('clash','maybe') AND slot_start IS NOT NULL AND "
+            "slot_start < ? AND "
             "coalesce(slot_end, slot_start) >= ? ORDER BY slot_start", (s1, s0))
             if (c["slot_end"] or c["slot_start"]) > now]
         if not rows:
@@ -226,7 +227,8 @@ class Agenda:
                         "sides": boxes, "rows": cv["rows"], "reply": cv["reply"], "items": cv["items"],
                         "events": [s["id"] for s in ss if s["kind"] == "event"], "away": cv.get("away") or "",
                         # 0.22.x: the owner's trip's grouped clash: the trip and every entry during it (today._clash_sides)
-                        "group": group["plain"] if group else ""})
+                        "group": group["plain"] if group else "",
+                        "verdict": c["verdict"] if "verdict" in c.keys() else "clash"})   # 0.23.0: Maybe is quiet
         return out
 
     def _gather(self, first, last, now, tz):
@@ -390,6 +392,7 @@ class Agenda:
             out["day"] = {"date": d.isoformat(), "label": f"{d:%a} {d:%b} {d.day}" + (f" · {rel}" if rel else ""),
                           "time": T.t12(n) if d == today else "", "rows": rows,
                           "empty": not any(r["kind"] != "free" for r in rows)}
+            out["day"]["lanes"] = self.today.day_lanes(d, now, tz)   # 0.23.0 the same drawing as Today's Day strip
             head.update(title=f"{d:%A}, {d:%B} {d.day}", short=f"{d:%a}, {d:%b} {d.day}",
                         label="Today" if d == today else f"{d:%b} {d.day}",
                         prev=(d - dt.timedelta(days=1)).isoformat(), next=(d + dt.timedelta(days=1)).isoformat(),

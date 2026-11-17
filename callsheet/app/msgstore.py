@@ -165,7 +165,8 @@ _MSG_FIELDS = ("thread", "direction", "sender", "sender_name", "recipients", "ts
                "link", "attachments")
 _EVENT_FIELDS = ("ical_uid", "start", "end", "tz", "start_ts", "end_ts", "all_day", "title", "location",
                  "attendees", "status", "updated", "link")
-_EVENT_EXTRA = ("transparency", "event_type")   # hashed only when set, so older rows keep their hash
+_EVENT_EXTRA = ("transparency", "event_type", "organizer", "creator")   # hashed only when set, so older rows keep their hash
+# 0.23.0: organizer / creator ("self" for the owner, else the address) for "does it need you?" (need.py)
 
 
 # --- plain text and search words (from 0.6.0's index.py) --------------------------------------------------------------
@@ -281,7 +282,8 @@ def _event_row(e):
            "title": _s(e.get("title"), 1000), "location": _s(e.get("location"), 1000),
            "attendees": _j(e.get("attendees") or []), "status": _s(e.get("status"), 40),
            "updated": _s(e.get("updated"), 60), "link": _s(e.get("link"), 1000),
-           "transparency": _s(e.get("transparency"), 20), "event_type": _s(e.get("event_type"), 40)}
+           "transparency": _s(e.get("transparency"), 20), "event_type": _s(e.get("event_type"), 40),
+           "organizer": _s(e.get("organizer"), 300).lower(), "creator": _s(e.get("creator"), 300).lower()}
     if not row["event_id"]:
         raise ValueError("event_id is required")
     row["hash"] = _hash([row[f] for f in _EVENT_FIELDS] + [row[f] for f in _EVENT_EXTRA if row[f]])

@@ -17,6 +17,7 @@ import json
 import re
 
 import ledger as L
+import need as N
 import readrules
 
 TIGHT_CALL_S = 60 * 60          # a job's wrap or call time this close to something else: tight
@@ -181,14 +182,16 @@ def _set_group(db, it, item_id, group, now, message):
         closed.append(r["id"])
     if rows:
         db.execute("UPDATE ledger_conflicts SET b_ref=?, entries=?, slot_start=?, slot_end=?, confidence=?, "
-                   "candidate=NULL, why=?, updated_at=? WHERE id=?",
-                   (order[0], json.dumps(order), slot[0], slot[1], conf, why, now, rows[0]["id"]))
+                   "candidate=NULL, why=?, verdict=?, updated_at=? WHERE id=?",
+                   (order[0], json.dumps(order), slot[0], slot[1], conf, why, "clash" if conf == "sure" else "maybe", now,
+                    rows[0]["id"]))
         return rows[0]["id"], False, closed
     cur = db.execute(
         "INSERT INTO ledger_conflicts (a_kind, a_ref, b_kind, b_ref, slot_start, slot_end, kind, confidence, why, "
-        "state, message, created_at, updated_at, entries) VALUES ('item',?,'event',?,?,?,'away',?,?,'open',?,?,"
-        "?,?)",
-        (item_id, order[0], slot[0], slot[1], conf, why, message, now, now, json.dumps(order)))
+        "state, message, created_at, updated_at, entries, verdict) VALUES ('item',?,'event',?,?,?,'away',?,?,'open',?,?,"
+        "?,?,?)",
+        (item_id, order[0], slot[0], slot[1], conf, why, message, now, now, json.dumps(order),
+         "clash" if conf == "sure" else "maybe"))
     return cur.lastrowid, True, closed
 
 
@@ -413,6 +416,8 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
         return new, resolved
     mine = item_spans(it, tz, db) if blocks(it) and chat_clashes(db, it) else []
     keep = set()
+    need = N.Need(db)                     # 0.23.0: does each side need the owner there? (need.py)
+    my_need = need.item(it)["need"]
     trips = set()                         # 0.22.x: trips whose grouped clash to re-check (regroup)
     if mine:
         lo = min(s for s, _, _ in mine) - TIGHT_TRAVEL_S - 86400
@@ -436,6 +441,8 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                 par = L.get_item(db, it["parent"])
                 if par and par.get("cal_ref") == e["id"]:
                     continue
+            if need.event(e)["hide"]:
+                continue                  # 0.23.0: a calendar he hid in Setup
             sides.append(("event", e["id"], event_span(e), "", e))
         my_day = bool(it["all_day"]) and not it["candidates"]
         my_away = away_of("item", it, _created_source(db, item_id)) if my_day else None
@@ -455,11 +462,13 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                     # the owner's trip of more than a day against a busy timed calendar entry during it (0.22.x, owner's rule
                     # 2026-11-13): one grouped clash for the trip; an item that stands for its entry (an invite, a
                     # mail that repeats it) counts as the entry; not one the owner declined or the trip's own entry
+                    en = need.event(e)            # 0.23.0: only the entries that need him; FYI ones are heads-ups
                     if e["id"] not in said_no and e["id"] != it.get("cal_ref") and event_blocks(e) and \
-                            _during_trip(e):
+                            _during_trip(e) and en["need"] != N.NO and not en["hide"]:
                         esp = event_span(e)
                         # M4: an entry is sure unless it is tentative, or only an item that isn't sure stands for it
-                        sure = not tentative(e) and (kind == "event" or other.get("confidence") == "sure")
+                        sure = not tentative(e) and (kind == "event" or other.get("confidence") == "sure") and \
+                            en["need"] == N.YES
                         for s, en, _ in mine:
                             if s < esp[1] and esp[0] < en:
                                 was = group.get(e["id"])
@@ -499,19 +508,22 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                     firm = _firm(it, tz) and not other["all_day"] and other["status"] != "tentative"
                     desc = f"calendar: {other['title']}"
                 conf = "sure" if firm and k == "overlap" and cand is None else "likely"
+                verdict = N.conflict_verdict(my_need, need.side(kind, other)["need"], conf)
                 old = _pair(db, "item", item_id, kind, ref)
                 if old is not None:
                     db.execute("UPDATE ledger_conflicts SET slot_start=?, slot_end=?, kind=?, confidence=?, candidate=?, "
-                               "updated_at=? WHERE id=?", (slot[0], slot[1], k, conf, cand, now, old["id"]))
+                               "verdict=?, updated_at=? WHERE id=?", (slot[0], slot[1], k, conf, cand, verdict, now,
+                                                                      old["id"]))
                     keep.add(old["id"])
                 elif _kept_dismissed(db, "item", item_id, kind, ref, slot):
                     pass
                 else:
                     cur = db.execute(
                         "INSERT INTO ledger_conflicts (a_kind, a_ref, b_kind, b_ref, slot_start, slot_end, kind, "
-                        "confidence, candidate, why, state, message, created_at, updated_at) "
-                        "VALUES ('item',?,?,?,?,?,?,?,?,?,'open',?,?,?)",
-                        (item_id, kind, ref, slot[0], slot[1], k, conf, cand, _why(it, desc, k, away), message, now, now))
+                        "confidence, candidate, why, state, message, created_at, updated_at, verdict) "
+                        "VALUES ('item',?,?,?,?,?,?,?,?,?,'open',?,?,?,?)",
+                        (item_id, kind, ref, slot[0], slot[1], k, conf, cand, _why(it, desc, k, away), message, now, now,
+                         verdict))
                     new.append(cur.lastrowid)
                     keep.add(cur.lastrowid)
                 break
@@ -1062,6 +1074,12 @@ def sweep(db, now, tz):
 
 
 # --- alerts ------------------------------------------------------------------------------------------------------------
+def alerts_for(c):
+    """0.23.0 (the owner: "Yes, or where clashes are uncertain"): a phone alert only for a clash or a Maybe clash; a
+    heads-up never alerts."""
+    return (c.get("verdict") or "clash") in ("clash", "maybe")
+
+
 SECURITY_FRESH_S = 3600       # 0.21.0: a phone alert only for a security alert this new (the "urgent" setting)
 SOURCE_WORD = {"gmail": "email", "signal": "Signal", "slack": "Slack", "sms": "text", "sms_live": "text",
                "calendar": "calendar", "reports": "report"}
@@ -1190,8 +1208,9 @@ class Alerter:
             else:
                 src = "/".join(SOURCE_WORD.get(x, x) for x in s.get("sources") or []) or "a message"
                 names.append(f"{s.get('who_name') or 'you'} ({src})")
-        title = f"Clash {_until(c['seconds_until'])}: {c['slot']['label']}".strip()
-        msg = f"{names[0]} and {names[1]} both want this time."
+        maybe = c.get("verdict") == "maybe"
+        title = f"{'Maybe clash' if maybe else 'Clash'} {_until(c['seconds_until'])}: {c['slot']['label']}".strip()
+        msg = f"{'Maybe double-booked' if maybe else 'You’re double-booked'}: {names[0]} and {names[1]} both want this time."
         n = len(c.get("entries") or [])
         if n:                            # 0.22.x: the owner's trip's grouped clash
             title = f"Trip clash {_until(c['seconds_until'])}: {c['slot']['label']}".strip()
@@ -1237,7 +1256,7 @@ class Alerter:
         new = set((res.get("conflicts") or {}).get("new") or [])
         if new:
             for c in self.lv.conflicts(state="open", now=now):
-                if c["id"] not in new:
+                if c["id"] not in new or not alerts_for(c):
                     continue
                 vip, through, rule = self._clash_ctx(c, rules, cfg, now)
                 d = self._decide(cfg, now, vip, cfg.get("clashes", True), through, rule)
@@ -1285,7 +1304,7 @@ class Alerter:
         held = {r["id"] for r in self.ms._read("SELECT id FROM ledger_conflicts WHERE state='open' AND alert='held'")}  # noqa: SLF001
         if held:
             for c in self.lv.conflicts(state="open", now=now):
-                if c["id"] in held:
+                if c["id"] in held and alerts_for(c):
                     vip, through, rule = self._clash_ctx(c, rules, cfg, now)
                     if self._decide(cfg, now, vip, cfg.get("clashes", True), through, rule) == "send":
                         state = self._go(cfg, "clash", self.clash_payload(c), now)

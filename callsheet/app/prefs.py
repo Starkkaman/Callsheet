@@ -25,7 +25,9 @@ import assistant
 import ledger as ledger_mod
 
 KINDS = ("vip", "alert_rule", "quiet_hours", "vip_through_quiet", "alerts", "cleanup", "digest", "brief", "brief_schedule",
-         "assistant_name", "model_quiet_times", "area", "area_move")
+         "assistant_name", "model_quiet_times", "area", "area_move", "need")
+NEEDS = ("yes", "no")              # 0.23.0 "Does this need you?": Yes, needs me / No, just FYI (need.py)
+NEED_SCOPES = ("organizer", "calendar")
 SOURCES = ("gmail", "slack", "signal", "sms")
 SOURCE_NAMES = {"gmail": "Email", "slack": "Slack", "signal": "Signal", "sms": "Texts"}
 WHAT = ("clashes", "asks", "all")
@@ -176,6 +178,12 @@ def check(kind, f):
         if out["start"] == out["end"]:
             raise Invalid("The quiet time starts and ends at the same time.")
         return out
+    if kind == "need":   # 0.23.0: his answer to "Does this need you?" (a press, or his own words in Chat)
+        key = f.get("key")
+        if not isinstance(key, str) or not key.strip() or len(key) > 300:
+            raise Invalid("Say which calendar or organizer.")
+        return {"scope": _one(f.get("scope"), NEED_SCOPES, "scope"), "key": key.strip().lower(),
+                "name": _name(f.get("name") or key, "name", 120), "need": _one(f.get("need"), NEEDS, "need")}
     if kind == "brief":
         note = f.get("note")
         if note is not None and (not isinstance(note, str) or len(note) > 200):
@@ -279,6 +287,9 @@ def label(kind, f):
     if kind == "model_quiet_times":
         span = f"{clock12(f['start'])} to {clock12(f['end'])}"
         return f"Model server quiet from {span}" if f["on"] else f"Model server no longer quiet from {span}"
+    if kind == "need":
+        whose = f"Events from {f['name']}" if f["scope"] == "organizer" else f"Entries on {f['name']}"
+        return f"{whose} {'need you (clashes)' if f['need'] == 'yes' else 'are only FYI (heads-ups)'}"
     if kind == "brief":
         return f"In the brief, {f['topic']}: {_BRIEF[f['choice']]}" + (f" ({f['note']})" if f.get("note") else "")
     return kind
@@ -502,6 +513,7 @@ class Prefs:
         self.settings_get, self.settings_set = settings_get, settings_set
         self.areas = None   # 0.22.0: areas.Areas (api.App sets it)
         self.vip_store = None   # 0.22.0: store.Store, Setup's VIP list, the one VIP home (api.App sets it)
+        self.on_need = None     # 0.23.0: called after a `need` answer is applied or undone (api.App: Today.recheck)
         ensure(ms)
         ledger_mod.ensure(ms)
 
@@ -574,6 +586,8 @@ class Prefs:
         rid = self.ms.write(lambda db: db.execute(
             "INSERT INTO preferences (kind, fields, label, before, ref, created_at) VALUES (?,?,?,?,?,?)",
             (kind, json.dumps(f), lab, json.dumps(before) if before is not None else None, str(ref)[:80], now)).lastrowid)
+        if kind == "need" and self.on_need is not None:
+            self.on_need()
         return self.get(rid)
 
     def _vips(self):
@@ -669,6 +683,8 @@ class Prefs:
         now = self.clock()
         self.ms.write(lambda db: db.execute(f"UPDATE preferences SET {col}=?, undone_at=coalesce(undone_at, ?) "
                                             "WHERE id=?", (now, now, int(pid))))
+        if r["kind"] == "need" and self.on_need is not None:
+            self.on_need()
         return self.get(pid)
 
     def undo(self, pid):
