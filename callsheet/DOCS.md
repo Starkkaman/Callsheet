@@ -40,6 +40,20 @@ tells the organizer). It never sends, replies, deletes or changes anything else 
 - **Done** and **Note…** on any item or batch: "not for me", "junk", "remind me tomorrow" or your own words. "Not for
   me" and "junk" mark the items done.
 - **Add to calendar** on Coming up and in an item's view, once you allow it (see below).
+- **Refresh** (0.21.4), at the top: rebuilds Today and the day's brief from what Callsheet has already read. Your mail
+  is not read again, and you don't wait for the next brief. It says "Updated just now" when it's done.
+- **Older, still open?** (0.21.4), under Needs you, closed at first: asks and items more than 14 days past, or from
+  your first catch-up with nothing new since. They stay open and show up in search. **Clear all** marks them done,
+  with Undo.
+- **What stays off Today** (0.21.4). Promotions (sale, % off, offer ends, "chip in", donate, gift card and
+  subscription offers, mail with an unsubscribe line from a no-reply, info@ or mailing-service address) only give a
+  Clean up line, never an ask, bill, event or clash. A company's bill needs an amount owed with a due date or
+  statement words. Slack channel posts that don't mention you or ask you directly ("can you…", "let's…"), outside
+  threads you wrote in, go to Clean up under "From your channels". Mail from people you confirmed, threads you wrote
+  in and domains you write to are never treated as promotions. Security alerts and invites are never moved.
+- **Tidy up** (0.21.4): after the update, Today offers once to sort the items you already have by these rules, with
+  one **Undo** for the whole tidy-up. **Not now** ends the offer. It never runs on its own. You can also ask Chat
+  ("tidy up"): it shows a card with how many items move, and nothing moves until you press **Confirm**.
 
 ## Talk it through
 

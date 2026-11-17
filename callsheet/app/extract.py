@@ -24,6 +24,7 @@ import inject
 import ledger as L
 import people
 import readrules
+import tidy as TY
 import background
 import writer
 
@@ -231,7 +232,8 @@ def read_tier(row, ctx, automated=None, role=None):
     if not sig:
         return TIER_FULL, ""
     if "automated" not in sig:
-        if str(ctx["sender"][0]).startswith("person:"):
+        # 0.21.4: a sender only suggested for People (added on its own, not confirmed by the owner) isn't a known person
+        if str(ctx["sender"][0]).startswith("person:") and not ctx.get("sender_suggested"):
             return TIER_FULL, "a known person, " + ", ".join(sig)
         if ctx.get("he_wrote"):
             return TIER_FULL, "a thread you wrote in, " + ", ".join(sig)
@@ -362,6 +364,7 @@ def same_twins(parsed):
 
 
 TWIN_SIM = 0.8
+KNOWN_S = 600                 # 0.21.4: how often tidy.Known is loaded again for the read-time rules
 OWN_CLEANUP_WHY = "your own chat message: nothing in it to clean up"
 
 # 0.22.x (a local model on a set of real chats): CHAT_RULE says a group ask to everyone, or with no @mention of the
@@ -1226,6 +1229,7 @@ class Extractor:
         self.tier = tier or read_tier        # (row, ctx) -> (tier, why); the replay names the set's automated sender
         self.lv = L.Ledger(ms, self.tz_name, clock)
         self.stats = {"read": 0, "failed": 0, "requests": 0, "seconds": 0.0}
+        self._known = (0.0, None)            # 0.21.4: tidy.Known (domains and threads the owner wrote to), cached
 
     # --- context ---------------------------------------------------------------------------------------------------
     def _key(self, source, handle, name=""):
@@ -1263,7 +1267,9 @@ class Extractor:
                 "people": people, "thread": f"{row['source']}:{row['account']}:{row['thread']}",
                 "direction": row["direction"], "text": row["text"], "subject": row["subject"], "shown": set(),
                 "source": row["source"], "date_order": self.date_order(),
-                "he_wrote": any(r["direction"] == "out" for r in thread_rows)}   # read_tier: a thread the owner wrote in
+                "he_wrote": any(r["direction"] == "out" for r in thread_rows),   # read_tier: a thread the owner wrote in
+                # 0.21.4: the resolver's People state for the sender ("suggested": not a known person, read_tier)
+                "sender_suggested": (getattr(self.person, "states", None) or {}).get(sender[0]) == "suggested"}
 
     def ledger_msg(self, row, ctx):
         return {"id": row["id"], "source": row["source"], "direction": row["direction"], "ts": row["ts"],
@@ -1392,6 +1398,35 @@ class Extractor:
                                  _clip(f"{kind_of(x)} \"{x['what']}\"", 80) for x in left)})
         return it
 
+    def known(self):
+        """0.21.4: tidy.Known for the read-time rules, loaded at most every KNOWN_S."""
+        t, k = self._known
+        now = self.monotonic()
+        if k is None or now - t > KNOWN_S:
+            try:
+                k = TY.Known.load(self.ms)
+            except Exception:  # noqa: BLE001 (nobody counts as known: the rules still keep what is real)
+                k = TY.Known()
+            self._known = (now, k)
+        return k
+
+    def tidy_answer(self, parsed, row, ctx):
+        """0.21.4 (tidy.py): promo mail keeps only Clean up lines; machine mail's bill with no amount owed and due words
+        and a list mail's appointment with no booking words are left out. Never mail from a known person (confirmed, a
+        thread or domain the owner writes to). Returns (items left out, why); each left out with its reason (drops)."""
+        if row.get("source") != "gmail" or row.get("direction") != "in" or ctx.get("he_wrote") or \
+                (str(ctx["sender"][0]).startswith("person:") and not ctx.get("sender_suggested")):
+            return [], ""
+        known = self.known()
+        kind, why = TY.promo_of(row, known, ctx["owner_names"])
+        if kind:
+            keep = [n for n, it in enumerate(parsed["items"]) if it["type"] == "cleanup"]
+            return leave_out(parsed, keep, why), why
+        judged = {n: TY.judge_mail(it, row, known, ctx["owner_names"]) for n, it in enumerate(parsed["items"])}
+        keep = [n for n, j in judged.items() if not j]
+        left = leave_out(parsed, keep, lambda n: judged[n][1])
+        return left, (next(j[1] for j in judged.values() if j) if left else "")
+
     def read(self, row, cap_tokens=None):
         """Read one message (a messages.db row) into the ledger. Returns ledger.apply's result plus "conflicts",
         "seconds", "alerts" and the read's "tier" and "tier_why" (read_tier). Raises the server's Busy / ContextFull /
@@ -1427,6 +1462,9 @@ class Extractor:
         # 0.22.x: a narrow read keeps only what such mail can carry that the owner needs (noise_keeps); the rest is left out
         # with its reason (drops) and named on the mail's Clean up line, never silently.
         left = narrow_answer(parsed, row, why) if tier == TIER_NARROW else []
+        # 0.21.4: promo mail gives only a Clean up line; machine mail's bills need proof (tidy_answer)
+        pleft, pwhy = self.tidy_answer(parsed, row, ctx)
+        left += pleft
         # 0.22.x (a local model on real chats): one answer that says the same thing twice keeps it once; the owner's own chat message
         # has nothing to clean up; a group message not addressed to the owner makes no new items but group_keeps' (each
         # left out with its reason in drops; the group's are named on the chat's Clean up line)
@@ -1444,18 +1482,27 @@ class Extractor:
             if oleft:
                 parsed["items"].append(self._group_line(row, ctx, oleft, f"left out, {OWN_WHY}",
                                                          "left out of your own messages"))
-        gleft = group_answer(parsed) if tier == TIER_FULL and group_chat(row) and not addressed(row, ctx, thread) \
-            else []
+        # 0.21.4: a Slack channel post that doesn't mention the owner, not in a thread the owner wrote in, is gated like a
+        # group message: its asks go to the Clean up group "From your channels", never Needs you
+        slack_gate = TY.slack_channel(row) and not TY.mentions_owner(row, ctx["owner_names"]) and \
+            not TY.asks_reader(row, ctx["owner_names"]) and \
+            not (":" in str(row.get("thread") or "") and ctx.get("he_wrote"))
+        gleft = group_answer(parsed) if tier == TIER_FULL and (group_chat(row) or slack_gate) and \
+            not addressed(row, ctx, thread) else []
         if gleft:
-            parsed["items"].append(self._group_line(row, ctx, gleft, f"left out of {GROUP_WHY}",
-                                                     "not addressed to you"))
+            gl = self._group_line(row, ctx, gleft, f"left out of {TY.SLACK_WHY if slack_gate else GROUP_WHY}",
+                                  "not addressed to you")
+            if slack_gate:
+                gl["checks"].append(TY.tidy_check("channels", TY.SLACK_WHY))
+            parsed["items"].append(gl)
         named = ", ".join(dict.fromkeys(kind_of(it) for it in left))
-        line = {"field": "items", "value": named, "why": f"left out of {why} mail ({NARROW_WHAT}): " +
+        line = {"field": "items", "value": named, "why": (f"left out of {pwhy}: " if pleft and tier != TIER_NARROW
+                                                          else f"left out of {why} mail ({NARROW_WHAT}): ") +
                 "; ".join(_clip(f"{kind_of(it)} \"{it['what']}\"", 80) for it in left)} if left else None
         # a narrow read that keeps nothing about nothing (no open item of this sender or thread was listed) is noise:
         # listed in Clean up. With open items listed, "nothing" means nothing new about them (a car rental for a trip
         # already kept), as in a full read. A read whose items were all left out is listed too, with what was left out.
-        nothing = tier == TIER_NARROW and NARROW_CLEANUP and not parsed["items"] and \
+        nothing = (tier == TIER_NARROW or bool(pleft)) and NARROW_CLEANUP and not parsed["items"] and \
             (bool(left) or (not raw["items"] and not raw["updates"] and not ctx["shown"])) and sec is None and \
             heads.invite_of(row, ctx["tz"]) is None
         if nothing:
@@ -1469,6 +1516,8 @@ class Extractor:
                                                              "from this mail: listed in Clean up"})
             elif line and it["type"] == "cleanup":
                 it["checks"].append(dict(line))
+            if pwhy.startswith("promo") and it["type"] == "cleanup":
+                it["checks"].append(TY.tidy_check("promo", pwhy))
         if ctx.get("cut"):
             for it in parsed["items"]:
                 it["checks"].append({"field": "text", "value": "", "why": f"message cut by {ctx['cut']} characters "

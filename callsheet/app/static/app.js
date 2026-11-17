@@ -1079,7 +1079,7 @@
     if (TD.sub === 'talk') return tkView();
     var v = TD.v;
     if (!v) return h('div', { class: 'tdy' }, h('p', { class: 'tdy-empty' }, TD.err ? 'Today isn’t ready: ' + TD.err : 'Loading Today…'));
-    return h('div', { class: 'tdy' }, [tdHead(v), tdUndoBar(), tdNow(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
+    return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdNow(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
   }
   /* 0.21.0 Talk it through (brief2.py, docs/brief.md): one step at a time, each a spoken turn and its picture, with
      quick replies and a reply field (a Chat turn on that step's items, saved in the day's Morning brief chat) */
@@ -1226,10 +1226,42 @@
     return h('div', { class: 'tdy tk' + (phone ? ' ph' : '') }, [side, main]);
   }
   function tdHead(v) {
+    /* 0.21.4 Refresh: rebuilds Today and the day's brief from what is already read (no mail is read again) */
+    var busy = !!TD.refreshing, upd = busy ? 'Updating…' : (v.header.updated || '');
+    var rf = btn('k tdy-rf', [h('span', { class: 'rfi' + (busy ? ' spin' : ''), 'aria-hidden': 'true' }, ico('refresh')), 'Refresh'],
+      { 'aria-busy': busy ? 'true' : null, disabled: busy ? true : null, 'aria-label': 'Refresh Today and the day’s brief' }, tdRefreshNow);
     return h('div', { class: 'tdy-hd' }, [h('div', null, [
-      h('p', { class: 'dline' }, [v.header.time, ' · ', h('span', { class: 'fresh-' + v.header.fresh.state }, v.header.fresh.word)]),
+      h('p', { class: 'dline' }, [v.header.time, ' · ', h('span', { class: 'fresh-' + v.header.fresh.state }, v.header.fresh.word),
+        upd ? h('span', { class: 'upd', role: 'status' }, ' · ' + upd) : null]),
       h('h1', { class: 'hl' }, isPhone() ? v.header.date_short : v.header.date_long)]),
-    btn('k', [ico('chat'), 'Talk it through'], null, tkOpen)]);
+    h('div', { class: 'tdy-hk' }, [rf, btn('k', [ico('chat'), 'Talk it through'], null, tkOpen)])]);
+  }
+  function tdRefreshNow() {
+    if (TD.refreshing) return;
+    TD.refreshing = true; renderBrief();
+    mutate(function () { return api('POST', 'api/today/refresh', {}); }).then(function (d) {
+      TD.refreshing = false; TD.v = d; TD.err = ''; renderBrief();
+    }, function (e) { TD.refreshing = false; renderBrief(); failToast(e); });
+  }
+  /* 0.21.4 the one-time Tidy up offer after the update (tidy.py): the owner presses it; never automatic. One Undo. */
+  function tdTidyBanner(v) {
+    var b = v.banner;
+    if (!b || TD.tidyBusy === 'done') return null;
+    return h('div', { class: 'tdy-tidy', role: 'region', 'aria-label': 'Tidy up' }, [h('p', null, b.text),
+      h('div', { class: 'keys' }, [btn('k go', 'Tidy up', { 'aria-busy': TD.tidyBusy ? 'true' : null, disabled: TD.tidyBusy ? true : null }, function () {
+        TD.tidyBusy = true; renderBrief();
+        mutate(function () { return api('POST', 'api/today/tidy', {}); }).then(function (r) {
+          TD.tidyBusy = false; TD.tidyUndo = r && r.moved ? r : null;
+          return tdRefresh();
+        }, function (e) { TD.tidyBusy = false; renderBrief(); failToast(e); });
+      }), btn('k q', 'Not now', null, function () { tdPost('tidy/later', {}, 'You can ask Chat to tidy up any time.'); })])]);
+  }
+  function tdTidyUndoBar() {
+    var u = TD.tidyUndo;
+    if (!u) return null;
+    return h('div', { class: 'tdy-undo', role: 'status' }, [h('span', null, 'Tidied ' + u.moved + (u.moved === 1 ? ' item' : ' items') + ' into Clean up'),
+      btn('k q', 'Undo', null, function () { TD.tidyUndo = null; tdPost('tidy/undo', { run: u.run }, 'Back where they were.'); }),
+      btn('k q', 'Close', { 'aria-label': 'Close this message' }, function () { TD.tidyUndo = null; renderBrief(); })]);
   }
   /* 0.21.0 security alerts (heads.py): always first, a red rule, the lock and the word, until the owner marks one Done.
      The red key goes on the newest; no orange key on a screen with a red one. */
@@ -1259,6 +1291,7 @@
     });
     nn.cleared.forEach(function (x) { kids.push(h('p', { class: 'clrd' }, [h('span', { class: 'led ok', 'aria-hidden': 'true' }), 'Cleared ' + x.at + ' · ' + x.why])); });
     if (!nn.clashes.length && !nn.followups.length) kids.push(h('p', { class: 'dim' }, 'No clashes.'));
+    if (nn.clashes_left_out) kids.push(h('p', { class: 'dim' }, plural(nn.clashes_left_out, 'clash', 'clashes') + ' with promotions, finished or started items not shown.'));
     var tl = nn.timeline;
     if (tl.length) kids.push(h('div', { class: 'tdl', role: 'list', 'aria-label': 'Today’s calendar' }, tl.map(function (r) {
       if (r.kind === 'gap') return h('div', { class: 'gapr', role: 'listitem' }, [r.done ? h('span', { class: 'done' }, r.done + ' done') : null, r.text ? h('span', null, r.text) : null]);
@@ -1309,7 +1342,7 @@
         return h('div', { class: 'clr', role: 'listitem' }, [h('span', { class: 'srcc' }, [tdIco(r.icon), r.chip]), h('p', { class: 'ct' }, segs(r.text)), h('span', { class: 'ag' }, r.age)]);
       })),
       al ? h('p', { class: 'fu dim' }, al) : null,
-      h('div', { class: 'keys' }, [btn('k' + lead, 'Open', null, function () { tdGo('clash', c.id); }),
+      c.more ? null : h('div', { class: 'keys' }, [btn('k' + lead, 'Open', null, function () { tdGo('clash', c.id); }),
         btn('k q', 'Dismiss', null, function () { tdPost('dismiss', { clash: c.id }, 'Clash dismissed.'); })])]);
   }
   function tdClashLine(c) {
@@ -1318,17 +1351,30 @@
   }
   function tdNeeds(v) {
     var n = v.needs_you, lim = TD.more.needs ? n.rows.length : (isPhone() ? 3 : 4);
-    var rows = n.rows.slice(0, lim).map(function (r) {
+    var rows = n.rows.slice(0, lim).map(tdNeedRow);
+    return h('section', { class: 'card', 'aria-labelledby': 'td-ny' }, [h('h2', { class: 'lab', id: 'td-ny' }, ['Needs you', h('span', { class: 'r' }, n.total ? 'oldest first' : '')]),
+      n.total ? rows : h('p', { class: 'dim' }, 'Nothing waiting on you.'),
+      n.rows.length > lim ? btn('k q more', (n.rows.length - lim) + ' more, ' + n.total + ' in all', null, function () { TD.more.needs = true; renderBrief(); }) : null,
+      tdOlder(n.older)]);
+  }
+  /* 0.21.4 "Older, still open?" (tidy.older_of): collapsed, with its count; Clear all marks them done (with Undo).
+     They stay open in search until then. */
+  function tdOlder(o) {
+    if (!o || !o.total) return null;
+    var open = !!TD.more.older;
+    var head = btn('k q tdy-old', [o.label + ' · ' + o.total, h('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▴' : '▾')],
+      { 'aria-expanded': String(open), 'aria-controls': 'td-old' }, function () { TD.more.older = !open; renderBrief(); });
+    return h('div', { class: 'tdy-oldg' }, [head, open ? h('div', { id: 'td-old', role: 'group', 'aria-label': o.label }, [
+      h('p', { class: 'dim' }, o.note), o.rows.map(tdNeedRow),
+      h('div', { class: 'keys' }, [btn('k', 'Clear all ' + o.total, null, function () { tdDone(o.ids, o.total + ' older items'); })])]) : null]);
+  }
+  function tdNeedRow(r) {
       var b = btn('nr', [tdIco(r.icon, r.source), h('span', { class: 'who' }, [r.who, r.mine ? h('span', { class: 'mine' }, 'You said') : null]),
         h('span', { class: 'ag' }, tdAge(r)), h('span', { class: 'why' }, [r.late ? h('b', { class: 'late' }, r.late + ' · ') : null,   /* 0.22.0: past its deadline */
           (r.likely ? 'Likely: ' : '') + r.why + (r.amount ? ' · ' + r.amount : '')])], null, function () { tdGo('item', r.id); });
       var l = r.invite ? tdLink(r.invite.link, 'k nrl') : null;   /* 0.21.0: an invite, answered where it lives */
       var rs = r.invite && r.invite.rsvp ? rsvpBox(r.invite.rsvp, r.id, 'today') : null;   /* or here: Yes, No, Maybe */
       return l || rs ? h('div', { class: 'nrw' + (rs ? ' hasrs' : '') }, [b, l, rs]) : b;
-    });
-    return h('section', { class: 'card', 'aria-labelledby': 'td-ny' }, [h('h2', { class: 'lab', id: 'td-ny' }, ['Needs you', h('span', { class: 'r' }, n.total ? 'oldest first' : '')]),
-      n.total ? rows : h('p', { class: 'dim' }, 'Nothing waiting on you.'),
-      n.rows.length > lim ? btn('k q more', (n.rows.length - lim) + ' more, ' + n.total + ' in all', null, function () { TD.more.needs = true; renderBrief(); }) : null]);
   }
   function tdStrip(cu) {
     var s = h('div', { class: 'strip', 'aria-hidden': 'true' });

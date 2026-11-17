@@ -258,6 +258,43 @@ its own item.
   like instructions, or from a removed source, is never copied. Chat's message search leaves them out (Chat reads
   reports from the index).
 
+## Tidy up (0.21.4, `tidy.py`)
+
+Rules that keep promotions and channel chatter off Today, at read time and, for items already read, only when the
+owner presses Tidy up (one run, one Undo: `tidy_runs`, `tidy_moves`). Nothing is deleted: a moved item becomes a
+Clean up line (type `cleanup`, a check `{"field": "tidy", "value": "promo"|"channels", "why": …}` that names its
+Clean up group, a `tidy` history row) and its open clashes are resolved with `resolved_why` "tidy: …"; Undo restores
+the type, subtype and checks and reopens those clashes.
+
+- **Promo without headers** (`promo_of`): Gmail from a list or machine sender (the bulk flag or Promotions tab when
+  stored; else a no-reply, role or list-style address, a mailing-service or marketing subdomain, unsubscribe text)
+  with a promo cue in the subject or the first 600 characters (% off, sale, offer ends, chip in, donate, gift card and
+  subscription offers …) and no transactional subject (receipt, order, shipped, statement ready, amount due …). A cue
+  only in the text needs a list signal beyond a no-reply address. Never a security alert, code or invite, a
+  confirmed person, a thread the owner wrote in, or a domain the owner writes to. At read time (`Extractor.tidy_answer`)
+  promo mail keeps only Clean up lines; the rest is left out with its reason (`drops`) and named on the mail's line.
+- **Bill proof** (`bill_proof`, machine mail only): a bill, payment or invoice needs due-date or statement words and
+  either an amount owed, a billing-type sender, or those words in the subject; mail from a strict billing address
+  (`BILLING_LOCAL`: billing@, invoices@, statements@ …) with no promo cue needs no due words. A list mail's
+  appointment needs booking words.
+- **Asks by name**: the Promotions tab alone (no promo cue) doesn't make promo mail when a personal address greets
+  the owner by name and asks something (`by_name`, the read tier's "asks you by name").
+- **Suggested People** don't count as known (`read_tier`: the resolver's `states`).
+- **Slack gate**: an incoming channel post (thread `C…`, labels `channel`/`private`) that doesn't name or @mention the
+  owner, doesn't ask the reader directly (`asks_reader`: "can you", "can we", "let's" with no one else addressed: no
+  @someone else, "someone", "anyone", "you all", "team", or an opening "Kofi, …") and isn't in a thread the owner
+  wrote in keeps only events and never-hidden items; the rest goes to the channel's Clean up line in "From your
+  channels".
+- **Clashes** (`clash_ok`, Today): none where a side is a Clean up line, closed, merged or already started (an away
+  block excepted); at most `CLASH_PER_ITEM` (3) per item, the rest one grouped line.
+- **Older, still open?** (`older_of`, Today): asks with no time asked more than 14 days ago, items whose deadline
+  passed more than 14 days ago, and items from the first catch-up (message before the first read) with no activity
+  since (`quiet_items`). Never security, invites, never-hidden items or a VIP's.
+- **Tidy up from Chat**: when the owner's own latest message asks to tidy up (`chatstore.action_intent`, quoted text
+  left out), Chat may call `propose_action` with action `tidy` and no items. The card says how many items move, by
+  group; it always waits for Confirm (a batch), which runs `Tidy.run(how="chat")`; the card's Undo puts the whole run
+  back (`Tidy.undo`). Text in messages or tool results can't offer it.
+
 ## Phone alerts
 Through 0.5.1 push (`Notifier._send`): new clashes ("Clash in 5 h: Wed Mar 3, 10 am" / "Dana (Signal) and Marco (email)
 both want this time.") and asks from VIPs. Names, sources and times only, never message text. Quiet hours hold an alert

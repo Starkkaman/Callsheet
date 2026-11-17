@@ -22,6 +22,7 @@ import conflicts as C
 import urllib.parse
 
 import rules
+import tidy as TY
 import heads
 import ledger as L
 
@@ -46,7 +47,8 @@ FILES = frozenset({"not_for_me", "junk"})        # these chips file the items (d
 NOTE_MAX = 300
 FEEDS_SHOWN = 5                 # 0.21.0: "From your channels, feeds and reports" shows this many, then "n more"
 TYPE_WORD = {"ask": "Ask", "commitment": "Your word", "event": "Event", "cleanup": "Clean up"}
-CLEAN_GROUPS = (("newsletter", "Newsletters", "news"), ("receipt", "Receipts", "mail"),
+CLEAN_GROUPS = (("channels", "From your channels", "slack"), ("promo", "Promotions", "news"),
+                ("newsletter", "Newsletters", "news"), ("receipt", "Receipts", "mail"),
                 ("chatter", "Slack chatter", "slack"), ("other", "Notifications", "note"))
 _RECEIPT = re.compile(r"receipt|order|invoice|payment|paid|statement|shipping|delivery", re.I)
 _NEWS = re.compile(r"newsletter|digest|weekly|promo|offer|deal|sale|update", re.I)
@@ -255,6 +257,10 @@ def reply_link(src, address=None):
 
 
 def clean_group(it, source):
+    # 0.21.4 (tidy.py): a line the rules moved or made says its group in a "tidy" check
+    tg = next((c.get("value") for c in it.get("checks") or [] if isinstance(c, dict) and c.get("field") == "tidy"), "")
+    if tg in ("channels", "promo"):
+        return tg
     sub = f"{it.get('subtype') or ''} {it.get('what') or ''}"
     if source == "slack":
         return "chatter"
@@ -276,6 +282,8 @@ class Today:
         # 0.21.0 Google Contacts (contacts.Contacts), set by api.App: birthdays(first, last) for Coming up
         self.contacts = None
         self.alerter = alerter
+        self.tidy = None       # 0.21.4 Tidy up (tidy.Tidy), set by api.App: the banner's count
+        self.refreshed_at = None   # 0.21.4: the owner's last Refresh (Today and the day's brief rebuilt)
         self.reader = reader or (lambda: {})
         self.log = log or (lambda line: None)
         ms.write(lambda db: [db.execute(s) for s in _SCHEMA.split(";") if s.strip()])
@@ -612,6 +620,7 @@ class Today:
         day0, day1 = L.day_bounds(today, tz)
         rows = [c for c in self._read("SELECT * FROM ledger_conflicts WHERE state='open' ORDER BY slot_start")
                 if (c["slot_end"] or c["slot_start"] or now) > now]
+        rows, left_out = self._clash_rule(rows, now, tz)     # 0.21.4: no promo, closed or started side
         sides = self._clash_sides(rows, now, tz)
         fus = self._followups()
         rems = self._reminders()
@@ -624,6 +633,7 @@ class Today:
             clashes.append(self._clash(c, ss, fu, rems, now, tz, expand=bool(fu) or secs < EXPAND_S))
             busy_items |= ids
             busy_events |= {s["id"] for s in ss if s["kind"] == "event"}
+        clashes = self._clash_cap(clashes, sides)          # 0.21.4: at most CLASH_PER_ITEM per item, the rest grouped
         lead = next((c for c in clashes if c["level"] == "red"), clashes[0] if clashes else None)
         for c in clashes:
             c["lead"] = c is lead
@@ -647,15 +657,83 @@ class Today:
         lv = self.lv.view(now=now, horizon_days=HORIZON_DAYS)
         return {"now": n.isoformat(timespec="minutes"),
                 "header": {"time": t12(n), "date_long": f"{n:%A}, {n:%B} {n.day}", "date_short": f"{n:%a}, {n:%b} {n.day}",
-                           "fresh": self._fresh()},
+                           "fresh": self._fresh(), "updated": self._updated(now)},
+                "banner": self._banner(),
                 "now_next": {"security": self._security(lv, now, tz),
                              "clashes": clashes, "followups": loose, "cleared": self._cleared(day0, now, tz),
+                             "clashes_left_out": left_out,
                              "timeline": self._timeline(day0, day1, now, tz, busy_events, busy_items, lv)},
                 "needs_you": self._needs(lv, busy_items | hidden, now, tz),
                 "coming_up": self._coming(lv, busy_items, busy_events, now, tz),
                 "clean_up": self._clean(lv, hidden, now, tz, samples=3),
                 "feeds": self._feeds(now, tz),
                 "calendar_write": False}
+
+    # --- 0.21.4: the clash rule, the banner, Refresh -------------------------------------------------------------
+    def _clash_rule(self, rows, now, tz):
+        """Open clashes Today shows: none where either side is a Clean up line, closed or already started
+        (tidy.clash_ok). Returns (rows, how many were left out); the items stay in their own sections."""
+        ids = {c[k + "_ref"] for c in rows for k in ("a", "b") if c[k + "_kind"] == "item"}
+        items = self._items(ids)
+        keep = [c for c in rows if all(TY.clash_ok(items.get(c[k + "_ref"]), now, tz)
+                                       for k in ("a", "b") if c[k + "_kind"] == "item")]
+        return keep, len(rows) - len(keep)
+
+    def _clash_cap(self, clashes, sides):
+        """At most CLASH_PER_ITEM clashes per item (sure first, then soonest); the rest of one item's clashes become one
+        grouped line ("12 more clashes with …") that opens to list them."""
+        per, out, rest = {}, [], {}
+        order = sorted(clashes, key=lambda c: (c["confidence"] != "sure", c["seconds"]))
+        for c in order:
+            key = next(iter(c["items"]), None)
+            many = [i for i in c["items"] if sum(1 for x in clashes if i in x["items"]) > TY.CLASH_PER_ITEM]
+            key = many[0] if many else key
+            if key is None or not many:
+                out.append(c)
+                continue
+            per[key] = per.get(key, 0) + 1
+            (out if per[key] <= TY.CLASH_PER_ITEM else rest.setdefault(key, [])).append(c)
+        for key, cs in rest.items():
+            side = next((s for c in cs for s in sides.get(c["id"], []) if s["kind"] == "item" and s["id"] == key), {})
+            what = self._about(side) if side else "one item"
+            n = len(cs)
+            g = {"title": seg((f"{n} more clash{'' if n == 1 else 'es'}", True), (f" with {what}", False)),
+                 "plain": f"{n} more clash{'' if n == 1 else 'es'} with {what}", "count": n, "trip": None,
+                 "entries": [{"id": c["id"], "icon": "cal", "chip": c["when"], "text": c["line"], "age": c["until"]}
+                             for c in cs]}
+            first_c = min(cs, key=lambda c: c["seconds"])
+            out.append(dict(first_c, group=g, more=True, compact=True, line=g["title"], names=[g["plain"]], reply=None,
+                            followup=None, lead=False))
+        out.sort(key=lambda c: c["seconds"])
+        return out
+
+    def _banner(self):
+        """0.21.4: the one-time Tidy up offer after the update ({count, text}), or None."""
+        if self.tidy is None:
+            return None
+        try:
+            return self.tidy.banner()
+        except Exception as e:  # noqa: BLE001 (Today always shows)
+            self.log(f"Callsheet today: tidy banner unavailable ({type(e).__name__})")
+            return None
+
+    def _updated(self, now):
+        """'Updated just now' after the owner's Refresh, then 'Updated 9:05 am'; '' before any."""
+        if not self.refreshed_at:
+            return ""
+        s = now - self.refreshed_at
+        if s < 90:
+            return "Updated just now"
+        if s < 3600:
+            return f"Updated {int(s // 60)} min ago"
+        return f"Updated {t12(local(self.refreshed_at, self.tz()))}"
+
+    def refresh(self, now=None):
+        """0.21.4 POST api/today/refresh: rebuild Today from what is already read (no mail is read again) and note the
+        time; api.App starts a fresh day's brief beside it."""
+        now = self.clock() if now is None else now
+        self.refreshed_at = now
+        return self.view(now)
 
     def _fresh(self):
         try:
@@ -769,7 +847,10 @@ class Today:
         return f"{h} h {m} min" if h and m else f"{h} h" if h else f"{m} min"
 
     def _needs(self, lv, skip, now, tz):
-        rows = []
+        rows, older = [], []
+        # 0.21.4 (tidy.older_of): long-past asks and quiet items from the first catch-up go to "Older, still open?"
+        back = TY.backfill_before(self.ms)
+        quiet = TY.quiet_items(self.ms, [it["id"] for it in lv["needs_you"] if it["id"] not in skip]) if back else set()
         for it in lv["needs_you"]:
             if it["id"] in skip:
                 continue
@@ -796,10 +877,19 @@ class Today:
                                    "repeats": full.get("purpose") == "repeats"})
                 if cal:
                     row.update(icon="cal", source="Calendar")
+            why_old = TY.older_of(it, now, back, it["id"] in quiet)
+            if why_old:
+                older.append(dict(row, old_why=why_old))
+                continue
             rows.append(row)
         # 0.20.0: a VIP's asks first (0.17.0 rules), 0.22.0: then what is late, then oldest
         rows.sort(key=lambda r: (not r["vip"], not r["late"], -r["seconds"]))
-        return {"total": len(rows), "rows": rows}
+        older.sort(key=lambda r: r["seconds"])
+        return {"total": len(rows), "rows": rows,
+                "older": {"total": len(older), "rows": older, "ids": [r["id"] for r in older],
+                          "label": "Older, still open?",
+                          "note": f"Asks and items more than {TY.AGE_DAYS} days old, or from your first catch-up with "
+                                  "nothing new since. Still open and still found in search."}}
 
     def _coming(self, lv, busy_items, busy_events, now, tz):
         today = local(now, tz).date()

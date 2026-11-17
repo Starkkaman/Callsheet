@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.21.4
+
+- **Fewer things on Today.** Promotions that slipped through no longer show up as asks, bills, events or clashes.
+  Callsheet now spots promo mail even when it came in with your old mail and has no "bulk" marks: it looks at who
+  sent it (no-reply, info@ and mailing-service addresses, an unsubscribe line) and at the words ("30% off", "sale",
+  "offer ends", "chip in", "donate", gift card and subscription offers). Promo mail only gives a Clean up line.
+- **Bills have to be real bills.** A bill from a company's mail needs an amount owed with a due date or statement
+  words, unless it comes from the company's billing address and doesn't read like an offer. A "chip in $25" or a
+  subscription offer is no longer a payment. Someone who writes to you by name through a mailing tool is never
+  treated as a promotion just because Gmail put the mail in Promotions.
+- **People you never confirmed don't count as people you know.** Senders Callsheet added to People on its own (still
+  "suggested") no longer get their promotions read in full.
+- **Slack channels.** A channel post that doesn't mention you, doesn't ask you directly ("can you…", "can we…",
+  "let's…" with no one else named), and isn't in a thread you wrote in, goes to Clean up under "From your channels",
+  never Needs you. Direct messages, @mentions and direct asks stay where they were. "Can someone…" is not a direct
+  ask.
+- **Clashes.** No clash with a promotion, with something already done, or with something that already started. One
+  item shows at most 3 clashes; the rest are grouped in one line you can open.
+- **Older, still open?** Asks and items more than 14 days past, or from your first catch-up with nothing new since,
+  move to a closed group under Needs you, with a count and **Clear all** (with Undo). They are still open and still
+  found in search.
+- **Tidy up.** After this update Today offers once: "Callsheet now filters promotions better. Tidy up N items?" Press
+  **Tidy up** to sort the items you already have by the new rules, and **Undo** to put them all back. It never runs
+  on its own. Nothing is deleted: every moved item is in Clean up with the reason. Ask Chat to "tidy up" any time: it
+  shows a card with how many items move and waits for your **Confirm**; one **Undo** on the card puts them all back.
+- **Refresh** at the top of Today rebuilds Today and the day's brief from what Callsheet has already read, without
+  reading your mail again or waiting for the next brief. It spins while it works and then says "Updated just now".
+
 ## 0.21.3
 
 - Fixes the Bills picture in Talk it through: names were squeezed into a narrow column, one letter per line.

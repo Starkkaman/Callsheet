@@ -52,6 +52,7 @@ import calwrite as calwrite_mod   # 0.21.0: NO_DELETE (the card's Undo answer); 
 import gdrafts        # 0.21.0: Put in Gmail Drafts (the draft card; all Google I/O is in gdrafts.py/google.py)
 import chatstore      # 0.17.0: the store tools and the setting/action cards (approved 2026-11-11)
 import prefs as prefs_mod
+import tidy as tidy_mod      # 0.21.4: Tidy up from Chat (the card; the run and its Undo are tidy.Tidy)
 import websearch      # 0.14.0: web search through the owner's SearXNG (all network I/O is in websearch.py/net.py)
 import writer
 from store import Conflict, InputError, NotFound, Store
@@ -1923,6 +1924,7 @@ class Chat:
         self.msgstore = self.ledger = self.prefs = None
         self.calwrite = None   # 0.21.0 Add to calendar (calwrite.CalWrite), set by api.App
         self.gdrafts = None   # 0.21.0: gdrafts.GmailDrafts (set by the API): the owner-confirmed Gmail draft card
+        self.tidy = None      # 0.21.4: tidy.Tidy (set by the API): the owner-confirmed Tidy up card
         self.applied = {}
         self.turn_log = collections.deque(maxlen=TURN_STATS)   # 0.14.2: the last turns' numbers (memory only)
         try:
@@ -2272,6 +2274,8 @@ class Chat:
                                                name=assistant.of(self.store.settings()))
             if card and card["status"] == "ready" and card["action"] == "calendar":
                 card = self._calendar_card(card)    # 0.21.0: who may add, and never twice
+            if card and card["status"] == "ready" and card["action"] == "tidy":
+                card = self._tidy_card(card)        # 0.21.4: how many, by group; nothing to tidy: no card
             if card:
                 card["type"] = "action"
                 if card["status"] == "ready":
@@ -2357,10 +2361,42 @@ class Chat:
         card["rows"] = card["rows"] + [["When", when], ["Calendar", f"{targets[0]['name']} · {targets[0]['email']}"]]
         return card
 
+    def _tidy_card(self, card):
+        """0.21.4 Tidy up from Chat (always the owner's Confirm): how many items move, by group, or why there's no card.
+        Only counts here (tidy.Tidy.plan); nothing is written until Confirm."""
+        ty = getattr(self, "tidy", None)
+        if ty is None:
+            return {"status": "refused", "action": "tidy", "reason": "Tidy up isn't available just now."}
+        plan = ty.plan()
+        if not plan:
+            return {"status": "refused", "action": "tidy",
+                    "reason": "Nothing to tidy up: everything already follows the newest rules."}
+        counts = {}
+        for m in plan:
+            counts[m["grp"]] = counts.get(m["grp"], 0) + 1
+        n = len(plan)
+        card["label"] = f"Tidy up {n} item{'' if n == 1 else 's'}"
+        card["rows"] = [[tidy_mod.GROUP_WORD.get(g, g), str(c)] for g, c in sorted(counts.items())] + \
+            [["Moves to", "Clean up, each with its reason; nothing is deleted"]]
+        return card
+
     def _apply_change(self, cid, pid, turn):
         """Apply the change kept with the token (the record is marked used by the caller). Returns {ids, label, at}."""
         rec = self.proposals[pid]
         ch, what, ref = rec["change"], rec["what"], f"{cid}:{turn}"
+        if what == "action" and ch.get("action") == "tidy":
+            # 0.21.4: the owner's Confirm runs Tidy up once (tidy.Tidy.run); the card's Undo puts the whole run back
+            ty = getattr(self, "tidy", None)
+            if ty is None:
+                raise prefs_mod.Invalid("Tidy up isn't available just now.")
+            res = ty.run(how="chat")
+            n = res["moved"]
+            applied = {"ids": [res["run"]], "label": f"Tidy up: {n} item{'' if n == 1 else 's'} moved to Clean up",
+                       "at": self.clock(), "tidy": True, "moved": n, "counts": res["counts"]}
+            with self.lock:
+                rec["applied"], rec["undone"], rec["tidy"] = applied["ids"], False, True
+                rec["exp"] = max(rec["exp"], self.clock() + PROPOSAL_TTL)   # Undo on the card for PROPOSAL_TTL after
+            return applied
         if what == "action" and ch.get("action") == "calendar":
             # 0.21.0: the owner's Confirm adds the event (the item's own title and time, the default calendar). No
             # Undo afterwards: Callsheet has no permission to delete events (card_undo says so).
@@ -2450,6 +2486,14 @@ class Chat:
                 raise InputError(CARD_TOKEN_BAD)
             rec["undone"] = True   # one-time
         what, errors = rec["what"], []
+        if rec.get("tidy"):   # 0.21.4: one Undo puts the whole Tidy up run back (tidy.Tidy.undo)
+            for i in rec["applied"]:
+                if not self.tidy.undo(i)["restored"]:
+                    errors.append("already undone")
+            with self.lock:
+                self._mark_card(cid, pid, applied=None, undone=True)
+            self.log("Callsheet chat: a tidy-up card was undone")
+            return {"ok": True, "type": what, "undone": rec["applied"], "already": len(errors)}
         for i in rec["applied"]:
             try:
                 (self.prefs.undo if what == "setting" else self.prefs.undo_action)(i)

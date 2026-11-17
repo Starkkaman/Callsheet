@@ -34,6 +34,7 @@ import aisettings                    # Setup › AI: one server, a model per job
 import visuals                       # 0.19.0 visual blocks
 import visuals_sample                # 0.19.0 the Visuals gallery's sample store
 import brief2 as brief2_mod          # 0.21.0 Talk it through
+import tidy as tidy_mod              # 0.21.4 Tidy up
 import connectors as connectors_mod  # 0.10.0 connectors
 import net                           # 0.10.0 connectors
 import websearch                     # 0.14.0 web search (the owner's SearXNG)
@@ -62,7 +63,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.21.3"
+APP_VERSION = "0.21.4"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -159,6 +160,7 @@ class App:
         # 0.17.0 Chat on the store: the store tools, and the owner-pressed setting and action cards (prefs.py)
         self.chat.msgstore, self.chat.ledger, self.chat.prefs = self.messages or None, self.ledger, self.prefs
         self.chat.calwrite = self.calwrite   # 0.21.0: Chat's "add to calendar" card (owner's Confirm only)
+        self.chat.tidy = getattr(self, "tidy", None)   # 0.21.4: Chat's Tidy up card (owner's Confirm only)
         self.gdrafts.messages, self.chat.gdrafts = self.messages or None, self.gdrafts   # 0.21.0 Gmail drafts
         self.routes = [
             ("GET", r"brief", self.brief),
@@ -218,7 +220,11 @@ class App:
                         ("POST", r"today/undone", self.today_undone),
                         ("POST", r"today/dismiss", self.today_dismiss),
                         ("POST", r"today/notes", self.today_note),
-                        ("POST", r"today/remind", self.today_remind)]
+                        ("POST", r"today/remind", self.today_remind),
+                        ("POST", r"today/refresh", self.today_refresh),        # 0.21.4 Refresh at the top of Today
+                        ("POST", r"today/tidy", self.today_tidy),              # 0.21.4 the owner's Tidy up
+                        ("POST", r"today/tidy/undo", self.today_tidy_undo),
+                        ("POST", r"today/tidy/later", self.today_tidy_later)]
         self.routes += [("GET", r"calendar/access", self.cal_access),            # 0.21.0 Add to calendar (calwrite.py)
                         ("POST", r"calendar/access/check", self.cal_access_check),
                         ("POST", r"calendar/access/start", self.cal_access_start),
@@ -1086,9 +1092,11 @@ class App:
             d = fresh()["dir"]
             p = d.person_of(kind, handle) if d is not None and kind else None
             if p and p.get("id") is not None:
+                person.states[f"person:{p['id']}"] = p.get("state") or ""   # 0.21.4: read_tier (suggested people)
                 return f"person:{p['id']}", p.get("name") or ""
             return str(handle or "").lower(), ""
         person.takes_name = True
+        person.states = {}
 
         def vip(source, handle):
             v = fresh()["vip"]
@@ -1124,6 +1132,11 @@ class App:
                                      feeds=(lambda: {"feeds": conns.brief_list(), "reports": conns.reports_list()})
                                      if conns is not None else None)
         self.ledger_runner.hooks.append(self.today.tick)          # 0.18.0: Today's reminders
+        # 0.21.4 Tidy up (tidy.py): confirmed People only count as known (never suggested ones)
+        self.tidy = tidy_mod.Tidy(self.messages, self.clock, known=lambda: tidy_mod.Known.load(
+            self.messages, self._confirmed_emails()), owner_names=lambda: background.owner_names(
+                self.store, getattr(self, "people", None)))
+        self.today.tidy = self.tidy
         # 0.21.0 Add to calendar (approved 2026-11-11): the one write, only on the owner's press (calwrite.py)
         self.calwrite = calwrite_mod.CalWrite(self.store, self.messages, tz_name, clock=self.clock)
         self.today.cal = self.calwrite
@@ -1331,6 +1344,51 @@ class App:
 
     def today_cleanup(self, _body):
         return self._today().cleanup()
+
+    # --- 0.21.4: Refresh and Tidy up (owner-pressed only) ---------------------------------------------------------
+    def _confirmed_emails(self):
+        try:
+            rows = self.store.db.execute("SELECT h.value FROM person_handles h JOIN people p ON p.id=h.person WHERE "
+                                         "p.state IN ('confirmed','me') AND h.kind='email'").fetchall()
+        except Exception:  # noqa: BLE001 (no People yet: nobody counts as known)
+            return []
+        return [r[0] for r in rows]
+
+    def today_refresh(self, _body):
+        """POST api/today/refresh: rebuild Today and start a fresh day's brief from what is already read (no mail is
+        read again; the brief is written in the background, as Talk it through does)."""
+        brief = None
+        if self.brief2 is not None:
+            try:
+                brief = self.brief2.start(call="talk", force=True)
+            except Exception as e:  # noqa: BLE001 (Today still refreshes)
+                print(f"Callsheet today: brief refresh failed ({type(e).__name__})", file=sys.stderr, flush=True)
+        self._today().refreshed_at = self.clock()
+        v = self.today_view(None)
+        v["brief_run"] = brief
+        return v
+
+    def _tidy(self):
+        if getattr(self, "tidy", None) is None:
+            raise Conflict("The message store isn't available.")
+        return self.tidy
+
+    def today_tidy(self, body):
+        """POST api/today/tidy: the owner's Tidy up: re-applies the 0.21.4 rules to items already read, one Undo."""
+        how = "chat" if _obj(body).get("from") == "chat" else "today"
+        return self._tidy().run(how=how)
+
+    def today_tidy_undo(self, body):
+        try:
+            rid = int(_obj(body).get("run"))
+        except (TypeError, ValueError):
+            raise InputError("Which tidy-up?") from None
+        return self._tidy().undo(rid)
+
+    def today_tidy_later(self, _body):
+        """The banner's Not now: the offer doesn't come back (Tidy up stays in Chat)."""
+        self._tidy().dismiss()
+        return {"ok": True}
 
     def today_done(self, body):
         return self._today_do(self._today().done, _obj(body).get("items"))

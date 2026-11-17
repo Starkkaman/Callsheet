@@ -2266,3 +2266,20 @@ button.eb{cursor:pointer}
   .pjg{grid-template-columns:minmax(0,1fr)}
   .sgc .dbtns .act,.sgc .dbtns .tbtn,.pjfiles .tbtn{min-height:44px}
 }
+
+/* 0.21.4 Today: Refresh (spinner, "Updated just now"), the Tidy up offer, "Older, still open?" */
+.tdy-hk{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tdy .k.tdy-rf{min-height:44px;min-width:44px}
+.tdy-rf .rfi{display:inline-flex}
+.tdy-rf .rfi.spin{animation:tdy-spin .9s linear infinite}
+@keyframes tdy-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.tdy-rf .rfi.spin{animation:none}}
+.tdy-hd .upd{color:var(--muted)}
+.tdy-tidy{display:flex;gap:12px 16px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--surface-2);
+  border:1px solid var(--t-line);border-radius:12px;padding:12px 16px}
+.tdy-tidy p{margin:0}
+.tdy-tidy .keys .k{min-height:44px}
+.tdy-oldg{margin-top:12px;border-top:1px solid var(--t-line);padding-top:8px}
+.tdy .k.q.tdy-old{min-height:44px;padding:0 8px;text-decoration:none;gap:8px}
+.tdy-old .chev{font-size:12px}
+.tdy-oldg .keys .k{min-height:44px}
