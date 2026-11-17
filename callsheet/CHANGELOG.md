@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.21.3
+
+- Fixes the Bills picture in Talk it through: names were squeezed into a narrow column, one letter per line.
+
 ## 0.21.2
 
 - A new install no longer carries anything from the developer's own setup. Setup › Connections › Texts starts with

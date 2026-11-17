@@ -125,7 +125,7 @@
 
 /* bills ladder */
 .vz-blr{display:grid;grid-template-columns:132px minmax(0,1fr) 92px;column-gap:12px;align-items:center}
-.vz-blr.row+.vz-blr.row{border-top:1px solid var(--vz-hair)}
+.vz-blr.vz-blrow+.vz-blr.vz-blrow{border-top:1px solid var(--vz-hair)}
 .vz-bax{position:relative;height:22px;border-bottom:1px solid var(--vz-rule)}
 .vz-bax span{position:absolute;bottom:5px;transform:translateX(-50%);font:500 12px/1 var(--vz-m);color:var(--vz-dim);white-space:nowrap}
 .vz-bax span.t0{transform:none}

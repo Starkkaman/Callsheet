@@ -162,7 +162,7 @@
     return [head].concat(d.rows.map(function (r) {
       var when = (r.soon ? '▲ ' : '') + r.dt + (r.soon ? ' · ' + r.soon : '');
       var lab = at(el('em', (r.day > d.days * 0.6 ? 'l' : '') + (r.soon ? ' wn' : ''), when), P(r.day));
-      return el('div', 'vz-blr row', [el('div', 'vz-bn', [el('b', null, r.n), el('span', null, r.s), el('span', 'vz-bdt' + (r.soon ? ' wn' : ''), when)]),
+      return el('div', 'vz-blr vz-blrow', [el('div', 'vz-bn', [el('b', null, r.n), el('span', null, r.s), el('span', 'vz-bdt' + (r.soon ? ' wn' : ''), when)]),
         el('div', 'vz-btk', [hide(at(el('i', r.soon ? 'soon' : null), P(r.day))), lab]),
         el('div', 'vz-ba', [r.a || '·', el('span', null, r.b)])]);
     })).concat(totalRow(d.total_label, d.total));
