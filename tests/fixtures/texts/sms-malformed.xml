@@ -1,0 +1,4 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<smses count="2" backup_date="1794367800000" type="full">
+  <sms protocol="0" address="+15550101234" date="1794363000000" type="1" body="first is fine" contact_name="Dana Reyes" />
+  <sms protocol="0" address="+15550101234" date="1794363100000" type="1" body="broken <here" contact_name="Dana Reyes" />

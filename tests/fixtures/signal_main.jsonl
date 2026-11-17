@@ -1,0 +1,27 @@
+﻿{"version": "1", "backupTimeMs": "1761900000000", "mediaRootBackupKey": "TUVESUFST09ULVNFQ1JFVC1LRVktMDEyMzQ1Njc4OWE="}
+{"account": {"profileKey": "QUNDVFBST0ZJTEUtU0VDUkVULUtFWS0wMTIzNDU2Nzg=", "username": "sam.01", "givenName": "Sam", "familyName": "Owner", "accountSettings": {"readReceipts": true}}}
+{"recipient": {"id": "1", "self": {"avatarColor": "A100"}}}
+{"recipient": {"id": "2", "contact": {"aci": "qqqqqgAAQACAAAAAAAAAAQ==", "pni": "u7u7uwAAQACAAAAAAAAAsg==", "e164": "15551110001", "profileKey": "QUxJQ0VQUk9GSUxFLVNFQ1JFVC1LRVktMDEyMzQ1Njc=", "identityKey": "QUxJQ0VJREVOVElUWS1TRUNSRVQtS0VZLTAxMjM0NTY=", "identityState": "VERIFIED", "profileGivenName": "Alice", "profileFamilyName": "Profile", "nickname": {"given": "Alice", "family": "Example"}, "registered": {}, "visibility": "VISIBLE"}}}
+{"recipient": {"id": "3", "contact": {"e164": "15559876543", "profileKey": "Qk9CUFJPRklMRS1TRUNSRVQtS0VZLTAxMjM0NTY3ODk=", "registered": {}}}}
+{"recipient": {"id": "4", "contact": {"aci": "zMzMzAAAQACAAAAAAAAAAw==", "profileGivenName": "Carol", "profileKey": "Q0FST0xQUk9GSUxFLVNFQ1JFVC1LRVktMDEyMzQ1Njc=", "identityKey": "Q0FST0xJREVOVElUWS1TRUNSRVQtS0VZLTAxMjM0NTY=", "registered": {}}}}
+{"recipient": {"id": "5", "group": {"masterKey": "R1JPVVBNQVNURVItU0VDUkVULUtFWS0wMTIzNDU2Nzg=", "whitelisted": true, "snapshot": {"title": {"title": "Climbing crew"}, "members": [{"userId": "qqqqqgAAQACAAAAAAAAAAQ==", "role": "DEFAULT"}], "inviteLinkPassword": "SU5WSVRFTElOSy1TRUNSRVQtS0VZLTAxMjM0NTY3ODk="}}}}
+{"recipient": {"id": "6", "releaseNotes": {}}}
+{"chat": {"id": "1", "recipientId": "2", "expireTimerVersion": 1}}
+{"chat": {"id": "2", "recipientId": "3", "expireTimerVersion": 1}}
+{"chat": {"id": "3", "recipientId": "5", "expireTimerVersion": 1}}
+{"chat": {"id": "4", "recipientId": "6", "expireTimerVersion": 1}}
+{"chatItem": {"chatId": "1", "authorId": "2", "dateSent": "1761800000000", "incoming": {"dateReceived": "1761800000500"}, "standardMessage": {"text": {"body": "Are we still on for Saturday?"}}}}
+{"chatItem": {"chatId": "1", "authorId": "1", "dateSent": "1761800060000", "outgoing": {"sendStatus": [{"recipientId": "2", "delivered": {}}]}, "standardMessage": {"text": {"body": "Yes, 10am at the gym."}}}}
+{"chatItem": {"chatId": "1", "authorId": "2", "dateSent": "1761800120000", "incoming": {"dateReceived": "1761800120500"}, "standardMessage": {"attachments": [{"pointer": {"locatorInfo": {"key": "QVRUQUNIS0VZLVNFQ1JFVC1LRVktMDEyMzQ1Njc4OWE=", "digest": "RElHRVNULVNFQ1JFVC1LRVktMDEyMzQ1Njc4OWFiY2Q="}}}]}}}
+{"chatItem": {"chatId": "1", "authorId": "2", "dateSent": "1761800180000", "incoming": {"dateReceived": "1761800180500"}, "standardMessage": {"text": {"body": "This one disappears"}}, "expiresInMs": "86400000"}}
+{"chatItem": {"chatId": "2", "authorId": "3", "dateSent": "1761800240000", "incoming": {"dateReceived": "1761800240500"}, "standardMessage": {"text": {"body": "Hi, it's Bob"}}}}
+{"chatItem": {"chatId": "3", "authorId": "4", "dateSent": "1761800300000", "incoming": {"dateReceived": "1761800300500"}, "standardMessage": {"text": {"body": "￼ can you bring the rope?", "bodyRanges": [{"start": 0, "length": 1, "mentionAci": "mZmZmQAAQACAAAAAAAAACQ=="}]}}}}
+{"chatItem": {"chatId": "3", "authorId": "2", "dateSent": "1761800360000", "incoming": {"dateReceived": "1761800360500"}, "standardMessage": {"text": {"body": "Agreed, good plan"}, "quote": {"targetSentTimestamp": "1761800000001", "authorId": "1", "text": {"body": "Rope?"}}}}}
+{"chatItem": {"chatId": "3", "authorId": "4", "dateSent": "1761800420000", "incoming": {"dateReceived": "1761800420500"}, "standardMessage": {"text": {"body": "ask ￼ about it", "bodyRanges": [{"start": 4, "length": 1, "mentionAci": "qqqqqgAAQACAAAAAAAAAAQ=="}]}}}}
+{"chatItem": {"chatId": "3", "authorId": "4", "dateSent": "1761800480000", "incoming": {"dateReceived": "1761800480500"}, "updateMessage": {"groupChange": {"updates": [{"groupNameUpdate": {"newGroupName": "x"}}]}}}}
+{"chatItem": {"chatId": "4", "authorId": "6", "dateSent": "1761800540000", "incoming": {"dateReceived": "1761800540500"}, "standardMessage": {"text": {"body": "Release notes text"}}}}
+{"chatItem": {"chatId": "99", "authorId": "2", "dateSent": "1761800600000", "incoming": {"dateReceived": "1761800600500"}, "standardMessage": {"text": {"body": "Unknown chat"}}}}
+{not json at all
+{"chatItem": {"chatId": "1", "authorId": "2", "dateSent": "1761800660000", "incoming": {"dateReceived": "1761800660500"}, "stickerMessage": {"sticker": {"packKey": "U1RJQ0tFUlBBQ0stU0VDUkVULUtFWS0wMTIzNDU2Nzg=", "emoji": "x"}}}}
+{"chatItem": {"chatId": "3", "authorId": "2", "dateSent": "1761800720000", "incoming": {"dateReceived": "1761800720500"}, "standardMessage": {"text": {"body": "👍 ￼ thanks", "bodyRanges": [{"start": 3, "length": 1, "mentionAci": "zMzMzAAAQACAAAAAAAAAAw=="}]}, "attachments": [{"pointer": {"locatorInfo": {"key": "QVRUQUNIS0VZMi1TRUNSRVQtS0VZLTAxMjM0NTY3ODk="}}}]}}}
+{"stickerPack": {"packId": "UEFDS0lELVNFQ1JFVC1LRVktMDEyMzQ1Njc4OWFiY2Q=", "packKey": "UEFDS0tFWS1TRUNSRVQtS0VZLTAxMjM0NTY3ODlhYmM="}}

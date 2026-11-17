@@ -1,0 +1,131 @@
+"""The Google client is read-only by construction: GET only to Gmail/Calendar, POST only to token/revoke."""
+import os
+import pathlib
+import re
+import sys
+import unittest
+from unittest import mock
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+APP = ROOT / "callsheet" / "app"
+sys.path.insert(0, str(APP))
+import google  # noqa: E402
+
+REAL = {"CALLSHEET_GOOGLE_AUTH_BASE": "", "CALLSHEET_GOOGLE_TOKEN_URL": "", "CALLSHEET_GOOGLE_API_BASE": ""}
+
+
+class AllowlistTest(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.dict(os.environ)
+        p.start()
+        self.addCleanup(p.stop)
+        for k in REAL:
+            os.environ.pop(k, None)
+
+    def test_defaults_are_google(self):
+        self.assertEqual(google.token_url(), "https://oauth2.googleapis.com/token")
+        self.assertEqual(google.revoke_url(), "https://oauth2.googleapis.com/revoke")
+        self.assertEqual(google.api_base(), "https://www.googleapis.com")
+        self.assertTrue(google.build_auth_url("id", "s", "c").startswith(
+            "https://accounts.google.com/o/oauth2/v2/auth?"))
+
+    def test_allowed(self):
+        for method, url in (
+                ("GET", "https://www.googleapis.com/gmail/v1/users/me/threads?q=x"),
+                ("GET", "https://www.googleapis.com/gmail/v1/users/me/threads/abc"),
+                ("GET", "https://www.googleapis.com/gmail/v1/users/me/profile"),
+                ("GET", "https://www.googleapis.com/calendar/v3/users/me/calendarList"),
+                ("GET", "https://www.googleapis.com/calendar/v3/calendars/a%40b.c/events?x=1"),
+                ("GET", "https://www.googleapis.com/drive/v3/files?q=x"),           # 0.6.0
+                ("GET", "https://www.googleapis.com/drive/v3/files/1AbC_d-9"),       # 0.6.0
+                ("GET", "https://www.googleapis.com/drive/v3/files/1AbC_d-9/export?mimeType=text%2Fplain"),
+                ("POST", "https://oauth2.googleapis.com/token"),
+                ("POST", "https://oauth2.googleapis.com/revoke")):
+            google.check_allowed(method, url)
+
+    def test_refused(self):
+        for method, url in (
+                ("POST", "https://www.googleapis.com/gmail/v1/users/me/messages/send"),
+                # 0.21.0: POST .../drafts (drafts.create) is allowed; everything else about drafts is not
+                ("POST", "https://www.googleapis.com/gmail/v1/users/me/drafts/send"),
+                ("PUT", "https://www.googleapis.com/gmail/v1/users/me/drafts/r123"),
+                ("PUT", "https://www.googleapis.com/gmail/v1/users/me/threads/abc"),
+                ("PATCH", "https://www.googleapis.com/calendar/v3/calendars/x/events/y"),
+                ("DELETE", "https://www.googleapis.com/calendar/v3/calendars/x/events/y"),
+                ("POST", "https://www.googleapis.com/calendar/v3/calendars/x/events"),
+                ("GET", "https://oauth2.googleapis.com/token"),
+                ("POST", "https://oauth2.googleapis.com/token/extra"),
+                # 0.6.0: Drive is GET-only files.list/get/export; nothing else under Drive
+                ("POST", "https://www.googleapis.com/drive/v3/files"),
+                ("PATCH", "https://www.googleapis.com/drive/v3/files/abc"),
+                ("DELETE", "https://www.googleapis.com/drive/v3/files/abc"),
+                ("POST", "https://www.googleapis.com/drive/v3/files/abc/copy"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/abc/permissions"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/abc/comments"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/generateIds"),
+                ("GET", "https://www.googleapis.com/drive/v3/files/a%2Fb/export"),
+                ("GET", "https://www.googleapis.com/drive/v3/about"),
+                ("GET", "https://www.googleapis.com/drive/v2/files"),
+                ("GET", "https://www.googleapis.com/upload/drive/v3/files"),
+                ("GET", "https://www.googleapis.com/gmail/v1/users/me/../../../drive/v3/files"),
+                ("GET", "https://evil.example/gmail/v1/users/me/threads"),
+                ("GET", "http://www.googleapis.com/gmail/v1/users/me/threads"),
+                ("GET", "https://www.googleapis.com.evil.example/gmail/v1/users/me/threads")):
+            with self.assertRaises(google.NotAllowed, msg=f"{method} {url}"):
+                google.check_allowed(method, url)
+
+    def test_request_refuses_before_network(self):
+        with mock.patch.object(google._opener, "open", side_effect=AssertionError("network used")):
+            with self.assertRaises(google.NotAllowed):
+                google.request("POST", "https://www.googleapis.com/gmail/v1/users/me/messages/send", form={})
+
+    def test_env_override_moves_the_allowlist(self):
+        os.environ["CALLSHEET_GOOGLE_API_BASE"] = "http://127.0.0.1:9"
+        google.check_allowed("GET", "http://127.0.0.1:9/gmail/v1/users/me/threads")
+        with self.assertRaises(google.NotAllowed):
+            google.check_allowed("GET", "https://www.googleapis.com/gmail/v1/users/me/threads")
+
+
+class SourceTest(unittest.TestCase):
+    NET = re.compile(r"^\s*(?:import|from)\s+(urllib\.request|http\.client|socket|ssl|smtplib)\b", re.M)
+
+    SDK = re.compile(r"^\s*(?:import|from)\s+(anthropic|openai|requests|httpx)\b", re.M)
+
+    def test_only_google_writer_slack_and_ha_open_connections(self):
+        for f in sorted(APP.glob("*.py")):
+            src = f.read_text(encoding="utf-8")
+            hits = self.NET.findall(src)
+            if f.name in ("google.py", "writer.py", "slack.py", "ha.py", "github.py"):  # ha.py: 0.5.1 notify only; github.py: 0.7.0 read-only
+                self.assertEqual(hits, ["urllib.request"], f.name)
+            elif f.name == "net.py":  # 0.10.0 connectors: the guarded GET (https:443, owner-added hosts, pinned address)
+                self.assertEqual(hits, ["http.client", "socket", "ssl"], f.name)
+            else:
+                self.assertEqual(hits, [], f.name)
+            # the Anthropic SDK is used (lazily) by writer.py only; no other HTTP libraries
+            self.assertEqual(self.SDK.findall(src), ["anthropic"] if f.name == "writer.py" else [], f.name)
+
+    def test_api_calls_are_get_only(self):
+        src = (APP / "google.py").read_text(encoding="utf-8")
+        inserts = drafts = rsvps = 0
+        for m in re.finditer(r'request\("(\w+)", ([^,)]+)[^\n]*', src):
+            method, target = call = m.groups()
+            if "token_url" in target or "revoke_url" in target:
+                self.assertEqual(method, "POST", call)
+            elif method == "POST" and "/gmail/v1/users/me/drafts\"" in m.group(0):
+                drafts += 1    # 0.21.0: drafts.create, owner-pressed (tests/test_gdrafts_0210.py)
+            elif method == "POST":
+                # 0.21.0: the one owner-pressed calendar write, events.insert (tests/test_calwrite_0210.py)
+                self.assertIn('+ "/calendar/v3/calendars/" + _q(calendar_id) + "/events"', m.group(0), call)
+                inserts += 1
+            elif method == "PATCH":
+                # 0.21.0 Answer invites (approved 2026-11-13): events.patch, attendees only (tests/test_rsvp_0210.py)
+                self.assertIn('/calendar/v3/calendars/{_q(calendar_id)}/events/{_q(event_id)}"', m.group(0), call)
+                self.assertIn("rsvp=", src[m.end():m.end() + 200], call)
+                rsvps += 1
+            else:
+                self.assertEqual(method, "GET", call)
+        self.assertEqual((inserts, drafts, rsvps), (1, 1, 1))
+
+
+if __name__ == "__main__":
+    unittest.main()

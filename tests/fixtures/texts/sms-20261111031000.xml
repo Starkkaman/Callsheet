@@ -1,0 +1,33 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--File Created By SMS Backup & Restore v10.20.002 on 11/11/2026 03:10:00-->
+<?xml-stylesheet type="text/xsl" href="sms.xsl"?>
+<smses count="8" backup_set="0b7c1f2e-0000-4000-8000-000000000001" backup_date="1794366600000" type="full">
+  <sms protocol="0" address="+1 (555) 010-1234" date="1794360000000" type="1" subject="null" body="Can you do the shoot Thursday at 10? &#55357;&#56832;" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="1794359990000" sub_id="1" readable_date="Nov 10, 2026 11:20:00 PM" contact_name="Dana Reyes" />
+  <sms protocol="0" address="5550101234" date="1794360300000" type="2" subject="null" body="Yes 👍 see you there &amp; bring the &lt;cards&gt;" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="Nov 10, 2026 11:25:00 PM" contact_name="Dana Reyes" />
+  <sms protocol="0" address="GOOGLE" date="1794361000000" type="1" subject="null" body="G-123456 is your Google verification code." toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="" contact_name="(Unknown)" />
+  <sms protocol="0" address="+15550109999" date="1794361500000" type="3" subject="null" body="draft never sent" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="" contact_name="Sam Lee" />
+  <sms protocol="0" address="+15550109999" date="1794361600000" type="1" subject="null" body="Lone half &#55357; here" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="" contact_name="Sam Lee" />
+  <mms date="1794362000000" rr="null" sub="null" ct_t="application/vnd.wap.multipart.related" read_status="null" seen="1" msg_box="1" address="+15550101234~+15550109999" sub_cs="null" resp_st="null" retr_st="null" d_tm="null" text_only="0" exp="null" locked="0" m_id="mid1" st="null" retr_txt_cs="null" retr_txt="null" creator="com.google.android.apps.messaging" date_sent="1794361990" read="1" m_size="12345" rpt_a="null" ct_cls="null" pri="null" sub_id="1" tr_id="tr1" resp_txt="null" ct_l="null" m_cls="personal" d_rpt="null" v="18" _id="101" m_type="132" readable_date="" contact_name="Dana Reyes, Sam Lee">
+    <parts>
+      <part seq="-1" ct="application/smil" name="null" chset="null" cd="null" fn="null" cid="&lt;smil&gt;" cl="smil.xml" ctt_s="null" ctt_t="null" text="&lt;smil&gt;&lt;body&gt;&lt;/body&gt;&lt;/smil&gt;" />
+      <part seq="0" ct="image/jpeg" name="IMG_0042.jpg" chset="null" cd="null" fn="null" cid="&lt;0&gt;" cl="IMG_0042.jpg" ctt_s="null" ctt_t="null" text="null" data="/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHR8eHR0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/" />
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text_0&gt;" cl="text_0.txt" ctt_s="null" ctt_t="null" text="Location for Thursday 📍 Pier 70" />
+    </parts>
+    <addrs>
+      <addr address="+15550101234" type="137" charset="106" />
+      <addr address="+15550109999" type="151" charset="106" />
+      <addr address="+15550100000" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="1794362600000" msg_box="2" address="+15550101234~+15550109999" m_type="128" contact_name="Dana Reyes, Sam Lee" text_only="1">
+    <parts>
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text_0&gt;" cl="text_0.txt" text="Got it, thanks both" />
+    </parts>
+    <addrs>
+      <addr address="insert-address-token" type="137" charset="106" />
+      <addr address="+15550101234" type="151" charset="106" />
+      <addr address="+15550109999" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <sms protocol="0" address="+15550101234" date="1794362900000" type="5" subject="null" body="failed one" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="" contact_name="Dana Reyes" />
+</smses>

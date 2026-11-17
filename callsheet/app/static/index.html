@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Daily Brief · Callsheet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="callsheet-version" content="{{version}}">
+<!-- Every URL in this app is relative: Home Assistant Ingress serves it under /api/hassio_ingress/<token>/.
+     server.py fills in the app version (?v= and the meta): new asset URLs after every update. -->
+<link rel="stylesheet" href="app.css?v={{version}}">
+<link rel="stylesheet" href="visuals.css?v={{version}}">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+<div class="app" id="app" data-look="calm" data-base="panel" data-mode="auto">
+
+<header class="top">
+  <div class="topbar">
+    <span class="brand disp">Callsheet</span>
+    <span class="tag sample" id="sample-tag" hidden>Sample data</span>
+    <span class="hnav">
+      <button type="button" class="hbtn" id="find-btn" aria-keyshortcuts="Control+K Meta+K /" aria-haspopup="dialog"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4 14 14"/></svg><span class="bl">Find</span></button>
+      <button type="button" class="hbtn" id="setup-btn"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 4h10M3 8h10M3 12h10M6 2.5v3M10 6.5v3M5 10.5v3"/></svg><span class="bl">Setup</span></button>
+      <button type="button" class="hbtn" id="back-btn" hidden>Back to brief</button>
+      <button type="button" class="hbtn lookbtn" id="look-btn" aria-expanded="false" aria-controls="look-panel"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 2v12"/></svg><span class="bl">Theme</span></button>
+    </span>
+  </div>
+  <div class="lookpanel" id="look-panel" role="region" aria-label="Theme" hidden>
+    <div class="grp" role="group" aria-labelledby="lbl-mode"><span class="label" id="lbl-mode">Theme</span>
+      <button type="button" class="chip" data-set-mode="light" aria-pressed="false">Light</button>
+      <button type="button" class="chip" data-set-mode="dark" aria-pressed="false">Dark</button>
+      <button type="button" class="chip" data-set-mode="auto" aria-pressed="true">Auto</button>
+      <span class="note">Auto follows your device.</span>
+    </div>
+    <span class="err" id="look-err" role="alert"></span>
+  </div>
+</header>
+
+<div class="banner update" id="update-note" role="status" hidden></div>
+
+<main class="main" id="main">
+  <p class="status" id="status" role="status">Loading…</p>
+</main>
+
+</div>
+<!-- Icons (16x16 line glyphs), cloned by app.js: the HTML parser puts them in the SVG namespace. -->
+<template id="icons">
+<svg data-i="mail" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1zM2 4.5l6 4.5 6-4.5"/></svg>
+<svg data-i="slack" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.3 2 4.7 14M11.3 2 9.7 14M2.5 5.7h11.5M2 10.3h11.5"/></svg>
+<svg data-i="cal" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>
+<svg data-i="signal" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.3c3.3 0 6 2.3 6 5.1s-2.7 5.1-6 5.1c-.8 0-1.5-.1-2.2-.4L2.5 13.6l.9-3C2.5 9.7 2 8.6 2 7.4 2 4.6 4.7 2.3 8 2.3z"/></svg>
+<svg data-i="note" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 1.8h6.2L13 4.6v9.6H4zM10.2 1.8v2.8H13M6 7.2h5M6 9.6h5M6 12h3"/></svg>
+<svg data-i="brief" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10M3 6.5h10M3 10h7M3 13.5h5"/></svg>
+<svg data-i="areas" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z"/></svg>
+<svg data-i="tasks" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2.5h11v11h-11zM5 8l2 2 4-4"/></svg>
+<svg data-i="chat" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2.5h11a1 1 0 0 1 1 1V10a1 1 0 0 1-1 1H7.5L4 14v-3H2.5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1zM5 6.7h6"/></svg>
+<svg data-i="send" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10M9 4l4 4-4 4"/></svg>
+<svg data-i="drive" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.8 2h4.4l4.3 7.5-2.2 4H3.7l-2.2-4zM5.8 2l4.4 7.5h4.3M1.5 9.5 5.8 2M3.7 13.5l2.2-4h4.3"/></svg>
+<svg data-i="back" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5"/></svg>
+<svg data-i="search" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4 14 14"/></svg>
+<svg data-i="close" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+<svg data-i="copy" class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5h7v8h-7zM3.5 10.5v-8h7"/></svg>
+<svg data-i="lock"class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7V5a3 3 0 0 1 6 0v2"/><rect x="3" y="7" width="10" height="7.5" rx="1" fill="currentColor"/></svg>
+</template>
+<script src="visuals.js?v={{version}}"></script>
+<script src="app.js?v={{version}}"></script>
+</body>
+</html>

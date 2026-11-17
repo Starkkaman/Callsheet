@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!DOCTYPE smses [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+<smses count="1" backup_date="1794367800000" type="full">
+  <sms protocol="0" address="+15550101234" date="1794363000000" type="1" body="&xxe;" contact_name="Dana Reyes" />
+</smses>
