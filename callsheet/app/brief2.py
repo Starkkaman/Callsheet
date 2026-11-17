@@ -213,7 +213,7 @@ class Planner:
         day0, day1 = L.day_bounds(dt.datetime.fromtimestamp(now, tz).date(), tz)
         refs = [f"cal:{e['id']}" for e in self.ms.events(since=day0, until=day1) if not e["all_day"]]
         for it in self.lv.items("merged_into IS NULL AND status NOT IN ('declined','done','cancelled') AND "
-                                "start_ts >= ? AND start_ts < ? AND all_day=0", (day0, day1)):
+                                "type != 'cleanup' AND start_ts >= ? AND start_ts < ? AND all_day=0", (day0, day1)):
             refs.append(f"item:{it['id']}")
         for i, f in enumerate(facts):
             f["ref"] = refs[i] if i < len(refs) and "time" in f else ""

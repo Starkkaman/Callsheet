@@ -942,7 +942,8 @@ class Today:
         osrc = self._srcs([it["id"] for it in lv["needs_you"] if it["id"] not in skip]) if res is not None else {}
         # 0.21.4 (tidy.older_of): long-past asks and quiet items from the first catch-up go to "Older, still open?"
         back = TY.backfill_before(self.ms)
-        quiet = TY.quiet_items(self.ms, [it["id"] for it in lv["needs_you"] if it["id"] not in skip]) if back else set()
+        quiet = TY.quiet_items(self.ms, [it["id"] for it in lv["needs_you"] if it["id"] not in skip and (
+            (it["from"][0].get("ts") if it["from"] else None) or it["created_at"]) < back]) if back else set()
         for it in lv["needs_you"]:
             if it["id"] in skip:
                 continue
@@ -959,6 +960,10 @@ class Today:
                    "never_hide": it["never_hide"], "seconds": int(now - (f.get("ts") or it["created_at"])),
                    "vip": bool(it.get("vip")), "invite": None, "late": "", "amount": "",
                    "area": self.area_of(res, self._origin(osrc.get(it["id"], [])))}
+            came = next((c.get("why") or "" for c in it.get("checks") or [] if isinstance(c, dict) and
+                         c.get("field") == "back"), "")
+            if came:                                       # 0.22.1: back from Clean up, saying why ("Sam wrote about it")
+                row["back"] = came
             if it.get("late"):                             # 0.22.0: a passed deadline (a past-due bill): urgent, late
                 row.update(late=it["late"]["word"], amount=it.get("amount") or "", urgent=True)
             if it.get("subtype") == "invite":              # 0.21.0 (heads.py): an invite to answer

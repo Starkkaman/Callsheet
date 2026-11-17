@@ -66,7 +66,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.22.0"
+APP_VERSION = "0.22.1"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -1146,15 +1146,21 @@ class App:
                     got = self.contacts.resolve(source, handle, name)
                 except Exception:  # noqa: BLE001 (contacts not ready: People and handles as before)
                     got = None
-            if got:
-                return got
             kind = {"gmail": "email", "slack": "slack", "signal": "signal"}.get(source)
             d = fresh()["dir"]
-            p = d.person_of(kind, handle) if d is not None and kind else None
+            h = str(handle or "")
+            p = d.person_of(kind, h) if d is not None and kind else None
+            if p is None and d is not None and kind == "email" and h.lower() != h:
+                p = d.person_of(kind, h.lower())
             if p and p.get("id") is not None:
-                person.states[f"person:{p['id']}"] = p.get("state") or ""   # 0.21.4: read_tier (suggested people)
+                # 0.21.4: read_tier and the promo rules (a suggested person isn't known). 0.22.1: also when contacts
+                # resolved the sender to the same People row, as they do first on every install ("person:p…")
+                person.states[f"person:{p['id']}"] = p.get("state") or ""
+            if got:
+                return got
+            if p and p.get("id") is not None:
                 return f"person:{p['id']}", p.get("name") or ""
-            return str(handle or "").lower(), ""
+            return h.lower(), ""
         person.takes_name = True
         person.states = {}
 
@@ -1200,9 +1206,10 @@ class App:
                                      if conns is not None else None)
         self.ledger_runner.hooks.append(self.today.tick)          # 0.18.0: Today's reminders
         # 0.21.4 Tidy up (tidy.py): confirmed People only count as known (never suggested ones)
-        self.tidy = tidy_mod.Tidy(self.messages, self.clock, known=lambda: tidy_mod.Known.load(
-            self.messages, self._confirmed_emails()), owner_names=lambda: background.owner_names(
-                self.store, getattr(self, "people", None)))
+        # 0.22.1: the read-time rules use the same Known as Tidy up, so new mail is judged as the owner's Tidy up judged
+        self.tidy = tidy_mod.Tidy(self.messages, self.clock, known=self._tidy_known,
+                                  owner_names=lambda: background.owner_names(self.store, getattr(self, "people", None)))
+        self.extractor.known_load = self._tidy_known
         self.today.tidy = self.tidy
         # 0.22.0 (owner approved 2026-11-16): the action registry and its journal (actions.py), shared with Chat
         self.actions = actions_mod.Actions(self.messages, self.clock, today=self.today, prefs=self.prefs,
@@ -1421,12 +1428,22 @@ class App:
 
     # --- 0.21.4: Refresh and Tidy up (owner-pressed only) ---------------------------------------------------------
     def _confirmed_emails(self):
+        """Known addresses for the rules: confirmed People's and (0.22.1) the owner's contacts' (the read-time rules
+        already took a contact as known; Tidy up now does too, so it never moves what new mail would keep)."""
         try:
             rows = self.store.db.execute("SELECT h.value FROM person_handles h JOIN people p ON p.id=h.person WHERE "
                                          "p.state IN ('confirmed','me') AND h.kind='email'").fetchall()
         except Exception:  # noqa: BLE001 (no People yet: nobody counts as known)
-            return []
-        return [r[0] for r in rows]
+            rows = []
+        out = [r[0] for r in rows]
+        try:
+            out += list(self.contacts.index()["by_email"]) if getattr(self, "contacts", None) is not None else []
+        except Exception:  # noqa: BLE001 (contacts not ready: People only)
+            pass
+        return out
+
+    def _tidy_known(self):
+        return tidy_mod.Known.load(self.messages, self._confirmed_emails())
 
     def today_refresh(self, _body):
         """POST api/today/refresh: rebuild Today and start a fresh day's brief from what is already read (no mail is

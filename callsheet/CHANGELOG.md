@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.1
+
+- **What you tidied stays tidied.** After Tidy up, new mail from the same promo senders now goes straight to Clean up
+  (senders only suggested for People no longer count as people you know). A second copy or another read of a tidied
+  mail, and more machine mail or channel posts about the same thing, join it in Clean up. A tidied item comes back to
+  Needs you only when a person (or you) writes about it, and then it says why ("Back from Clean up: Sam wrote about
+  it"). A clash you dismissed stays dismissed until one side moves, and "Older, still open?" keeps its items when only
+  machine mail touches them. Security alerts and invites are never hidden.
+
 ## 0.22.0
 
 - **Chat can do what you can.** Ask in your own words and Chat does it, through the same functions as the buttons:

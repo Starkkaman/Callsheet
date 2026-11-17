@@ -1230,6 +1230,7 @@ class Extractor:
         self.lv = L.Ledger(ms, self.tz_name, clock)
         self.stats = {"read": 0, "failed": 0, "requests": 0, "seconds": 0.0}
         self._known = (0.0, None)            # 0.21.4: tidy.Known (domains and threads the owner wrote to), cached
+        self.known_load = None               # 0.22.1: the caller's Known loader (the one Tidy up uses), else Known.load
 
     # --- context ---------------------------------------------------------------------------------------------------
     def _key(self, source, handle, name=""):
@@ -1404,7 +1405,7 @@ class Extractor:
         now = self.monotonic()
         if k is None or now - t > KNOWN_S:
             try:
-                k = TY.Known.load(self.ms)
+                k = self.known_load() if self.known_load is not None else TY.Known.load(self.ms)
             except Exception:  # noqa: BLE001 (nobody counts as known: the rules still keep what is real)
                 k = TY.Known()
             self._known = (now, k)
@@ -1426,6 +1427,21 @@ class Extractor:
         keep = [n for n, j in judged.items() if not j]
         left = leave_out(parsed, keep, lambda n: judged[n][1])
         return left, (next(j[1] for j in judged.values() if j) if left else "")
+
+    def signal_of(self, row, ctx, tier, noise, gated):
+        """0.22.1: who wrote, when this message is a real new signal about what it names ("Sam wrote about it"), else
+        "": machine mail (read narrowly, an automated or role address), promo, a channel or group post not addressed to
+        the owner are never one."""
+        if row.get("direction") == "out" or ctx["sender"][0] == L.OWNER:
+            return "you wrote about it"
+        if noise or gated or machine_sender(row, tier):
+            return ""
+        if row.get("source") == "gmail" and TY.promo_of(row, self.known(), ctx["owner_names"])[0]:
+            return ""
+        name = ctx["sender"][1] or row.get("sender_name") or ""
+        if not name or "@" in name:
+            name = "someone"
+        return f"{_clip(name, 40)} wrote about it"
 
     def read(self, row, cap_tokens=None):
         """Read one message (a messages.db row) into the ledger. Returns ledger.apply's result plus "conflicts",
@@ -1523,6 +1539,9 @@ class Extractor:
                 it["checks"].append({"field": "text", "value": "", "why": f"message cut by {ctx['cut']} characters "
                                      "to fit the model"})
         msg = self.ledger_msg(row, ctx)
+        # 0.22.1: a real new signal (a person or the owner writing) may bring a tidied item back; nothing else does
+        msg["signal"] = self.signal_of(row, ctx, tier, bool(pleft or pwhy) or nothing,
+                                       slack_gate or (group_chat(row) and not addressed(row, ctx, thread)))
         now = self.clock()
         tz = ctx["tz"]
         seconds = self.monotonic() - t0

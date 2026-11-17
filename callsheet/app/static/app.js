@@ -1402,6 +1402,7 @@
   function tdNeedRow(r) {
       var b = btn('nr', [tdIco(r.icon, r.source), h('span', { class: 'who' }, [r.who, r.mine ? h('span', { class: 'mine' }, 'You said') : null]),
         h('span', { class: 'ag' }, tdAge(r)), h('span', { class: 'why' }, areaLead(r.area).concat([r.late ? h('b', { class: 'late' }, r.late + ' · ') : null,   /* 0.22.0: past its deadline; its area */
+          r.back ? r.back + '. ' : null,   /* 0.22.1: back from Clean up, saying why */
           (r.likely ? 'Likely: ' : '') + r.why + (r.amount ? ' · ' + r.amount : '')]))], null, function () { tdGo('item', r.id); });
       var l = r.invite ? tdLink(r.invite.link, 'k nrl') : null;   /* 0.21.0: an invite, answered where it lives */
       var rs = r.invite && r.invite.rsvp ? rsvpBox(r.invite.rsvp, r.id, 'today') : null;   /* or here: Yes, No, Maybe */

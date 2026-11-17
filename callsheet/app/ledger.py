@@ -429,16 +429,23 @@ def same_delivery(db, old, it, tz, message=None):
     return 1.0 + sim
 
 
-def find_same(db, it, tz, anchor, message=None):
+def find_same(db, it, tz, anchor, message=None, among=None):
     """An open item the new one repeats (same type and person, same time or the same thing), else None.
     Trips merge with any overlapping open trip (the hotel mail and the airline mail are one trip). Deliveries merge
-    only as one package (same_delivery)."""
+    only as one package (same_delivery). among: only these item ids, whatever their type now (0.22.1: tidied items,
+    Clean up lines that were this type)."""
     trip = it["type"] == "event" and it.get("subtype") == "trip"
     if not it.get("who") and not trip:
         return None
     args = [it["type"], anchor - MERGE_DAYS * 86400]
     sql = ("SELECT * FROM ledger_items WHERE type=? AND merged_into IS NULL AND created_at >= ? "
            "AND status NOT IN ('declined','done','cancelled')")
+    if among is not None:
+        if not among:
+            return None
+        args = [anchor - MERGE_DAYS * 86400] + sorted(among)
+        sql = ("SELECT * FROM ledger_items WHERE merged_into IS NULL AND created_at >= ? AND status NOT IN "
+               f"('declined','done','cancelled') AND id IN ({','.join('?' * len(among))})")
     if trip:
         sql += " AND subtype='trip'"
     else:
@@ -589,6 +596,91 @@ def trip_parent(db, it, tz):
     return None
 
 
+# ---- 0.22.1: what the owner tidied stays tidied ---------------------------------------------------------------------------
+# Tidy up (tidy.py) moves an item to Clean up (type cleanup) and keeps the move in tidy_moves (state 'moved'). The item
+# is the one place its message lands: a re-read or a second copy of the message, or a later message that repeats it
+# (find_same by its type before the move), joins it in Clean up. It comes back only on a real new signal (msg "signal":
+# a person or the owner writing about it, never machine mail, promo or a channel post not addressed to the owner), with
+# the reason in a "back" check, a "tidy_back" history line and the move's state 'back' (Tidy's Undo leaves it alone).
+COPY_S = 600          # a second copy of a mail (another account, an import): same sender and subject within this
+
+
+def _tidy_on(db):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tidy_moves'").fetchone() is not None
+
+
+def tidied_moves(db):
+    """{item id: (tidy_moves row id, type before the move)} for the items Tidy up moved that are still moved."""
+    if not _tidy_on(db):
+        return {}
+    out = {}
+    for r in db.execute("SELECT t.id, t.item, t.before FROM tidy_moves t JOIN ledger_items i ON i.id=t.item WHERE "
+                        "t.state='moved' AND i.type='cleanup' ORDER BY t.id"):
+        try:
+            was = (json.loads(r["before"]) or {}).get("type") or ""
+        except ValueError:
+            was = ""
+        out[r["item"]] = (r["id"], was)
+    return out
+
+
+def copies(db, message):
+    """This message's id and its copies' (Gmail: the same sender and subject within COPY_S)."""
+    m = db.execute("SELECT id, source, sender, subject, ts FROM messages WHERE id=?", (message,)).fetchone()
+    if m is None or m["source"] != "gmail" or not (m["subject"] or "").strip() or m["ts"] is None:
+        return [message]
+    return [r["id"] for r in db.execute(
+        "SELECT id FROM messages WHERE source='gmail' AND lower(sender)=lower(?) AND subject=? AND ts BETWEEN ? AND ? "
+        "AND deleted_at IS NULL", (m["sender"], m["subject"], m["ts"] - COPY_S, m["ts"] + COPY_S))] or [message]
+
+
+def find_tidied(db, it, tz, anchor, message=None, moves=None):
+    """The tidied item a new item repeats: (item, from this message or a copy?) or (None, False). Never for a Clean up
+    line, a security alert, an invite or a never-hidden item (those keep their own way)."""
+    if it["type"] == "cleanup" or it.get("subtype") in ("security", "invite") or it.get("never_hide"):
+        return None, False
+    moves = tidied_moves(db) if moves is None else moves
+    mine = {i for i, (_m, was) in moves.items() if was == it["type"]}
+    if not mine:
+        return None, False
+    if message is not None:
+        ids = copies(db, message)
+        got = {r["item"] for r in db.execute(f"SELECT DISTINCT item FROM ledger_sources WHERE message IN "
+                                             f"({','.join('?' * len(ids))})", ids)} & mine
+        if got:
+            best = max((get_item(db, i) for i in got), key=lambda o: (similar(
+                o["what"] + " " + o["purpose"], (it.get("what") or "") + " " + (it.get("purpose") or "")), o["id"]))
+            return best, True
+    return find_same(db, it, tz, anchor, message, among=mine), False
+
+
+def bring_back(db, item_id, why, now, message=None):
+    """A tidied item comes back where it was (its type before Tidy up), saying why. True when it came back."""
+    if not _tidy_on(db):
+        return False
+    m = db.execute("SELECT * FROM tidy_moves WHERE item=? AND state='moved' ORDER BY id DESC LIMIT 1",
+                   (item_id,)).fetchone()
+    it = get_item(db, item_id)
+    if m is None or it is None or it["type"] != "cleanup":
+        return False
+    was = (json.loads(m["before"]) or {}).get("type") or "ask"
+    checks = [c for c in it.get("checks") or [] if not (isinstance(c, dict) and c.get("field") in ("tidy", "back"))]
+    checks.append({"field": "back", "value": m["grp"], "why": why[:200]})
+    db.execute("UPDATE ledger_items SET type=?, checks=?, updated_at=? WHERE id=?",
+               (was, json.dumps(checks), now, item_id))
+    history(db, item_id, "tidy_back", now, message, note=why[:300], fields={"type": ["cleanup", was]})
+    db.execute("UPDATE tidy_moves SET state='back' WHERE id=?", (m["id"],))
+    return True
+
+
+def _sources_of(db, item_id):
+    return {r["message"] for r in db.execute("SELECT message FROM ledger_sources WHERE item=?", (item_id,))}
+
+
+def back_why(msg):
+    return f"Back from Clean up: {msg['signal']}" if msg.get("signal") else ""
+
+
 # --- one message's reading -------------------------------------------------------------------------------------------
 def apply(db, msg, parsed, now, tz):
     """Apply one message's normalised reading (extract.normalize): updates first, then the new items (merged into an
@@ -609,10 +701,27 @@ def apply(db, msg, parsed, now, tz):
         if it.get("subtype") == "security" and u.get("status"):     # 0.21.0: only the owner's Done closes one
             out["drops"].append({"what": "update", "id": u.get("ref"), "why": "a security alert closes only by your Done"})
             continue
+        if msg.get("signal") and it["type"] == "cleanup" and u.get("status") not in CLOSED and \
+                mid not in _sources_of(db, it["id"]):
+            bring_back(db, it["id"], back_why(msg), now, mid)    # 0.22.1: a person writes about a tidied item
+            it = get_item(db, it["id"])
         _update(db, it, u, mid, now, out)
     closed_now = set(out["closed"])
+    moves = tidied_moves(db)
     for it in parsed.get("items") or []:
         same = find_same(db, it, tz, msg.get("ts") or now, mid)
+        if same is None and moves:
+            # 0.22.1: a tidied item stays the one place its message lands; a real new signal brings it back
+            same, again = find_tidied(db, it, tz, msg.get("ts") or now, mid, moves)
+            if same is not None and msg.get("signal") and not again and bring_back(db, same["id"], back_why(msg),
+                                                                                    now, mid):
+                moves.pop(same["id"], None)
+                same = get_item(db, same["id"])
+            elif same is not None and not any(isinstance(c, dict) and c.get("field") == "tidy" and
+                                              c.get("value") == "again" for c in same.get("checks") or []):
+                it = dict(it, checks=list(it.get("checks") or []) + [
+                    {"field": "tidy", "value": "again", "why": "already in Clean up (Tidy up): " +
+                     ("the same message read again" if again else "more about it, from no one writing to you")}])
         if same is not None:
             out["items"].append(merge(db, same, it, mid, now))
             out["merged"].append(same["id"])

@@ -168,6 +168,13 @@ def _set_group(db, it, item_id, group, now, message):
     rows = db.execute("SELECT * FROM ledger_conflicts WHERE state='open' AND a_kind='item' AND a_ref=? AND "
                       "b_kind='event' AND kind='away' ORDER BY (entries = ''), id", (item_id,)).fetchall()
     rows = [r for r in rows if r["entries"] or r["b_ref"] in group]
+    if not rows:
+        # 0.22.1: the owner dismissed this trip's clash: it stays dismissed while no entry is added to its list
+        for r in db.execute("SELECT id, entries FROM ledger_conflicts WHERE state='resolved' AND resolved_why='dismissed' "
+                            "AND a_kind='item' AND a_ref=? AND kind='away' AND entries != '' ORDER BY id DESC",
+                            (item_id,)).fetchall():
+            if set(order) <= set(L.group_entries(r)):
+                return r["id"], False, []
     closed = []
     for r in rows[1:]:
         _resolve(db, r["id"], "grouped", now)
@@ -357,6 +364,21 @@ def _made_together(db, a_id, b_id):
                       (a_id, b_id)).fetchone() is not None
 
 
+HELD_S = 15 * 60       # 0.22.1: a clash the owner dismissed stays dismissed while its time is the same (within this)
+
+
+def _kept_dismissed(db, a_kind, a_ref, b_kind, b_ref, slot):
+    """0.22.1: the owner dismissed this clash (the same two sides, the same time): the re-check doesn't open it again.
+    An item that moves makes a new clash."""
+    for r in db.execute("SELECT slot_start, slot_end FROM ledger_conflicts WHERE state='resolved' AND "
+                        "resolved_why='dismissed' AND ((a_kind=? AND a_ref=? AND b_kind=? AND b_ref=?) OR (a_kind=? AND "
+                        "a_ref=? AND b_kind=? AND b_ref=?))",
+                        (a_kind, a_ref, b_kind, b_ref, b_kind, b_ref, a_kind, a_ref)).fetchall():
+        if abs((r["slot_start"] or 0) - (slot[0] or 0)) <= HELD_S and abs((r["slot_end"] or 0) - (slot[1] or 0)) <= HELD_S:
+            return True
+    return False
+
+
 def _pair(db, a_kind, a_ref, b_kind, b_ref):
     return db.execute("SELECT * FROM ledger_conflicts WHERE state='open' AND ((a_kind=? AND a_ref=? AND b_kind=? AND "
                       "b_ref=?) OR (a_kind=? AND a_ref=? AND b_kind=? AND b_ref=?))",
@@ -482,6 +504,8 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                     db.execute("UPDATE ledger_conflicts SET slot_start=?, slot_end=?, kind=?, confidence=?, candidate=?, "
                                "updated_at=? WHERE id=?", (slot[0], slot[1], k, conf, cand, now, old["id"]))
                     keep.add(old["id"])
+                elif _kept_dismissed(db, "item", item_id, kind, ref, slot):
+                    pass
                 else:
                     cur = db.execute(
                         "INSERT INTO ledger_conflicts (a_kind, a_ref, b_kind, b_ref, slot_start, slot_end, kind, "

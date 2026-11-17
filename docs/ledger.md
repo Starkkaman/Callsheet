@@ -289,7 +289,16 @@ the type, subtype and checks and reopens those clashes.
   block excepted); at most `CLASH_PER_ITEM` (3) per item, the rest one grouped line.
 - **Older, still open?** (`older_of`, Today): asks with no time asked more than 14 days ago, items whose deadline
   passed more than 14 days ago, and items from the first catch-up (message before the first read) with no activity
-  since (`quiet_items`). Never security, invites, never-hidden items or a VIP's.
+  since (`quiet_items`; 0.22.1: only a real signal counts as activity, `real_signal`: the owner's own message or a
+  person writing, never machine mail, promo or a channel post). Never security, invites, never-hidden items or a VIP's.
+- **Tidied stays tidied** (0.22.1, `ledger.find_tidied`, `bring_back`): a new item that repeats a tidied one (by its type
+  before the move, or from the same message or a Gmail copy of it: same sender and subject within `COPY_S`) joins it in
+  Clean up. It comes back only when the message is a real signal (`Extractor.signal_of`), with a `back` check ("Back
+  from Clean up: Sam wrote about it", shown on its Needs you row), a `tidy_back` history row and the move's state
+  `back` (Undo leaves it). A clash the owner dismissed stays dismissed while its time is the same
+  (`conflicts._kept_dismissed`, a trip's grouped clash while no entry is added). The live resolver keeps a suggested
+  People row's state when contacts resolve the sender, and the read-time rules use Tidy up's known people (confirmed
+  People and contacts).
 - **Tidy up from Chat**: when the owner's own latest message asks to tidy up (`chatstore.action_intent`, quoted text
   left out), Chat may call `propose_action` with action `tidy` and no items. The card says how many items move, by
   group; it always waits for Confirm (a batch), which runs `Tidy.run(how="chat")`; the card's Undo puts the whole run

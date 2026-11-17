@@ -35,6 +35,7 @@ AGE_S = AGE_DAYS * 86400
 CLASH_PER_ITEM = 3
 HEAD = 600                    # promo cues count in the subject and this much of the text
 BANNER_KEY = "tidy_banner_0214"
+BANNER_REV = "0221"   # bump to offer Tidy up once more after an update
 
 # ---- rule 1: promo mail without headers -------------------------------------------------------------------------------
 # Mailing services' sending domains (a list sender, whatever the brand) and the marketing subdomains brands send from.
@@ -446,7 +447,10 @@ class Tidy:
     def banner(self, seen=False):
         """Today's one-time offer after the update: {count, text} while there is something to tidy and the owner
         hasn't pressed Tidy up or Not now."""
-        if seen or self._read("SELECT 1 FROM tidy_runs LIMIT 1"):
+        if seen:
+            return None
+        # 0.22.1: offered again once after this update (items that came back before the fix), whatever ran before
+        if self.ms.meta("tidy_banner_rev", "") == BANNER_REV and self._read("SELECT 1 FROM tidy_runs LIMIT 1"):
             return None
         n = self.count()
         if not n:
@@ -484,14 +488,20 @@ class Tidy:
                 counts[m["grp"]] = counts.get(m["grp"], 0) + 1
             total = sum(counts.values())
             db.execute("UPDATE tidy_runs SET moved=?, counts=? WHERE id=?", (total, json.dumps(counts), rid))
+            db.execute("INSERT INTO meta (key, value) VALUES ('tidy_banner_rev', ?) ON CONFLICT(key) DO UPDATE SET "
+                       "value=excluded.value", (json.dumps(BANNER_REV),))
             return {"run": rid, "moved": total, "counts": counts}
         return self.ms.write(w)
 
     def dismiss(self):
         """The banner's Not now: an empty run (nothing moved), so the offer doesn't come back."""
         now = self.clock()
-        return self.ms.write(lambda db: db.execute("INSERT INTO tidy_runs (at, how, moved) VALUES (?,?,0)",
-                                                   (now, "not now")).lastrowid)
+        def w(db):
+            rid = db.execute("INSERT INTO tidy_runs (at, how, moved) VALUES (?,?,0)", (now, "not now")).lastrowid
+            db.execute("INSERT INTO meta (key, value) VALUES ('tidy_banner_rev', ?) ON CONFLICT(key) DO UPDATE SET "
+                       "value=excluded.value", (json.dumps(BANNER_REV),))
+            return rid
+        return self.ms.write(w)
 
     def undo(self, rid):
         """Puts a whole run back: each item as it was, its clashes open again (those still resolved by the run)."""
@@ -530,25 +540,48 @@ def backfill_before(ms):
     return r[0]["a"] if r and r[0]["a"] else None
 
 
+def real_signal(row):
+    """0.22.1: a message that is real new activity on what it touches: the owner's own, or a person writing. Never
+    machine mail (machine_mail), promo (promo_of) or a Slack channel post."""
+    row = dict(row)
+    if row.get("direction") == "out":
+        return True
+    if row.get("source") == "gmail":
+        return not machine_mail(row) and not promo_of(row)[0]
+    return not slack_channel(row)
+
+
 def quiet_items(ms, ids):
-    """Items with no activity since they were made: only their creating source, no history beyond creation and no
-    later message in the creating thread."""
+    """Items with nothing new since they were made: no later source, history line or message in the creating thread
+    that is a real signal (real_signal: a person or the owner writing). 0.22.1: machine mail, promo and channel posts
+    that touch an item (a merge, an update, a later mail in its thread) don't bring it out of "Older, still open?", nor
+    do the sweeps' own marks; the owner's own changes do."""
     ids = [int(i) for i in ids]
     if not ids:
         return set()
-    out = set()
     marks = ",".join("?" * len(ids))
-    busy = {r["item"] for r in ms._read(f"SELECT DISTINCT item FROM ledger_sources WHERE role != 'created' AND item IN "  # noqa: SLF001
-                                        f"({marks})", ids)}
-    busy |= {r["item"] for r in ms._read(f"SELECT DISTINCT item FROM ledger_history WHERE kind NOT IN ('created','tidy',"  # noqa: SLF001
-                                         f"'tidy_undo') AND item IN ({marks})", ids)}
-    for r in ms._read("SELECT s.item, m.source, m.account, m.thread, m.ts FROM ledger_sources s JOIN messages m ON "  # noqa: SLF001
-                      f"m.id=s.message WHERE s.role='created' AND s.item IN ({marks})", ids):
+    real = {}
+
+    def is_real(mid):
+        if mid not in real:
+            r = ms._read("SELECT * FROM messages WHERE id=?", (mid,))  # noqa: SLF001
+            real[mid] = bool(r) and real_signal(r[0])
+        return real[mid]
+    busy = {r["item"] for r in ms._read(f"SELECT DISTINCT item, message FROM ledger_sources WHERE role != 'created' "  # noqa: SLF001
+                                        f"AND item IN ({marks})", ids) if is_real(r["message"])}
+    for r in ms._read(f"SELECT item, kind, message FROM ledger_history WHERE kind NOT IN ('created','tidy','tidy_undo',"  # noqa: SLF001
+                      f"'tidy_back') AND item IN ({marks})", ids):
+        if r["item"] not in busy and (is_real(r["message"]) if r["message"] is not None else
+                                      str(r["kind"]).startswith("owner") or r["kind"] == "note"):
+            busy.add(r["item"])
+    out = set()
+    for r in ms._read("SELECT s.item, m.id, m.source, m.account, m.thread, m.ts FROM ledger_sources s JOIN messages m "  # noqa: SLF001
+                      f"ON m.id=s.message WHERE s.role='created' AND s.item IN ({marks})", ids):
         if r["item"] in busy:
             continue
-        later = ms._read("SELECT 1 FROM messages WHERE source=? AND account=? AND thread=? AND ts > ? AND "  # noqa: SLF001
-                         "deleted_at IS NULL LIMIT 1", (r["source"], r["account"], r["thread"], r["ts"]))
-        if not later:
+        later = ms._read("SELECT * FROM messages WHERE source=? AND account=? AND thread=? AND ts > ? AND "  # noqa: SLF001
+                         "deleted_at IS NULL ORDER BY ts LIMIT 50", (r["source"], r["account"], r["thread"], r["ts"]))
+        if not any(real_signal(m) for m in later):
             out.add(r["item"])
     return out
 
