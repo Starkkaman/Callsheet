@@ -68,7 +68,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.24.0"
+APP_VERSION = "0.24.1"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -1324,6 +1324,11 @@ class App:
             self._sync_cals()                  # 0.23.0: the calendar choices the ledger reads (need.py)
         except Exception as e:  # noqa: BLE001
             print(f"calendar choices: {type(e).__name__}", file=sys.stderr, flush=True)
+        try:                                   # 0.24.1: open clashes whose time has passed close at start (no alert)
+            now0 = self.clock()
+            self.messages.write(lambda db: conflicts_mod.resolve_past(db, now0))
+        except Exception as e:  # noqa: BLE001 (the sweep closes them later)
+            print(f"past clashes: {type(e).__name__}", file=sys.stderr, flush=True)
         # 0.22.0 (owner approved 2026-11-16): the action registry and its journal (actions.py), shared with Chat
         self.actions = actions_mod.Actions(self.messages, self.clock, today=self.today, prefs=self.prefs,
                                            tidy=self.tidy, store=self.store, oldata=getattr(self, "oldata", None),

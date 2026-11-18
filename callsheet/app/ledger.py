@@ -1197,6 +1197,10 @@ def section_of(it, now, tz):
     if t == "cleanup":
         return "clean_up"
     if t == "ask":
+        if it.get("subtype") == "invite":
+            sp = span(it, tz)
+            if sp is not None and sp[1] <= now:
+                return "none"            # 0.24.1: no RSVP ask for an invite whose time has passed
         return "none" if it["status"] == "waiting_on_them" else "needs_you"
     if t == "commitment" and it["status"] == "claimed":
         return "needs_you"

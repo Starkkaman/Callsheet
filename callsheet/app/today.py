@@ -941,6 +941,7 @@ class Today:
                     if it.get("cal_ref") is not None:
                         ks.add(f"e:{it['cal_ref']}")
             keys.append((c, ks))
+        lanes["clashes"] = [m for m in lanes["clashes"] if m["e"] > now]   # 0.24.1: no mark for a clash that is over
         for m in lanes["clashes"]:
             got = next((c for c, ks in keys if m["a"] in ks and m["b"] in ks), None)
             m["clash"] = got["id"] if got else None
@@ -1265,6 +1266,8 @@ class Today:
             return "the calendar entry was cancelled"
         if w == "grouped":
             return ""                      # 0.22.x: folded into the trip's one grouped clash
+        if w == C.PAST_WHY:
+            return ""                      # 0.24.1: its time passed: no row ("Cleared …") for that
         if w == "entries cleared":
             return "nothing on your calendar during the trip now"
         for k, ref in ((c["a_kind"], c["a_ref"]), (c["b_kind"], c["b_ref"])):
@@ -2427,8 +2430,8 @@ class Today:
                 batches.setdefault(r["batch"] or -r["id"], []).append((r, it))
             elif r["conflict"] is not None:
                 c = self._read("SELECT * FROM ledger_conflicts WHERE id=?", (r["conflict"],))
-                if not c or c[0]["state"] != "open":
-                    self._set_rem(r["id"], "cleared", now)
+                if not c or c[0]["state"] != "open" or (c[0]["slot_end"] or c[0]["slot_start"] or now + 1) <= now:
+                    self._set_rem(r["id"], "cleared", now)    # 0.24.1: never a phone reminder for a clash that is over
                     continue
                 state = self._push(f"Clash {slot_word(c[0]['slot_start'], now, tz)}", "You asked to be reminded.",
                                    f"callsheet-remind-{r['id']}")

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.1
+
+- **No more clashes for dates in the past.** A clash is made, or stays open, only while its time hasn't passed, with
+  half an hour's grace for one happening now. This holds for clashes between two things, for a trip or time off with
+  the entries during it, and for Maybe clashes. Open clashes whose time has passed close on their own as "In the past"
+  (when Callsheet starts and at every check): noted in the item's history, with no alert and no Today row.
+- **No phone alerts about the past.** A clash alerts your phone only when it is first seen while still ahead, never
+  when it was found while catching up on older mail or re-checking old items, and a reminder you set on a clash isn't
+  sent once it is over.
+- **Over means gone from the screens.** Today's Clashes, the Day strip, the Agenda's clash marks and Talk it
+  through's Choose step leave out clashes that are over. Events that are over give no Heads-up rows, no "Does this
+  need you?" cards and no invites to answer.
+
 ## 0.24.0
 
 The filtering fixes from the owner's secret-shopper audit (2026-11-17).

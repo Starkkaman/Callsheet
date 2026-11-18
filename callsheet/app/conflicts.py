@@ -53,6 +53,35 @@ AWAY = {"off": "you're off that day", "away": "you're away then", "booked": "you
 _AVAIL = re.compile(r"\b(?:be (?:home|around|there|in town|available|free)|(?:anyone|someone|somebody)\b[^.?!\n]{0,30}"
                     r"\b(?:home|around|there)|are you (?:free|around|home|available|in town)|availab\w*)\b", re.I)
 SWEEP_DAYS = 400
+# 0.24.1 (the owner on 0.24.0: "I'm getting inundated with clashes for dates in the past"): a clash is made or kept open
+# only while its overlap hasn't ended (a little grace for one happening now); an open one whose overlap has ended
+# resolves as "In the past" (history line, no alert, no Today row)
+PAST_GRACE_S = 30 * 60
+PAST_WHY = "In the past"
+CLASH_FRESH_S = 6 * 3600      # 0.24.1: a clash alerts only when the message that made it is this new (not a backfill)
+
+
+def is_past(end, now):
+    """The overlap (ending at `end`) is over: it ended more than PAST_GRACE_S ago."""
+    return end is not None and now is not None and end <= now - PAST_GRACE_S
+
+
+def _resolve_past(db, c, now):
+    """Close an open clash whose time has passed: resolved "In the past", a history line on its item sides."""
+    _resolve(db, c["id"], PAST_WHY, now)
+    for k in ("a", "b"):
+        if c[k + "_kind"] == "item":
+            L.history(db, c[k + "_ref"], "clash_resolved", now, note=f"Clash #{c['id']} closed: {PAST_WHY}")
+
+
+def resolve_past(db, now):
+    """0.24.1: every open clash whose overlap has ended resolves as "In the past" (each sweep, and once at start)."""
+    out = []
+    for c in db.execute("SELECT * FROM ledger_conflicts WHERE state='open' AND coalesce(slot_end, slot_start) IS NOT NULL "
+                        "AND coalesce(slot_end, slot_start) <= ?", (now - PAST_GRACE_S,)).fetchall():
+        _resolve_past(db, c, now)
+        out.append(c["id"])
+    return out
 
 
 def blocks(it):
@@ -419,6 +448,7 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
     need = N.Need(db)                     # 0.23.0: does each side need the owner there? (need.py)
     my_need = need.item(it)["need"]
     trips = set()                         # 0.22.x: trips whose grouped clash to re-check (regroup)
+    past = set()                          # 0.24.1: sides whose overlap with it has ended (no clash; open ones resolve)
     if mine:
         lo = min(s for s, _, _ in mine) - TIGHT_TRAVEL_S - 86400
         hi = max(e for _, e, _ in mine) + TIGHT_TRAVEL_S + 86400
@@ -471,6 +501,9 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                             en["need"] == N.YES
                         for s, en, _ in mine:
                             if s < esp[1] and esp[0] < en:
+                                if is_past(min(en, esp[1]), now):
+                                    past.add(("event", e["id"]))   # 0.24.1: an entry whose overlap has ended
+                                    continue
                                 was = group.get(e["id"])
                                 group[e["id"]] = (max(s, esp[0]), min(en, esp[1]), esp[0],
                                                   sure or bool(was and was[3]))
@@ -497,6 +530,9 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
                 if rel is None:
                     continue
                 k, slot = rel
+                if is_past(slot[1], now):
+                    past.add((kind, ref))    # 0.24.1: this overlap has ended: no clash (an open one resolves below)
+                    continue
                 if k == "tight" and kind == "item" and it["thread"] and it["thread"] == other["thread"] and \
                         L.OWNER not in (it["who"], other["who"]):
                     break                    # 0.22.x: two people in one chat on times next to each other (a shoot
@@ -536,6 +572,14 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
     for c in db.execute("SELECT * FROM ledger_conflicts WHERE state='open' AND ((a_kind='item' AND a_ref=?) OR "
                         "(b_kind='item' AND b_ref=?))", (item_id, item_id)).fetchall():
         if c["id"] in keep:
+            continue
+        other = (c["b_kind"], c["b_ref"]) if c["a_kind"] == "item" and c["a_ref"] == item_id else \
+            (c["a_kind"], c["a_ref"])
+        ents = L.group_entries(c) if c["entries"] else []
+        if is_past(c["slot_end"] if c["slot_end"] is not None else c["slot_start"], now) or \
+                (not ents and other in past) or (ents and all(("event", x) in past for x in ents)):
+            _resolve_past(db, c, now)        # 0.24.1: its time has passed
+            resolved.append(c["id"])
             continue
         why = "moved away" if mine else f"{it['status']}" if not L.holds_time(it) else "no longer holds time"
         if mine and c["entries"] and c["a_kind"] == "item" and c["a_ref"] == item_id and away_of(
@@ -1030,7 +1074,7 @@ def _chased(db, msg, res, now):
 
 def sweep(db, now, tz):
     """Re-check every open, time-bound item from yesterday on (calendar changes: new, moved or cancelled events)."""
-    new, resolved = [], []
+    new, resolved = [], resolve_past(db, now)    # 0.24.1: open clashes whose time has passed close first
     for r in db.execute("SELECT id FROM ledger_items WHERE merged_into IS NULL AND status NOT IN "
                         "('declined','done','cancelled') AND (coalesce(end_ts, start_ts) >= ? OR all_day=1 OR "
                         "candidates != '[]')", (now - 86400,)).fetchall():
@@ -1237,6 +1281,18 @@ class Alerter:
         return self.payload("Security alert", f"From {who} ({SOURCE_WORD.get(src.get('source'), 'a message')}). "
                             "Open Callsheet to see it.", tag=f"callsheet-security-{it['id']}", urgent=True)
 
+    def _timely(self, c, now, fresh=True):
+        """0.24.1: a clash may alert only while its overlap hasn't ended, and (fresh) only when the message that made it
+        is new: a backfill or a re-run over old mail shows its clashes on Today but never alerts."""
+        end = c.get("slot_end") if c.get("slot_end") is not None else c.get("slot_start")
+        if end is not None and end <= now:
+            return False
+        if fresh and c.get("message") is not None:
+            r = self.ms._read("SELECT ts FROM messages WHERE id=?", (c["message"],))  # noqa: SLF001
+            if not r or r[0]["ts"] is None or r[0]["ts"] < now - CLASH_FRESH_S:
+                return False
+        return True
+
     def _mark(self, table, ref, state, now):
         self.ms.write(lambda db: db.execute(f"UPDATE {table} SET alert=?, alerted_at=? WHERE id=?", (state, now, ref))
                       if table == "ledger_conflicts" else
@@ -1256,7 +1312,7 @@ class Alerter:
         new = set((res.get("conflicts") or {}).get("new") or [])
         if new:
             for c in self.lv.conflicts(state="open", now=now):
-                if c["id"] not in new or not alerts_for(c):
+                if c["id"] not in new or not alerts_for(c) or not self._timely(c, now):
                     continue
                 vip, through, rule = self._clash_ctx(c, rules, cfg, now)
                 d = self._decide(cfg, now, vip, cfg.get("clashes", True), through, rule)
@@ -1304,7 +1360,7 @@ class Alerter:
         held = {r["id"] for r in self.ms._read("SELECT id FROM ledger_conflicts WHERE state='open' AND alert='held'")}  # noqa: SLF001
         if held:
             for c in self.lv.conflicts(state="open", now=now):
-                if c["id"] in held and alerts_for(c):
+                if c["id"] in held and alerts_for(c) and self._timely(c, now, fresh=False):
                     vip, through, rule = self._clash_ctx(c, rules, cfg, now)
                     if self._decide(cfg, now, vip, cfg.get("clashes", True), through, rule) == "send":
                         state = self._go(cfg, "clash", self.clash_payload(c), now)

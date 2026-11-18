@@ -154,17 +154,16 @@ class TestEntriesClear(TripGroupBase):
         r = self.ms._read("SELECT * FROM ledger_conflicts WHERE id=?", (gid,))[0]  # noqa: SLF001
         self.assertEqual((r["state"], r["resolved_why"]), ("resolved", "entries cleared"))
 
-    def test_a_past_trips_group_drops_cancelled_entries_in_the_sweep(self):
+    def test_a_past_trips_group_resolves_in_the_past_at_the_sweep(self):
         self.three()
         self.stay()
         gid = self.open_rows()[0]["id"]
-        self.now[0] = ts("2027-03-20T09:00-08:00")               # the trip is over: no re-check of it
+        self.now[0] = ts("2027-03-20T09:00-08:00")               # the trip is over (0.24.1: no clash in the past)
         self.ms.upsert_events([event("e2", "Dentist", "2027-03-08T14:00-08:00", "2027-03-08T15:00-08:00",
                                      status="cancelled")])
         self.sweep()
         r = self.ms._read("SELECT * FROM ledger_conflicts WHERE id=?", (gid,))[0]  # noqa: SLF001
-        self.assertEqual((r["state"], L.group_entries(r), r["b_ref"]),
-                         ("open", [self.ev("e1"), self.ev("e3")], self.ev("e1")))
+        self.assertEqual((r["state"], r["resolved_why"]), ("resolved", "In the past"))
 
     def test_clashes_per_entry_from_before_the_ruling_fold_into_the_group(self):
         self.three()
