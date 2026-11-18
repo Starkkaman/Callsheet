@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.24.0
+
+The filtering fixes from the owner's secret-shopper audit (2026-11-17).
+
+- **Shared calendars aren't you.** On a shared calendar, Google's "self" means that calendar, not you: an entry there
+  is "you said yes" only when you're a guest under one of your own addresses or you made it. Colleagues' and
+  family entries follow that calendar's choice (Mine, Ask me, Heads-up, Hide) as heads-ups or the "Does this need
+  you?" card; no RSVP asks for invites that aren't yours (open ones close, saying why).
+- **Fewer false clashes.** No clash with your own invite or its email (same event, same title and time), between
+  invites of one series or service, with an empty or cancelled side, a promotion, or a shared-calendar entry. All-day
+  entries show their dates. Many clashes with one thing become one grouped clash. Security alerts have their own
+  small block above Clashes, one card per alert (twins said once).
+- **One row per conversation.** Asks and promises from one thread, one person and the same thing merge ("+N more in
+  this conversation"); the same event on two calendars is one row.
+- **Who owes whom.** What others owe you (a promise to you, what you asked of someone) moves to "Waiting on others";
+  your own promises stay yours in Needs you, with a time or without one. Deliveries and returns are never "late"; asks are late only with a due time. Mail you put
+  in Gmail's Trash closes its items (never security alerts or invites).
+- **Promotions recognised.** A one-time, paced, read-only label refresh of older Gmail (labels and list headers; its
+  progress in Sources) re-runs the tidy rules on those items; senders you never answer that send list mail count as
+  promotions (never a real bill on that history alone); more retail, travel, finance and subscription cues. List
+  mail that books nothing is no clash side. The banner reads "Tidy up N items Callsheet now
+  recognises as promotions or noise?".
+- **Noise controls.** Every item row and item view has "Not for me": just this one, "Never from this sender" or
+  "Treat as promotion" (one Undo; it teaches the sender rule and tidies that sender's other items). Calendar rows say
+  which calendar and change how it counts inline. Clean up lists people separately, and real-looking asks there have
+  "Move back to Needs you".
+- **Chat answers from the screens' own lists.** "What bills are due", "who haven't I replied to", "when is my next
+  trip" and "is X mine?" now read Today's Bills, Replies, the ledger's trips with all-day calendar entries (family
+  trips too) and the need rule, through four read-only tools (bills, replies_waiting, trips, need_of). Times come back
+  as Callsheet has them, and an answer naming a time that isn't in what Chat read says so. "Draft a reply to <name>"
+  reads that thread first. Chat's Needs you is Today's, in its order (then its Older rows), and "dismiss the …
+  alert" finds any open item, not only the oldest 400 or security alerts and clashes.
+- **Talk it through is quicker.** Each step reads fewer, shorter facts, a too-long answer is cut at a sentence
+  rather than written again, and a step stops at 45 seconds, waiting for Chat included. Its words appear as they're written. Skip and Next show
+  at once. Promotions and noise are never said aloud (the same rules as Today and Tidy up). The Bills step lists
+  real bills only, overdue first, with clean names on its chips. Spoken counts match the screen. The writing line
+  uses the assistant's name.
+- **Invites on a shared calendar are heads-ups.** An invite sent to a group calendar you share ("Invite on the
+  shared IT calendar · not addressed to you") shows in Heads-up. It is never closed before its time, and never an RSVP
+  ask. On a calendar you set to Hide it follows your choice, since it isn't your invite; an invite addressed to you
+  always shows, whatever its calendar's choice.
+- **The item view says only what the message says.** "No reply yet" and a Reply button only for mail a person
+  sent; no-reply, marketing and one-time-code mail reads "No reply needed" with "Open in Gmail" instead. Names are
+  shown whole ("Portola Valley Garden", not "Portola"). No made-up times: "now", "asap" or a guess with no day or
+  time shows the message's own words, with no Add to calendar (also none for promotions and codes). "Your calendar
+  is clear that day" only for today or later. Not for me stays off security alerts and invites.
+- **Projects opens in under a second.** The slip check reads each message's text without the full lookup (11.5 s
+  to 0.7 s on a large store), and "Slipping" leaves out digests, forum posts, list and machine mail and promotions,
+  by the same rules as Today and Tidy up.
+- **Find finds people, items and messages.** Typing a name ("Portola", "Schuyler") lists the people, the open items
+  (with their section and day, Needs you first, said once) and the messages it matches, above Go to, Settings and
+  Ask; each opens its own view (the person, the item view, or the message when it made no item).
+- **"Sent it" closes it.** A message of yours reporting a thing finished ("sent the signed lease", "paid", "all
+  done") closes the matching open promise or ask in that thread, with the reason ("You wrote that it's done: …") in
+  the item view and a "Done … · Undo" line in Now and next, instead of opening a new promise. Several equal matches,
+  or none, close nothing; a plan with a time still to come stays a plan.
+- **Fewer promotions left over.** A People address that sends list mail (Promotions tab, a mailing service, bulk
+  history) no longer protects that mail, unless you wrote to it or answered in that thread; "rate us" and "how did
+  we do" surveys from machine mail go to Clean up. Bills, security alerts and invites are unaffected.
+- **Waiting on others is shorter.** Nothing from automated senders (no one there owes you), one row for the same
+  thing or conversation ("+N more"), and what has waited 30 days with no new message moves to "Older, still open?".
+- **Chat finds the bill you mean.** "Dismiss the PayPal bill" no longer asks "which one?" when one PayPal bill is
+  due: find puts what Today shows ahead of Clean up and hidden copies, says rows that read the same once, counts a
+  bill's kind, and names each match's day.
+
 ## 0.23.0
 
 - **Clashes are only the things that need you.** Callsheet now asks of each side of an overlap: does it need you

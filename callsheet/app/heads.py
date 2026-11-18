@@ -22,6 +22,7 @@ import re
 
 import conflicts as C
 import ledger as L
+import need as N
 import rules
 
 SECURITY_WINDOW_S = 3 * 86400        # as the 0.8.0 brief's heads-ups: alerts newer than this when first seen
@@ -374,11 +375,12 @@ def sync_invites(db, now, tz):
     "closed", "new_clashes"}."""
     out = {"created": [], "closed": [], "new_clashes": []}
     need = {}
+    nd = N.Need(db)
     for e in db.execute("SELECT * FROM events WHERE status != 'cancelled' AND start_ts IS NOT NULL AND "
                         "coalesce(end_ts, start_ts) > ? AND start_ts < ? ORDER BY start_ts, id",
                         (now, now + INVITE_DAYS * 86400)).fetchall():
-        if _my_answer(e) != "needsAction":
-            continue
+        if str((nd.me_of(e) or {}).get("response") or "") != "needsAction" or nd.shared(e):
+            continue                                  # 0.24.0: a shared calendar's `self` is the calendar, not him
         key = CAL_KEY + (e["ical_uid"] or f"{e['account']}:{e['event_id']}")
         if key in need:
             need[key][1] += 1
@@ -418,11 +420,17 @@ def sync_invites(db, now, tz):
             if not L.is_active(o) or key in need:
                 continue
             e = db.execute("SELECT * FROM events WHERE id=?", (o["cal_ref"],)).fetchone() if o["cal_ref"] else None
-            ans = _my_answer(e) if e else ""
+            ans = str((nd.me_of(e) or {}).get("response") or "") if e else ""
             if e is None:
                 st, note = "cancelled", "no longer on the calendar"
             elif e["status"] == "cancelled":
                 st, note = "cancelled", "the event was cancelled"
+            elif (nd.shared(e) or nd.me_of(e) is None) and (e["end_ts"] or e["start_ts"] or 0) > now:
+                # 0.24.0 (B1): an invite on a shared calendar stays open (never closed or hidden: the rules); Today shows
+                # it as a heads-up from its calendar entry, never as an RSVP ask (shared_invite_item)
+                continue
+            elif nd.shared(e) or nd.me_of(e) is None:
+                st, note = "done", "the time has passed"
             elif ans == "declined":
                 st, note = "declined", "you said no in Calendar"
             elif ans in ("accepted", "tentative"):
@@ -445,6 +453,15 @@ def sync_invites(db, now, tz):
             C.check_item(db, o["id"], now, tz)
             out["closed"].append(o["id"])
     return out
+
+
+def shared_invite_item(nd, db, it):
+    """0.24.0 (B1): an invite item whose calendar entry is on a shared calendar he isn't a guest on: shown as that
+    entry's heads-up, never as an RSVP ask in Needs you."""
+    if it.get("subtype") != "invite" or it.get("cal_ref") is None:
+        return False
+    e = db.execute("SELECT * FROM events WHERE id=?", (it["cal_ref"],)).fetchone()
+    return e is not None and e["status"] != "cancelled" and (nd.shared(e) or nd.me_of(e) is None)
 
 
 def _fold_mail(db, item_id, title, e, now, tz):

@@ -481,7 +481,7 @@ class Background:
         """The background work's in-flight budget (sorter, reader, picker): 80% of the model's context."""
         return writer.budget_for(self.ctx_size(s)[0])
 
-    def post_bg(self, body, timeout, post_fn=None, budget=None, kind="sorter", units=None):
+    def post_bg(self, body, timeout, post_fn=None, budget=None, kind="sorter", units=None, stream=None):
         """0.14.1: one background request (the sorter's, the reader's or the picker's): through `post_fn` (tests) or
         writer._post under the in-flight budget (80% of the model's context). 0.14.2: the answer's prefill timings
         teach the model's pace (writer._post learns from every local answer; a test's post_fn stands in for it) and
@@ -511,7 +511,8 @@ class Background:
             sbody = dict(body, stream=True, stream_options={"include_usage": True})
             try:
                 res = writer._post(base, key, sbody, {"timeout": timeout}, None, self.monotonic,  # noqa: SLF001
-                                   notify=notify, budget=self.budget() if budget is None else budget)
+                                   notify=notify, budget=self.budget() if budget is None else budget,
+                                   stream=stream)   # 0.24.0 (B1): stream(kind, piece) hears the words as they come
             except writer.Busy as e:
                 if str(e) == writer.PREEMPTED:
                     self.count_preempt(kind)

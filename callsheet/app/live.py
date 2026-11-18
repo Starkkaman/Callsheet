@@ -57,6 +57,7 @@ GMAIL_PACE_S = 0.1             # between messages.get calls (5 quota units each;
 GMAIL_HISTORY_PAGES = 20
 GMAIL_FETCH_MAX = 300          # messages fetched per pass (the rest next pass)
 GMAIL_SKIP = {"DRAFT", "SPAM"}
+LABELS_BATCH = 40              # 0.24.0: stored messages whose labels are re-read per pass (paced like the reader)
 CAL_PAST_DAYS = 30
 CAL_FUTURE_DAYS = 400
 CAL_FULL_EVERY_S = 86400
@@ -141,6 +142,7 @@ class GoogleApi:
     history = staticmethod(google.gmail_history)
     messages = staticmethod(google.gmail_messages)
     message = staticmethod(google.gmail_message_full)
+    message_labels = staticmethod(google.gmail_message_labels)    # 0.24.0: the label refresh
     events = staticmethod(google.calendar_events_changes)
 
 
@@ -198,9 +200,53 @@ class GmailReader:
 
     def __init__(self, store, ms, tokens, api=GoogleApi, clock=time.time, sleep=time.sleep):
         self.store, self.ms, self.tokens, self.api, self.clock, self.sleep = store, ms, tokens, api, clock, sleep
+        # 0.24.0: on_refreshed(account, [gmail ids]) after labels changed (the refresh, Trash): the tidy rules and the
+        # Trash close-out run on their items (api.App sets it)
+        self.on_refreshed = None
 
     def targets(self):
         return [(a["id"], a.get("email") or a["id"]) for a in self.store.accounts() if a["services"].get("mail", True)]
+
+    def labels_pass(self, aid):
+        """0.24.0 the one-time label refresh: mail stored before about Nov 3 has no labels and no bulk flag, so the promo
+        rules couldn't see Gmail's tabs or list headers. Re-reads LABELS_BATCH of them a pass (messages.get
+        format=metadata, read-only, paced), fills labels and bulk, notes Trash and deleted ones, and hands their ids to
+        on_refreshed. Resumable (cursor "labels"); done when none is left. Returns the cursor."""
+        cur = self.ms.cursor("gmail", aid, "labels") or {}
+        if cur.get("done"):
+            return cur
+        q = ("FROM messages WHERE source='gmail' AND account=? AND (labels IS NULL OR labels IN ('', '[]')) AND "
+             "deleted_at IS NULL AND id > ?")
+        if cur.get("total") is None:
+            cur.update(total=int(self.ms._read("SELECT count(*) AS n " + q, (aid, 0))[0]["n"]), read=0, last=0)  # noqa: SLF001
+        rows = self.ms._read("SELECT id, msg_id " + q + " ORDER BY id LIMIT ?", (aid, cur.get("last", 0), LABELS_BATCH))  # noqa: SLF001
+        done = []
+        try:
+            for r in rows:
+                try:
+                    msg = self._call(aid, self.api.message_labels, r["msg_id"])
+                except google.GoogleError as e:
+                    if e.status != 404:
+                        raise
+                    self.ms.mark_deleted("gmail", aid, r["msg_id"])     # gone from Gmail: recorded, never removed
+                else:
+                    hd = sources._headers(msg.get("payload") or {})  # noqa: SLF001
+                    labels = sorted({str(x)[:100] for x in msg.get("labelIds") or []})
+                    bulk = 1 if msgstore.is_bulk(hd) else 0
+                    self.ms.write(lambda db, i=r["id"], lb=labels, b=bulk: db.execute(
+                        "UPDATE messages SET labels=?, bulk=max(bulk, ?), updated_at=? WHERE id=?",
+                        (json.dumps(lb), b, self.clock(), i)))
+                done.append(r["msg_id"])
+                cur["last"], cur["read"] = r["id"], cur.get("read", 0) + 1
+                if GMAIL_PACE_S:
+                    self.sleep(GMAIL_PACE_S)
+        finally:
+            if len(rows) < LABELS_BATCH and len(done) == len(rows):
+                cur.update(done=True, finished=self.clock())
+            self.ms.set_cursor("gmail", aid, "labels", cur)
+            if done and self.on_refreshed:
+                self.on_refreshed(aid, done)
+        return cur
 
     def _acc(self, aid):
         return next((a for a in self.store.accounts() if a["id"] == aid), {"id": aid, "email": ""})
@@ -254,6 +300,8 @@ class GmailReader:
             left = self._incremental(acc, hist)
         if bf and not bf.get("done"):
             bf = self._backfill(acc, bf)
+        elif not left:
+            self.labels_pass(aid)              # 0.24.0: older mail's labels, a batch a pass once caught up
         backlog = left + (max(0, (bf.get("total") or 0) - bf.get("read", 0)) if bf and not bf.get("done") else 0)
         if bf and not bf.get("done") and not backlog:
             backlog = 1
@@ -289,6 +337,9 @@ class GmailReader:
             self.ms.mark_deleted("gmail", aid, mid)
         for mid, lb in labels.items():
             self.ms.set_labels("gmail", aid, mid, lb)
+        gone = list(deleted) + [mid for mid, lb in labels.items() if "TRASH" in lb]
+        if gone and self.on_refreshed:          # 0.24.0: their items close (filters.py closes them)
+            self.on_refreshed(aid, gone)
         if not left:   # move on only when everything up to `latest` is stored
             self.ms.set_cursor("gmail", aid, "history", {"id": latest})
         return left
@@ -809,6 +860,12 @@ class Live:
             parts.append("read up to " + when(newest, now, tz))
         if backlog and worst == "catching_up":
             parts.append(f"reading back, about {backlog:,} to go")
+        if kind == "gmail":                    # 0.24.0: the one-time label refresh's progress
+            labs = [self.ms.cursor("gmail", a, "labels") or {} for a, _ in targets]
+            tot = sum(int(c.get("total") or 0) for c in labs)
+            got = sum(int(c.get("read") or 0) for c in labs)
+            if tot and not all(c.get("done") for c in labs):
+                parts.append(f"checking older mail for promotions, {got:,} of {tot:,}")
         line = " · ".join(parts) or "Not checked yet"
         return {"key": kind, "name": name, "state": worst, "word": self.WORDS[worst], "line": line[:1].upper() + line[1:],
                 "warn": " ".join(warns) or None, "checked_at": checked, "read_up_to": newest, "backlog": backlog,

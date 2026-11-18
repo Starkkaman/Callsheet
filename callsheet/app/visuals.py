@@ -112,7 +112,10 @@ _BLOCKS = {
     "person": ("Person and thread snippet", "One message, the asked words marked.",
                {"ref": REF, "mark": _q(160)}, ("ref",)),
     "cleanup": ("Clean-up summary", "How many, and what kind.",
-                {"kinds": _arr(_enum(*CLEAN_KINDS), 6)}, ()),
+                {"kinds": _arr(_enum(*CLEAN_KINDS), 6),
+                 # 0.24.0 (B1): Callsheet's own groups (Today's Clean up), so the picture and the words say one count
+                 "groups": _arr(_obj({"label": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": PLAIN},
+                                      "n": _int(0, 100000)}, ("label", "n")), 8)}, ()),
     "bills": ("Bills ladder", "Several due dates on one 30-day axis: minimum, balance, amount.",
               {"days": _int(7, 30), "items": _arr(_obj({"ref": REF, "amount": AMOUNT, "min": BOOL, "balance": AMOUNT,
                                                          "card": _q(4, r"[0-9]{4}")}, ("ref",)), 6, 1)},
@@ -954,6 +957,13 @@ def _person(c, b):
 
 
 def _cleanup(c, b):
+    if b.get("groups"):   # 0.24.0 (B1): the plan's groups (Today's Clean up): the same count as the words
+        groups = [{"label": g["label"], "n": int(g["n"])} for g in b["groups"] if int(g["n"]) > 0]
+        tot = sum(g["n"] for g in groups)
+        if not tot:
+            raise Unfilled("nothing to clean up")
+        return {"total": tot, "groups": groups}, f"{tot} to clean up: " + ", ".join(
+            f"{g['label']} {g['n']}" for g in groups) + "."
     recs = c.f.cleanup()
     counts = {}
     for r in recs:

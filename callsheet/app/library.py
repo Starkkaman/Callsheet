@@ -612,6 +612,25 @@ class Library:
         m = self._read("SELECT new FROM old_ids WHERE old=?", (v,))
         return self.get(m[0]["new"]) if m and m[0]["new"] >= STORE_ID_BASE else None
 
+    def light(self, item_id, areas=None):
+        """0.24.0 (B2): one stored message's title, text, link and area for Projects' slip check, plus its raw row
+        ("raw", for the sorting rules): no instruction scan and no people join. get() on every one of 400 threads made
+        Projects take 11 s on the owner's store. Anything that isn't a stored message falls back to get()."""
+        try:
+            v = int(item_id)
+        except (TypeError, ValueError):
+            return None
+        if not STORE_ID_BASE <= v < EVENT_ID_BASE:
+            return self.get(v)
+        r = self._read("SELECT * FROM messages WHERE id=?", (v - STORE_ID_BASE,))
+        if not r:
+            return None
+        r = dict(r[0])
+        return {"id": v, "source": r["source"], "account": r["account"], "title": self.ms.title_of(r),
+                "body": r["text"] or "", "url": r["link"], "ts": r["ts"], "deleted": bool(r["deleted_at"]),
+                "area": _area_at(self._areas() if areas is None else areas, r["source"], r["account"], r["ts"]),
+                "raw": r}
+
     def body_of(self, source, account, source_id):
         """A message's stored text or a document's body, or None."""
         if source in MESSAGE_SOURCES:

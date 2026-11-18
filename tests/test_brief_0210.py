@@ -220,7 +220,7 @@ class TestFallback(Base):
         t = [0.0]
 
         def busy(body):
-            t[0] += 50
+            t[0] += 10   # 0.24.0 (B1): the wait ends with the step's 45 s (was 50 s a try, up to WAIT_CHAT_S)
             raise writer.Busy("chat")
         b = self.brief(busy)
         b.monotonic = lambda: t[0]
@@ -421,7 +421,7 @@ class TestPushAndPage(unittest.TestCase):
         api_src = (ROOT / "callsheet" / "app" / "api.py").read_text()
         for r in ('r"talk"', 'r"talk/start"', 'r"talk/reply"'):
             self.assertIn(r, api_src)
-        self.assertTrue(re.search(r'APP_VERSION = "0\.23\.0"', api_src))
+        self.assertTrue(re.search(r'APP_VERSION = "0\.24\.0"', api_src))
 
 
 if __name__ == "__main__":

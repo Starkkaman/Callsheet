@@ -852,6 +852,8 @@ REGISTRY = (
     # 0.17.0 (approved 2026-11-11): the store tools (offered when the store holds messages; the four index
     # tools above stay as the fallback) and the owner-pressed setting and action cards
     *(_from_def(d, "_" + d["name"], "store", "2026-11-11", "tests/test_chat_store_0170.py") for d in chatstore.TOOL_DEFS),
+    # 0.24.0 (B1): read-only lookups of the screens' own lists (bills, Replies, trips, the need rule), on the same store
+    *(_from_def(d, "_" + d["name"], "store", "2026-11-11", "tests/test_chat_lists_0240.py") for d in chatstore.LIST_DEFS),
     _from_def(chatstore.SETTING_DEF, "_propose_setting", "setting", "2026-11-11", "tests/test_chat_cards_0170.py"),
     _from_def(chatstore.ACTION_DEF, "_propose_action", "action", "2026-11-11", "tests/test_chat_cards_0170.py"),
     # 0.22.0 (approved 2026-11-16): find, read-only, so Chat can name the target in the owner's words (actions.py)
@@ -1241,6 +1243,8 @@ class Tools(chatstore.StoreTools, gdrafts.DraftTools):
         self.flagged = set()   # 0.6.0: ids of returned items that hold a planted instruction (inject.py)
         self.flagged_text = []  # 0.7.1: flagged sentences of pre-fetched project entries without an item
         self.calls = 0
+        self.results = []   # 0.24.0 (B1): this turn's tool results (text), for the time post-check
+        self.today = None   # 0.24.0 (B1): today.Today (set by Chat), the screens' lists
 
     def kinds(self):
         """0.17.0: the turn's extra offers for tool_defs/system_prompt: store, setting, action."""
@@ -1292,9 +1296,20 @@ class Tools(chatstore.StoreTools, gdrafts.DraftTools):
         if (t.name.startswith("ledger") or t.offer == "action") and self.ledger is None:
             return {"error": "The ledger isn't available."}, None
         try:
-            return getattr(self, t.handler)(args)
+            res = getattr(self, t.handler)(args)
         except _ArgError as e:
             return {"error": str(e)}, None
+        self.keep_result(res[0] if isinstance(res, tuple) else res)
+        return res
+
+    def keep_result(self, res):
+        """0.24.0 (B1): what the tools returned in this turn, as text, for the answer's time post-check."""
+        try:
+            txt = res if isinstance(res, str) else json.dumps(res, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return
+        if sum(len(x) for x in self.results) < 400_000:
+            self.results.append(txt[:200_000])
 
     def _web_search(self, args):
         return self.web.search(args)
@@ -2711,6 +2726,38 @@ class Chat:
                 day = None
         return self.ask(self.brief_conversation(day), text, brief_step=step)
 
+    def _route_pre(self, tools, question):
+        """0.24.0 (B1): the first lookup for a question a screen's list answers (chatstore.route), or for "draft a
+        reply to <name>": that person's open ask with its thread and the facts Draft a reply uses (replydraft), so the
+        draft comes from the conversation, not placeholders."""
+        tools.today = tools.today or getattr(self._actions(), "today", None)
+        who = chatstore.reply_target(question)
+        if who:
+            got, _l = tools.run("ledger_list", {"list": "needs_you", "person": who, "limit": 5})
+            rows = [r for r in got.get("items") or [] if r.get("type") == "ask"] or got.get("items") or []
+            rd = getattr(self, "replies", None)
+            if rows and rd is not None:
+                facts, _notes = rd.facts(int(rows[0]["item"]))
+                res = {"tool": "open_thread", "item": rows[0]["item"], "sources": rows[0].get("sources") or [],
+                       "reply_to": facts.get("reply_to"), "subject": facts.get("subject"), "ask": facts.get("ask"),
+                       "thread": facts.get("thread"), "calendar": facts.get("calendar"),
+                       "clashes": facts.get("clashes"),
+                       "note": "Draft the reply from this thread: answer the ask marked ask, in the owner's voice. "
+                               "Use a short [placeholder] only for something only the owner knows."}
+                res = {k: v for k, v in res.items() if v not in (None, [], "")}
+                tools.keep_result(res)
+                src = (rows[0].get("sources") or [0])[0]
+                return {"id": src}, res, f"Read the conversation with {_clip(who, 40)}", "open_thread"
+            if rows:
+                return {"list": "needs_you", "person": who}, got, _l or "Looked at Needs you", "ledger_list"
+            return None
+        r = chatstore.route(question)
+        if r is None:
+            return None
+        name, args = r
+        res, label = tools.run(name, args)
+        return args, res, label or "Looked it up", name
+
     def _brief_pre(self, tools, step):
         """0.21.0: a brief reply's prefetch: the step's ledger items, shown to the model as a ledger_list result and
         counted as seen (an action card may name them)."""
@@ -3010,6 +3057,12 @@ class Chat:
                 tools.preview = lambda what, a, _c=conv, _s=sintent, _a=aintent, _t=tools: \
                     self._preview(_c, _s, _a, _t, what, a)
             pre = self._prefetch(tools, sc, question) if sc else None
+            if pre is None and not sc and tools.store_on and self.ledger is not None and intent is None and \
+                    cintent is None and sintent is None and aintent is None and dintent is None:
+                try:   # 0.24.0 (B1): bills, replies, trips, "is X mine?", a draft: the screens' own list first
+                    pre = self._route_pre(tools, question)
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"Callsheet chat: couldn't look at the list first ({type(e).__name__})")
             bstep = conv["messages"][-1].get("brief_step")
             if pre is None and isinstance(bstep, dict) and self.ledger is not None:
                 try:   # 0.21.0: a reply at a brief step looks at that step's items first
@@ -3037,6 +3090,9 @@ class Chat:
                         self._chat_mark("end", mark)
                 by = "Local · " + eff["model"][:60]
             raw = raw.strip()[:MAX_ANSWER]
+            bad_times = chatstore.time_check(raw, tools.results) if tools.results else []
+            if bad_times:   # 0.24.0 (B1): a time no tool gave (the model re-derived it): said, never silently kept
+                raw = raw.rstrip() + "\n\n" + chatstore.time_note(bad_times)
             job["live"].flush()   # 0.14.0: the post-check runs on the final text: a quiet "checking…" meanwhile
             job["abort"], job["state"], job["text"] = None, "checking", "Checking…"
             # 0.7.1: links in the answer are defanged (stored that way, history included), except the links Callsheet
@@ -3056,6 +3112,7 @@ class Chat:
             repeats = self._repeats(text, tools.flagged, conv,
                                     list(tools.flagged_text) + (tools.web.flagged if tools.web is not None else []))
             msg = {"role": "assistant", "text": defang(text, keep), "ctx": defang(raw, keep), "sources": sources,
+                   **({"time_checks": bad_times} if bad_times else {}),
                    "by": by, "warning": writer.WARNING if warned else None,
                    "instr_warning": inject.LABEL if repeats else None,
                    "instr_seen": sorted(tools.flagged)[:50],

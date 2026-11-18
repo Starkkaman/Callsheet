@@ -35,7 +35,7 @@ AGE_S = AGE_DAYS * 86400
 CLASH_PER_ITEM = 3
 HEAD = 600                    # promo cues count in the subject and this much of the text
 BANNER_KEY = "tidy_banner_0214"
-BANNER_REV = "0221"   # bump to offer Tidy up once more after an update
+BANNER_REV = "0240"   # bump to offer Tidy up once more after an update (0.24.0: sender history)
 
 # ---- rule 1: promo mail without headers -------------------------------------------------------------------------------
 # Mailing services' sending domains (a list sender, whatever the brand) and the marketing subdomains brands send from.
@@ -68,7 +68,15 @@ PROMO_CUE = re.compile(
     r"\bfree (?:trial|shipping|gift|month)\b|\b(?:\d+|first) months? free\b|"
     r"\bspecial (?:rate|offer|price|pricing|deal)\b|\bexclusive (?:offer|deal|access|savings)\b|"
     r"\bcoupon\b|\bpromo code\b|\buse code\b|\bshop now\b|\bbuy now\b|\bbook now\b|\border now\b|"
-    r"\bdeals? (?:of|for) the\b|\bdoorbuster|\bbogo\b|\bnew arrivals\b|\bwebinar\b|\bnewsletter\b", re.I)
+    r"\bdeals? (?:of|for) the\b|\bdoorbuster|\bbogo\b|\bnew arrivals\b|\bwebinar\b|\bnewsletter\b|"
+    # 0.24.0 (the audit's brands: retail, travel, finance, subscriptions)
+    r"\b(?:earn|redeem|bonus|double|triple) (?:\d[\d,]* )?(?:points|miles|rewards)\b|\bmembers? (?:save|deal|exclusive|rate)s?\b|"
+    r"\b\d{1,2}\s?% (?:back|cash ?back)\b|\bcash ?back\b|\bpre-?approved\b|\bapply (?:now|today)\b|"
+    r"\b(?:check|see) your (?:credit )?score\b|\b(?:starting|from|as low as) (?:at )?\$\d|\bgetaway\b|\bcruise deals?\b|"
+    r"\bshop (?:the|our|all)\b|\bnew (?:collection|styles|season)\b|\bjust (?:dropped|landed|launched)\b|"
+    r"\b(?:top|our) picks\b|\bpicked for you\b|\brecommended for you\b|\byou(?:'ll| will| might) (?:also )?(?:love|like)\b|"
+    r"\b(?:try|upgrade to) (?:premium|pro|plus)\b|\bsave (?:big|more|now|\$\d)|\bdeals? (?:end|ends|inside)\b|"
+    r"\b(?:weekly|daily|monthly) (?:digest|roundup|picks|deals)\b|\bsneak peek\b|\bwhat'?s new\b", re.I)
 TRANSACTIONAL = re.compile(
     r"\b(?:receipt|your order|order (?:#|no\.?|number|confirm\w*|status)|has shipped|shipped|out for delivery|"
     r"delivered|tracking (?:number|#)|statement (?:is )?(?:ready|available)|e-?statement|amount due|balance due|"
@@ -100,6 +108,12 @@ BILLING_LOCAL = re.compile(r"(?:^|[._+-])(?:bill|billing|bills|ebill|e-bill|stat
 BOOKING = re.compile(r"\b(?:confirm(?:ed|ation)|reservation|reserved|booking|booked|ticket|your appointment|itinerary|"
                      r"check-?in|scheduled for|see you (?:on|at)|registration confirmed|you(?:'re| are) registered)\b", re.I)
 LIST_EVENT_SUBS = frozenset({"appointment", "meeting", "party", "job", "gig", ""})
+# 0.24.0 (B2, leftovers on his data): a "rate us" or "how did we do?" from machine mail asks nothing of him
+SURVEY = re.compile(r"\b(?:survey|questionnaire|how did we do|how was your (?:experience|visit|stay|order|call|chat|"
+                    r"appointment|delivery|support)|rate (?:your|us|our)|review (?:your (?:recent )?(?:purchase|order|"
+                    r"visit|stay|experience)|us)|leave (?:us )?a review|tell us (?:what you think|how we did|about your)|"
+                    r"share your (?:feedback|thoughts|experience)|(?:we(?:'d| would) love|we value) your (?:feedback|"
+                    r"opinion)|your (?:feedback|opinion) (?:matters|counts))\b", re.I)
 
 
 def _labels(row):
@@ -167,9 +181,16 @@ def promo_of(row, known=None, names=()):
     subj, text = str(row.get("subject") or ""), str(row.get("text") or "")
     if NEVER_HIDE.search(subj) or NEVER_HIDE.search(text[:HEAD]):
         return "", ""
+    rep = getattr(known, "rep", None)             # 0.24.0: the sender's history in the store (filters.Reputation)
+    rule = rep.rule(address(row)) if rep is not None else ""
+    if rule:                                      # the owner's own press: Never from this sender / Treat as promotion
+        return "promo", "you said: " + ("never from this sender" if rule == "never" else "treat as promotion")
     if known is not None and known.protects(row):
         return "", ""
     sig = list_signals(row)
+    rb = rep.bulk(address(row)) if rep is not None else ""
+    if rb:
+        sig.append("bulk sender: " + rb)
     if not sig:
         return "", ""
     if TRANSACTIONAL.search(subj):
@@ -179,7 +200,7 @@ def promo_of(row, known=None, names=()):
     cue = PROMO_CUE.search(subj) or (PROMO_CUE.search(text[:HEAD]) if set(sig) - {"no-reply sender"} else None)
     if cue:
         return "promo", f"promo mail ({', '.join(sig)}; “{cue.group(0).strip()[:30]}”)"
-    if "promotions tab" in sig and not by_name(row, names):
+    if ("promotions tab" in sig or rb) and not by_name(row, names):
         return "promo", f"promo mail ({', '.join(sig)})"
     return "", ""
 
@@ -219,12 +240,18 @@ def judge_mail(it, row, known=None, names=()):
         return None
     if known is not None and known.protects(row):
         return None
+    sub = it.get("subtype") or ""
     kind, why = promo_of(row, known, names)
+    if kind and sub in BILL_SUBS and why.startswith("promo mail (") and "“" not in why and \
+            "promotions tab" not in why and bill_proof(it, row):
+        return None          # 0.24.0 validation: a sender's history alone never makes a real bill a promotion
     if kind:
         return "promo", why
     if not machine_mail(row):
         return None
-    sub = it.get("subtype") or ""
+    if sub not in BILL_SUBS and it.get("type") in ("ask", "commitment") and SURVEY.search(str(row.get("subject") or "")) \
+            and not TRANSACTIONAL.search(str(row.get("subject") or "")):
+        return "promo", "a survey or review request from machine mail: nothing for you to do"
     if sub in BILL_SUBS and not bill_proof(it, row):
         return "promo", "not a bill: no amount owed with a due date or statement from a billing sender"
     if it.get("type") == "event" and sub in LIST_EVENT_SUBS and ("bulk" in list_signals(row) or
@@ -285,7 +312,8 @@ class Known:
     """Who counts as known for the rules: confirmed People (not suggested ones), addresses and domains the owner has
     written to (not free-mail domains), threads the owner wrote in."""
 
-    def __init__(self, confirmed=(), wrote_to=(), threads=()):
+    def __init__(self, confirmed=(), wrote_to=(), threads=(), rep=None):
+        self.rep = rep                    # 0.24.0: filters.Reputation (None: addresses only, as before)
         self.confirmed = {str(x).lower() for x in confirmed}
         self.wrote_to = {str(x).lower() for x in wrote_to}
         self.domains = {domain_of(a) for a in self.wrote_to} - FREEMAIL - {""}
@@ -308,15 +336,26 @@ class Known:
                 a = x.get("address") if isinstance(x, dict) else str(x)
                 if a and "@" in a:
                     wrote.add(a.lower())
-        return cls(confirmed, wrote, threads)
+        import filters                                 # late: filters imports tidy lazily too
+        return cls(confirmed, wrote, threads, filters.Reputation.load(ms))
 
     def protects(self, row):
         a = address(row)
-        if a in self.confirmed or a in self.wrote_to:
+        if a in self.wrote_to:
             return True
         if (row.get("source"), row.get("account"), row.get("thread")) in self.threads:
             return True
+        if a in self.confirmed:
+            # 0.24.0 (B2, leftovers on his data: a shop's and a newsletter's address had become confirmed People):
+            # an address he never wrote to that sends list mail (the Promotions tab, a mailing service, a list sender
+            # he never answers) is a list, whoever it is filed under
+            return not self.list_only(row)
         return domain_of(a) in self.domains
+
+    def list_only(self, row):
+        sig = list_signals(row)
+        return "promotions tab" in sig or "mailing-service sender" in sig or \
+            bool(self.rep is not None and self.rep.bulk(address(row)))
 
 
 # ---- rule 5: older, still open? -------------------------------------------------------------------------------------------
@@ -413,6 +452,10 @@ class Tidy:
         """(group, why) when the rules move this open item to Clean up, else None."""
         if row is None or it.get("type") == "cleanup" or it.get("subtype") in ("security", "invite"):
             return None
+        rep = getattr(known, "rep", None)
+        if rep is not None and rep.rule(address(row)) == "never" and not NEVER_HIDE.search(
+                f"{it.get('what') or ''} {row.get('subject') or ''}"):
+            return "promo", "you said: never from this sender"   # 0.24.0: any source, not only promo-looking mail
         if row.get("source") == "gmail":
             return judge_mail(it, row, known, names)
         if slack_channel(row) and not mentions_owner(row, names) and not asks_reader(row, names) and \
@@ -420,11 +463,15 @@ class Tidy:
             return "channels", SLACK_WHY
         return None
 
-    def plan(self):
-        """The moves Tidy up would make now: [{item, grp, why}] over open items (not merged, not closed)."""
+    def plan(self, only=None):
+        """The moves Tidy up would make now: [{item, grp, why}] over open items (not merged, not closed). only: these
+        item ids (0.24.0: the items of mail whose labels were just refreshed, or of a sender the owner marked)."""
         items = [L.row_dict(r) for r in self.ms._read(  # noqa: SLF001
             "SELECT * FROM ledger_items WHERE merged_into IS NULL AND type != 'cleanup' AND "
             "status NOT IN ('declined','done','cancelled')")]
+        if only is not None:
+            keep = {int(i) for i in only}
+            items = [it for it in items if it["id"] in keep]
         if not items:
             return []
         rows = self._origin_rows([it["id"] for it in items])
@@ -455,12 +502,15 @@ class Tidy:
         n = self.count()
         if not n:
             return None
-        return {"count": n, "text": f"Callsheet now filters promotions better. Tidy up {n} item{'' if n == 1 else 's'}?"}
+        # 0.24.0 (the audit): no claim that promotions are filtered; say what it found
+        return {"count": n, "text": f"Tidy up {n} item{'' if n == 1 else 's'} Callsheet now recognises as promotions or "
+                                    f"noise?"}
 
-    def run(self, how="today"):
+    def run(self, how="today", only=None):
         """The owner's Tidy up: moves each planned item to Clean up (type cleanup, a "tidy" check with its group and
-        reason, its open clashes resolved), all in one run for one Undo. Returns {run, moved, counts}."""
-        moves = self.plan()
+        reason, its open clashes resolved), all in one run for one Undo. Returns {run, moved, counts}. only (0.24.0):
+        these items (the label refresh, a sender the owner marked); such a run doesn't answer the banner."""
+        moves = self.plan(only)
         now = self.clock()
 
         def w(db):
@@ -488,8 +538,9 @@ class Tidy:
                 counts[m["grp"]] = counts.get(m["grp"], 0) + 1
             total = sum(counts.values())
             db.execute("UPDATE tidy_runs SET moved=?, counts=? WHERE id=?", (total, json.dumps(counts), rid))
-            db.execute("INSERT INTO meta (key, value) VALUES ('tidy_banner_rev', ?) ON CONFLICT(key) DO UPDATE SET "
-                       "value=excluded.value", (json.dumps(BANNER_REV),))
+            if only is None:
+                db.execute("INSERT INTO meta (key, value) VALUES ('tidy_banner_rev', ?) ON CONFLICT(key) DO UPDATE SET "
+                           "value=excluded.value", (json.dumps(BANNER_REV),))
             return {"run": rid, "moved": total, "counts": counts}
         return self.ms.write(w)
 

@@ -1059,7 +1059,7 @@
     if (!TD.undo) return null;
     var u = TD.undo, rel = u.related || [];
     return h('div', { class: 'tdy-undo', role: 'status' }, [h('span', null, u.label),
-      btn('k q', 'Undo', null, function () { TD.undo = null; if (u.log) tdUndoLog(u.log); else tdPost('undone', { items: u.ids }, 'Back on your list.'); }),
+      btn('k q', 'Undo', null, function () { TD.undo = null; if (u.senderRule) tdPost('sender/undo', { rule: u.senderRule }, 'Undone.'); else if (u.calUndo) tdPost('calendar', u.calUndo, 'Undone.'); else if (u.log) tdUndoLog(u.log); else tdPost('undone', { items: u.ids }, 'Back on your list.'); }),
       rel.length ? btn('k', 'Also dismiss ' + rel.length + ' related clash' + (rel.length === 1 ? '' : 'es'), { 'data-relx': String(rel.length) }, function () {
         tdPost('related/dismiss', { clashes: rel.map(function (c) { return c.id; }) }, null).then(function (r) {
           if (r && r.log) { TD.undo = { log: r.log, label: r.label, related: [] }; renderBrief(); }
@@ -1113,8 +1113,8 @@
     if (!v) return h('div', { class: 'tdy' }, h('p', { class: 'tdy-empty' }, TD.err ? 'Today isn’t ready: ' + TD.err : 'Loading Today…'));
     /* 0.23.0 (mockup clash-vs-headsup-v1): desktop = direction A (Clashes · you have to choose, Heads-up · happening) under
        the collapsible Day strip; phone = direction B (a vertical day, then the next days one line each) */
-    if (isPhone()) return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdPhoneDay(v), tdNextDays(v), tdNow(v, true), tdAsks(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
-    return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdDayStrip(v),
+    if (isPhone()) return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdSecurity(v), tdPhoneDay(v), tdNextDays(v), tdNow(v, true), tdAsks(v), tdNeeds(v), tdComing(v), tdFeeds(v), tdClean(v)]);
+    return h('div', { class: 'tdy' }, [tdHead(v), tdTidyBanner(v), tdTidyUndoBar(), tdUndoBar(), tdHuUndo(), tdSecurity(v), tdDayStrip(v),
       h('div', { class: 'tdy-ab' }, [h('div', { class: 'tdy-a' }, [tdNow(v), tdNeeds(v)]), h('div', { class: 'tdy-b' }, [tdHeadsup(v)])]),
       tdComing(v), tdFeeds(v), tdClean(v)]);
   }
@@ -1196,7 +1196,19 @@
   }
   function tkStep(st, n, total) {
     var said = tkSaid(TK.d)[st.key] || [], phone = isPhone();
-    if (st.state !== 'ready') return h('div', { class: 'tk-body' }, h('p', { class: 'tk-say dim' }, aname() + ' is writing this step…'));
+    if (st.state !== 'ready') {   /* 0.24.0 (B1): the words as they come, and Skip and Next at once (never stuck) */
+      var go = function () { TK.at = n + 1 < total ? n + 1 : n; tkRender(); window.scrollTo(0, 0); };
+      return h('div', { class: 'tk-body' }, [
+        st.partial ? h('div', { class: 'tk-line' }, [assistantMark('speaking', true), h('p', { class: 'tk-say', 'aria-live': 'polite' }, String(st.partial) + '…')])
+          : h('p', { class: 'tk-say dim' }, aname() + ' is writing this step…'),
+        h('div', { class: 'tk-nav' }, [h('div', { class: 'tk-navb' }, [
+          btn('k', st.skipped ? 'Skipped' : 'Skip', { disabled: st.skipped ? true : null }, function () {
+            api('POST', 'api/talk/skip', { run: TK.d && TK.d.run && TK.d.run.id, step: st.key }).then(function () { tkLoad(false); }, function () { });
+            go();
+          }),
+          n + 1 < total ? btn('k ink', 'Next ›', null, go) : btn('k ink', 'Done', null, tkBack)]),
+          isPhone() ? null : h('span', { class: 'tk-of' }, 'STEP ' + (n + 1) + ' OF ' + total)])]);
+    }
     var flagged = (st.checks || []).map(function (c) { return c.what; });
     var vis = (st.blocks || []).map(function (b) { try { return window.CallsheetVisuals ? window.CallsheetVisuals.render(b) : null; } catch (e) { return null; } });
     var form = h('form', { class: 'tk-reply' }, [h('input', { type: 'text', class: 'tk-in', 'aria-label': 'Reply to ' + aname(), placeholder: 'Reply, or ask about this…', maxlength: '2000', value: TK.draft }),
@@ -1315,12 +1327,19 @@
         btn('k' + (!open && i === 0 ? ' red' : ''), 'See it', null, function () { tdGo('item', s.id); }),
         btn('k q', 'Done', null, function () { tdDone([s.id], 'security alert from ' + s.who); })])]);
   }
+  /* 0.24.0 (the audit): security alerts in their own small block above the clashes, one per sender, alert and day */
+  function tdSecurity(v) {
+    var sec = (v.now_next && v.now_next.security) || [];
+    if (!sec.length) return null;
+    return h('section', { class: 'card tdy-sec', 'aria-labelledby': 'td-sec' }, [h('h2', { class: 'lab', id: 'td-sec' }, ['Security', h('span', { class: 'r' }, String(sec.length))]),
+      sec.map(tdSec)]);
+  }
   function tdNow(v, phone) {
-    var nn = v.now_next, kids = [], sec = nn.security || [];
-    sec.forEach(function (s, i) { kids.push(tdSec(s, i)); });
+    var nn = v.now_next, kids = [], sec = nn.security || [];   /* 0.24.0: shown in tdSecurity; here only for the calm key */
     if (phone) {   /* 0.23.0: on the phone the day and the next days hold the clashes; this card keeps the rest */
       nn.followups.forEach(function (f) { kids.push(h('div', { class: 'clb' }, [h('p', { class: 'cl' }, '▲ Follow-up'), h('p', { class: 'ct' }, f.line ? [h('b', null, f.what), ' · ' + f.line] : [h('b', null, f.who), ' hasn’t heard from you: ' + f.what]),
         h('div', { class: 'keys' }, [btn('k', 'Open', null, function () { tdGo('item', f.item); })])])); });
+      tdReported(nn).forEach(function (x) { kids.push(x); });
       return kids.length ? h('section', { class: 'card', 'aria-labelledby': 'td-nn' }, [h('h2', { class: 'lab', id: 'td-nn' }, 'Now'), kids]) : null;
     }
     var sure = nn.clashes.filter(function (c) { return c.verdict !== 'maybe'; }).length, mb = nn.clashes.length - sure;
@@ -1333,8 +1352,9 @@
         tdRemind('lf' + f.id, ['followup', f.id], f.who)]));
     });
     nn.cleared.forEach(function (x) { kids.push(h('p', { class: 'clrd' }, [h('span', { class: 'led ok', 'aria-hidden': 'true' }), 'Cleared ' + x.at + ' · ' + x.why])); });
+    tdReported(nn).forEach(function (x) { kids.push(x); });
     if (!nn.clashes.length && !nn.followups.length) kids.push(h('p', { class: 'dim' }, 'No clashes. Nothing to choose.'));
-    if (nn.clashes_left_out) kids.push(h('p', { class: 'dim' }, plural(nn.clashes_left_out, 'clash', 'clashes') + ' with promotions, finished or started items not shown.'));
+    if (nn.clashes_left_out) kids.push(h('p', { class: 'dim' }, nn.clashes_left_out + ' hidden: not real clashes.'));
     var cnt = sure ? String(sure) + (mb ? ', and ' + mb + ' maybe' : '') : mb ? mb + ' maybe' : '';
     return h('section', { class: 'card tdy-cl', 'aria-labelledby': 'td-nn' }, [h('h2', { class: 'lab', id: 'td-nn' }, ['Clashes · you have to choose', h('span', { class: 'r' }, cnt)]), kids]);
   }
@@ -1372,7 +1392,8 @@
     return h('div', { class: 'hu-r' + (r.word === 'FYI' ? ' fyi' : ''), role: 'listitem' }, [h('span', { class: 'hu-w' }, r.when),
       h('div', { class: 'hu-m' }, [h('p', { class: 'hu-t' }, r.title), h('p', { class: 'hu-s' }, r.sub)]),
       h('div', { class: 'hu-e' }, [h('span', { class: 'hu-tag' }, r.word === 'FYI' ? 'FYI' : r.tag),
-        seen ? null : btn('k q sm', 'Got it', { 'aria-label': 'Got it: ' + r.title }, function () { tdGotIt(r); })])]);
+        seen ? null : btn('k q sm', 'Got it', { 'aria-label': 'Got it: ' + r.title }, function () { tdGotIt(r); })]),
+      r.cal ? tdCalUse(r.cal, 'hu' + r.key) : null]);
   }
   function tdGotIt(r) {
     return mutate(function () { return api('POST', 'api/today/gotit', { key: r.key }); }).then(function (x) { TD.huUndo = x; return tdLoad(); }).then(renderBrief, function () {});
@@ -1540,7 +1561,7 @@
     return h('section', { class: 'card', 'aria-labelledby': 'td-ny' }, [h('h2', { class: 'lab', id: 'td-ny' }, ['Needs you', h('span', { class: 'r' }, n.total ? 'oldest first' : '')]),
       n.total ? rows : h('p', { class: 'dim' }, 'Nothing waiting on you.'),
       n.rows.length > lim ? btn('k q more', (n.rows.length - lim) + ' more, ' + n.total + ' in all', null, function () { TD.more.needs = true; renderBrief(); }) : null,
-      tdOlder(n.older)]);
+      tdOlder(n.older), tdWaiting(n.waiting)]);
   }
   /* 0.21.4 "Older, still open?" (tidy.older_of): collapsed, with its count; Clear all marks them done (with Undo).
      They stay open in search until then. */
@@ -1553,7 +1574,57 @@
       h('p', { class: 'dim' }, o.note), o.rows.map(tdNeedRow),
       h('div', { class: 'keys' }, [btn('k', 'Clear all ' + o.total, null, function () { tdDone(o.ids, o.total + ' older items'); })])]) : null]);
   }
+  /* 0.24.0 noise controls where the noise is: Not for me (just this one), Never from this sender, Treat as promotion;
+     each with Undo; the sender ones teach the sorting (filters.sender_rules) */
+  function tdNfmKey(id, label) {
+    return btn('k q sm', 'Not for me…', { 'aria-expanded': String(TD.nfm === id), 'aria-label': 'Not for me: ' + label }, function () { TD.nfm = TD.nfm === id ? null : id; renderBrief(); });
+  }
+  function tdNfmBox(id, label) {
+    if (TD.nfm !== id) return null;
+    var teach = function (kind) {
+      TD.nfm = null;
+      tdPost('sender', { item: id, kind: kind }, null).then(function (r) { if (r && r.rule) { TD.undo = { label: r.label + (r.moved ? ' · ' + r.moved + ' moved to Clean up' : ''), senderRule: r.rule }; renderBrief(); } });
+    };
+    return h('div', { class: 'keys nfm', role: 'group', 'aria-label': 'Not for me: ' + label }, [
+      btn('k', 'Just this one', null, function () { TD.nfm = null; tdPost('notes', { items: [id], chips: ['not_for_me'], text: '' }, null).then(function (r) { if (r && r.filed && r.filed.length) { TD.undo = { ids: r.filed, label: 'Not for me: ' + label }; renderBrief(); } }); }),
+      btn('k', 'Never from this sender', null, function () { teach('never'); }),
+      btn('k', 'Treat as promotion', null, function () { teach('promo'); })]);
+  }
+  /* 0.24.0 "From calendar X: change how it counts": that calendar's Mine / Ask me / Heads-up / Hide, inline, with Undo */
+  var CAL_USES = [['mine', 'Mine'], ['ask', 'Ask me'], ['headsup', 'Heads-up'], ['hide', 'Hide']];
+  function tdCalUse(cal, key) {
+    if (!cal) return null;
+    var open = TD.calu === key;
+    var set = function (use, undo) {
+      mutate(function () { return api('POST', 'api/today/calendar', { account: cal.account, calendar: cal.calendar, use: use }); }).then(function (r) {
+        TD.calu = null; TD.undo = undo ? null : { label: r.name + ' counts as ' + CAL_USES.filter(function (u) { return u[0] === r.use; })[0][1], calUndo: { account: r.account, calendar: r.calendar, use: r.was } };
+        return tdRefresh();
+      }).then(renderBrief, failToast);
+    };
+    return h('div', { class: 'calu' }, [btn('k q sm', 'From ' + cal.name + ': change how it counts', { 'aria-expanded': String(open) }, function () { TD.calu = open ? null : key; renderBrief(); }),
+      open ? h('div', { class: 'keys', role: 'group', 'aria-label': 'How ' + cal.name + ' counts' }, CAL_USES.map(function (u) {
+        return btn('k' + (u[0] === cal.use ? ' go' : ''), u[1], { 'aria-pressed': String(u[0] === cal.use) }, function () { if (u[0] !== cal.use) set(u[0]); });
+      })) : null]);
+  }
+  TD.calUse = tdCalUse;
+  function tdWaiting(w) {
+    if (!w || !w.total) return null;
+    var open = !!TD.more.waiting;
+    return h('div', { class: 'tdy-oldg' }, [btn('k q tdy-old', [w.label + ' · ' + w.total, h('span', { class: 'chev', 'aria-hidden': 'true' }, open ? '▴' : '▾')],
+      { 'aria-expanded': String(open) }, function () { TD.more.waiting = !open; renderBrief(); }),
+      open ? h('div', { role: 'group', 'aria-label': w.label }, [h('p', { class: 'dim' }, w.note), h('ul', { class: 'smp' }, w.rows.map(function (r) {
+        return h('li', null, [h('span', null, [h('b', null, r.who), ' · ' + r.what]), h('span', { class: 'ag' }, r.why)]);
+      }))]) : null]);
+  }
   function tdNeedRow(r) {
+      if (!r.invite && !r.never_hide) {
+        var inner = tdNeedRow0(r);
+        return h('div', { class: 'nrw' }, [inner, r.more ? h('p', { class: 'dim small' }, '+' + r.more + ' more in this conversation') : null,
+          tdNfmKey(r.id, r.why), tdNfmBox(r.id, r.why)]);
+      }
+      return tdNeedRow0(r);
+  }
+  function tdNeedRow0(r) {
       var b = btn('nr', [tdIco(r.icon, r.source), h('span', { class: 'who' }, [r.who, r.mine ? h('span', { class: 'mine' }, 'You said') : null]),
         h('span', { class: 'ag' }, tdAge(r)), h('span', { class: 'why' }, areaLead(r.area).concat([r.late ? h('b', { class: 'late' }, r.late + ' · ') : null,   /* 0.22.0: past its deadline; its area */
           r.back ? r.back + '. ' : null,   /* 0.22.1: back from Clean up, saying why */
@@ -1578,7 +1649,7 @@
         out.push(h('div', { class: 'up' }, [h('p', { class: 'rel' }, [h('b', null, r.rel), h('span', null, r.date)]),
           h('p', { class: 'w' }, [(r.likely ? 'Likely: ' : '') + r.what]),
           h('div', { class: 'fx' }, [r.from ? h('span', { class: 'fm' }, [tdIco(r.icon), r.from]) : h('span', { class: 'fm' }, [ico('cal'), 'On your calendar']),
-            tdCalKey(r, cu, 'cu')])]));
+            tdCalKey(r, cu, 'cu')]), r.cal ? tdCalUse(r.cal, 'cu' + r.event) : null]));
         if (r.add && r.add.on && TD.addc && TD.addc.item === r.item) out.push(tdAddCard(r.add, cu.cal_targets || []));
       });
     });
@@ -1689,6 +1760,7 @@
           h('ul', { class: 'smp' }, g.rows.map(function (r) {
             return h('li', null, [tdIco(r.icon), h('span', null, r.what), h('span', { class: 'ag' }, r.day),
               btn('k q', 'Done', { 'aria-label': 'Done: ' + r.what }, function () { tdDone([r.id], r.what); }),
+              r.back ? btn('k q', 'Move back to Needs you', { 'aria-label': 'Move back to Needs you: ' + r.what }, function () { tdPost('back', { item: r.id }, 'Back in Needs you.'); }) : null,
               btn('k q', 'Note…', { 'aria-label': 'Note on ' + r.what }, function () { tdNoteOpen('i' + r.id, [r.id], r.what); })]);
           })), tdNoteBox(g.rows.map(function (r) { return 'i' + r.id; }).filter(function (k) { return TD.note && TD.note.key === k; })[0] || 'g' + g.key),
           h('div', { class: 'keys' }, [btn('k', 'Done with these ' + ids.length, null, function () { tdDone(ids, g.label.toLowerCase()); }),
@@ -1837,19 +1909,28 @@
       })),
       h('div', { class: 'composer' }, [inp, btn('k', [ico('send'), 'Ask'], null, function () { tdChat(d, inp.value.trim()); })])]);
   }
+  /* 0.24.0 (B2): what his own "sent it" closed today, with the reason and Undo */
+  function tdReported(nn) {
+    return (nn.reported || []).map(function (x) {
+      return h('div', { class: 'clrd' }, [h('span', { class: 'led ok', 'aria-hidden': 'true' }), 'Done ' + x.at + ' · ', h('b', null, x.title), ' · ' + x.why + ' ',
+        btn('k q', 'Undo', { 'aria-label': 'Undo: put “' + x.title + '” back on your list' }, function () { tdPost('undone', { items: [x.id] }, 'Back on your list.'); })]);
+    });
+  }
   function tdKeys(d, phone) {
     var keys = [];
-    if (d.reply) keys.push(tdLink(d.reply, tdGoCls(d)));
+    if (d.reply) keys.push(tdLink(d.reply, d.reply.quiet ? 'k q' : tdGoCls(d)));  /* 0.24.0: no Reply on mail nobody waits on */
     if (d.kind === 'item' && d.open) {
-      keys.push(tdDraftKey(d));  /* 0.21.0 Draft a reply (asks only) */
+      if (!d.automated) keys.push(tdDraftKey(d));  /* 0.21.0 Draft a reply (asks only) */
       keys.push(btn('k', 'Done', null, function () { tdDone([d.id], d.title); }));
       keys.push(btn('k', 'Note…', null, function () { tdNoteOpen('d' + d.id, [d.id], d.title); }));
+      if (!d.security && !d.invite) keys.push(tdNfmKey(d.id, d.title));   /* 0.24.0 */
     }
     if (d.kind === 'item' && !d.open) keys.push(btn('k', 'Put back on my list', null, function () { tdPost('undone', { items: [d.id] }, 'Back on your list.'); }));
     if (d.open) keys.push(btn('k q', d.remind_at ? 'Reminder ' + d.remind_at : 'Remind me', { 'aria-expanded': String(TD.rem === 'd') }, function () { TD.rem = TD.rem === 'd' ? null : 'd'; renderBrief(); }));
     if (d.kind === 'clash' && d.open) keys.push(btn('k q', 'Dismiss', null, function () { tdDismiss(d.id).then(function () { tdGo('today'); }); }));
     var target = d.followup ? ['followup', d.followup.id] : [d.kind === 'clash' ? 'clash' : 'item', d.id];
-    return [h('div', { class: 'keys' }, keys), tdRemind('d', target, d.followup ? d.followup.who : ''), tdNoteBox('d' + d.id)];
+    return [d.closed_why ? h('p', { class: 'clrd' }, [h('span', { class: 'led ok', 'aria-hidden': 'true' }), d.closed_why]) : null,
+      h('div', { class: 'keys' }, keys), d.kind === 'item' ? tdNfmBox(d.id, d.title) : null, tdRemind('d', target, d.followup ? d.followup.who : ''), tdNoteBox('d' + d.id)];
   }
   function tdItemView() {
     var d = TD.d, phone = isPhone();
@@ -7163,7 +7244,31 @@
      kind is one of FA_KINDS): nothing marks done, hides, deletes, changes an account or sends. ARIA combobox and
      listbox; text only. "/" is ignored while typing; ⌘K and Ctrl+K work anywhere. */
   var FA_KINDS = ['open', 'copy', 'read'];
-  var FA = { open: false, q: '', i: 0, items: [], from: null };
+  var FA = { open: false, q: '', i: 0, items: [], from: null, srv: {}, timer: null };
+  /* 0.24.0 (B2, secret shopper: "Portola" and "Schuyler" gave only "Ask: …"): people, open items and messages come
+     from GET api/find (read-only), fetched as he types; a person opens People, an item its view, a message the item
+     it made (else the message). */
+  function faKey(q) { return String(q || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+  function faFetch() {
+    clearTimeout(FA.timer);
+    var k = faKey(FA.q);
+    if (k.length < 2 || FA.srv[k]) return;
+    FA.timer = setTimeout(function () {
+      api('GET', 'api/find?q=' + encodeURIComponent(k)).then(function (r) { FA.srv[k] = r || {}; }, function () { FA.srv[k] = {}; })
+        .then(function () { if (FA.open && faKey(FA.q) === k) faList(); });
+    }, 180);
+  }
+  function faWhenBrief(fn) {
+    if (ui.view === 'brief' && B) { fn(); return; }
+    location.hash = 'briefing';
+    var n = 0;
+    (function again() { if (ui.view === 'brief' && B) fn(); else if (++n < 40) setTimeout(again, 150); })();
+  }
+  function faItem(id) { U.open = null; faWhenBrief(function () { tdGo('item', id); }); }
+  function faPerson(name) {
+    PP.q = String(name || '');
+    if (ui.view === 'people') showPeople('[data-fk="pp-q"]'); else location.hash = 'people';
+  }
   var faRoot = h('div', { class: 'fa-wrap', hidden: '' });
   app.appendChild(faRoot);
   function faGo(tab, item) {
@@ -7176,6 +7281,18 @@
     var out = [], ql = String(q || '').trim().toLowerCase(), ws = ql.split(/\s+/).filter(Boolean);
     function hit(s) { s = String(s || '').toLowerCase(); return ws.every(function (w) { return s.indexOf(w) >= 0; }); }
     function item(group, kind, label, sub, fn, key) { out.push({ group: group, kind: kind, label: String(label || ''), sub: String(sub || ''), run: fn, key: key || '' }); }
+    var sv = ws.length ? FA.srv[faKey(q)] : null;
+    if (sv) {
+      (sv.people || []).forEach(function (p) {
+        item('People', 'open', p.name, p.vip ? 'VIP · People' : 'People', function () { faPerson(p.name); });
+      });
+      (sv.items || []).forEach(function (x) { item('On your list', 'open', x.label, x.sub, function () { faItem(x.id); }); });
+      (sv.messages || []).forEach(function (m) {
+        item('Messages', 'open', m.title, [m.who, m.date, m.item ? 'Opens its item' : ''].filter(Boolean).join(' · '), function () {
+          if (m.item) faItem(m.item); else faGo(LIVE_TABS.indexOf(U.tab) >= 0 && U.tab !== 'chat' ? U.tab : 'briefing', { kind: 'item', id: m.id });
+        });
+      });
+    }
     if (B) {
       if (ws.length) {
         events().filter(function (e) { return hit(e.title + ' ' + (e.time || '')); }).slice(0, 4).forEach(function (e) {
@@ -7208,7 +7325,7 @@
   }
   function faOpen() {
     if (FA.open) return;
-    FA.open = true; FA.q = ''; FA.i = 0; FA.from = document.activeElement;
+    FA.open = true; FA.q = ''; FA.i = 0; FA.srv = {}; FA.from = document.activeElement;
     lookPanel.hidden = true; lookBtn.setAttribute('aria-expanded', 'false');
     faRoot.textContent = ''; faRoot.hidden = false;
     var inp = h('input', { class: 'inp fa-in', id: 'fa-in', type: 'text', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': 'fa-list',
@@ -7218,7 +7335,7 @@
       h('div', { class: 'fa-top' }, [ico('search'), inp, h('button', { type: 'button', class: 'fa-x', 'data-fax': '1', 'aria-label': 'Close' }, ico('close'))]),
       list, h('p', { class: 'fa-foot muted' }, '↑ ↓ move · Enter opens · Esc closes · copy and open only · nothing is sent from here')]);
     add(faRoot, [h('div', { class: 'fa-back', 'data-fax': '1' }), box]);
-    on(inp, 'input', function () { FA.q = inp.value; FA.i = 0; faList(); });
+    on(inp, 'input', function () { FA.q = inp.value; FA.i = 0; faList(); faFetch(); });
     on(inp, 'keydown', faKeys);
     on(faRoot, 'mousedown', function (e) { if (e.target.closest('[role=option]')) e.preventDefault(); });
     on(faRoot, 'click', function (e) {
@@ -7250,7 +7367,8 @@
       add(g.el, h('div', { role: 'option', id: 'fa-o-' + i, class: 'fa-o' + (i === FA.i ? ' on' : ''), 'aria-selected': String(i === FA.i), 'data-fa': String(i) }, [
         h('span', { class: 'fa-l' }, x.label), x.sub ? h('span', { class: 'fa-s' }, x.sub) : null, x.key ? h('kbd', { 'aria-hidden': 'true' }, x.key) : null]));
     });
-    if (!items.length) add(list, h('p', { class: 'fa-none muted', role: 'status' }, FA.q.trim() ? 'Nothing found.' : 'Type a name, a setting, or a question for Chat.'));
+    var wait = faKey(FA.q).length >= 2 && !FA.srv[faKey(FA.q)];
+    if (!items.length || (wait && items.length === 1)) add(list, h('p', { class: 'fa-none muted', role: 'status' }, wait ? 'Looking…' : FA.q.trim() ? 'Nothing found.' : 'Type a name, a setting, or a question for Chat.'));
     if (items.length) inp.setAttribute('aria-activedescendant', 'fa-o-' + FA.i); else inp.removeAttribute('aria-activedescendant');
     var on1 = list.querySelector('.fa-o.on'); if (on1 && on1.scrollIntoView) on1.scrollIntoView({ block: 'nearest' });
   }

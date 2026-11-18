@@ -221,7 +221,7 @@ class TestTodayRow(TripGroupBase):
         self.assertEqual(d["title"], "Your stay at Maple Inn overlaps 3 entries")
         self.assertEqual([s["badge"] for s in d["stand"]][1:], ["On your calendar"] * 3)
         self.assertEqual(len(d["group"]["entries"]), 3)
-        self.assertEqual(d["when"]["sub"], "From “Check-in Mar 8, check-out Mar 10” (Maple).")   # no "clear" line
+        self.assertEqual(d["when"]["sub"], "From “Check-in Mar 8, check-out Mar 10” (Maple Inn).")   # no "clear" line; the whole name (B2)
 
     def test_the_page_draws_the_group_as_one_row(self):
         js = (pathlib.Path(__file__).resolve().parents[1] / "callsheet" / "app" / "static" / "app.js").read_text(

@@ -59,10 +59,13 @@ class TestMorning(Base):
 
     def test_needs_you_oldest_first_with_sources_and_promises(self):
         rows = self.v["needs_you"]["rows"]
+        # 0.24.0: his own promise in his sent mail, with no time, is his: Needs you ("You said"), not Waiting on others
         self.assertEqual([r["who"] for r in rows], ["Priya Shah", "Kestrel Rentals", "Lena Ortiz", "Sam Okafor",
                                                     "Theo Park", "Northlight Studios"])
         self.assertEqual([r["icon"] for r in rows], ["mail", "mail", "slack", "text", "signal", "mail"])
         self.assertTrue(rows[1]["mine"])                                    # "You said"
+        self.assertNotIn(rows[1]["id"], [w["id"] for w in self.v["needs_you"]["waiting"]["rows"]])
+        self.assertTrue(all(w["why"] == "they owe you this" for w in self.v["needs_you"]["waiting"]["rows"]))
         self.assertEqual(rows[0]["age"], "4 days")
         self.assertNotIn("Marco Bellini", [r["who"] for r in rows])         # a clash side shows in the clash
 
@@ -153,7 +156,7 @@ class TestFollowUp(Base):
 
     def test_replies_has_every_open_ask(self):
         r = self.td.replies()
-        self.assertEqual(r["total"], 9)
+        self.assertEqual(r["total"], 8)        # 0.24.0: one row per conversation (his own promise stays his)
         self.assertEqual(max(x["bar"] for x in r["rows"]), 1.0)
 
 

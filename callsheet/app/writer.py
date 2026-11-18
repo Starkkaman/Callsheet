@@ -2304,8 +2304,11 @@ def _post(base, key, body, opts, log, clock, notify=None, timing=None, budget=No
         run = _BgRun(opts.get("timeout") if isinstance(opts, dict) else None)
         with _BG_LOCK:
             _BG_RUNS.add(run)
-        if stream is None and isinstance(body, dict) and body.get("stream"):
-            stream = run.sink
+        if isinstance(body, dict) and body.get("stream"):
+            if stream is None:
+                stream = run.sink
+            else:   # 0.24.0 (B1): the caller hears each piece too (Talk it through shows the words as they come)
+                stream = (lambda kind, payload, _u=stream, _r=run: (_r.sink(kind, payload), _u(kind, payload))[1])
     try:
         if timing is not None:
             timing["lock_s"] = round(clock() - w0, 1)

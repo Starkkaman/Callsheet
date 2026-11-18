@@ -183,7 +183,8 @@ class TestCalendarChoice(NeedBase):
         self.put(*[ev("c-" + c, "Planning session", "2027-03-02T10:00-08:00", "2027-03-02T11:00-08:00", cal=c,
                       organizer="ada@work.example") for c in ("primary", "family", "school", "noisy")])
         self.assertEqual(self.need("c-primary")["need"], "yes")
-        self.assertEqual((self.need("c-family")["need"], self.need("c-family")["ask"]), ("maybe", True))
+        # 0.24.0 (the audit): an entry on a calendar he only reads is never a clash: a heads-up with the ask card
+        self.assertEqual((self.need("c-family")["need"], self.need("c-family")["ask"]), ("no", True))
         self.assertEqual(self.need("c-school")["need"], "no")
         self.assertTrue(self.need("c-noisy")["hide"])
         hu = self.td().headsup(now=self.now[0])
@@ -255,7 +256,7 @@ class TestAskCard(NeedBase):
 
     def test_the_answer_rechecks_the_clash(self):
         self.mine("o1", "dentist", when("Tue 10", "2027-03-02", "10:00", "11:00"))
-        self.assertEqual(self.verdicts(), [("maybe", "overlap")])
+        self.assertEqual(self.verdicts(), [("headsup", "overlap")])      # 0.24.0: a shared entry is no clash until he says
         self.td().need_answer(self.row("q1")["id"], "yes", self.pf)
         self.assertEqual(self.verdicts(), [("clash", "overlap")])
 

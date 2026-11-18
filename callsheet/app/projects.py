@@ -27,10 +27,12 @@ import threading
 import time
 
 import facts
+import filters as F
 import github
 import inject
 import know_profile as kp
 import rules
+import tidy as TY
 import writer
 from store import Conflict, InputError, NotFound
 
@@ -291,6 +293,25 @@ def gather(index, owner, since, until=None):
     for r in index.rows(source=["gmail", "slack", "signal"], since=since, until=until):
         th[_thread_key(r)].append({"r": r, "out": owner.wrote(r), "who": _who(r), "ts": r["ts"]})
     return th
+
+
+_DIGEST = re.compile(r"\b(?:digest|forum|newsletter|community|roundup|round-up|summary|bulletin|"
+                     r"new (?:posts?|topics?|replies)|unread (?:posts?|topics?)|mailing list)\b", re.I)
+
+
+def _not_a_person(it, rep):
+    """0.24.0 (B2, secret shopper: Projects said "No reply to <a forum digest> yet"): mail no person is waiting on
+    an answer to (machine and list mail, promotions, a list sender he never answers, digests and forum posts), by the
+    same rules Today and Tidy use (tidy.py, filters.py)."""
+    r = (it or {}).get("raw")
+    if not r or r.get("source") != "gmail" or r.get("direction") != "in":
+        return False
+    if _DIGEST.search(str(r.get("subject") or "")):
+        return True
+    try:
+        return bool(TY.machine_mail(r) or TY.promo_of(r)[0] or (rep is not None and rep.bulk(TY.address(r))))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _automated(r):
@@ -1083,6 +1104,21 @@ class Projects:
         if self.index is not None:
             owner = self._owner()
             threads = gather(self.index, owner, now - SLIP_DAYS * 86400, now + 1)
+            if hasattr(self.index, "light"):   # 0.24.0 (B2): no per-message scan, the areas read once
+                ix_areas = self.index._areas()  # noqa: SLF001
+                light = lambda i: self.index.light(i, ix_areas)  # noqa: E731
+            else:
+                light = self.index.get
+            reps = []
+
+            def person_mail(it):   # the sorting rules, only for a row about to be shown
+                if not reps:
+                    try:
+                        reps.append(F.Reputation.peek(self.index.ms) if getattr(self.index, "ms", None) is not None
+                                    else None)
+                    except Exception:  # noqa: BLE001
+                        reps.append(None)
+                return not _not_a_person(it, reps[0])
             for tk, msgs in sorted(threads.items(), key=lambda kv: -kv[1][-1]["ts"])[:400]:
                 last = msgs[-1]
                 who = _other(msgs, owner)
@@ -1096,7 +1132,7 @@ class Projects:
                         continue
                     if not m["out"] and _automated(m["r"]):
                         continue
-                    it = self.index.get(m["r"]["id"])
+                    it = light(m["r"]["id"])
                     if not it:
                         continue
                     sent = dt.datetime.fromtimestamp(m["ts"], tz).date()
@@ -1107,7 +1143,7 @@ class Projects:
                             continue
                         due = facts.due(sen, sent)
                         dd = _iso(due.get("date")) if due else None
-                        if not dd or dd >= today or dd < sent:
+                        if not dd or dd >= today or dd < sent or not m["out"] and not person_mail(it):
                             continue
                         days = (today - dd).days
                         subj = kp.subject(it["title"]) or it["title"]
@@ -1128,12 +1164,14 @@ class Projects:
                     continue
                 if not last["out"] and _automated(last["r"]):
                     continue
-                it = self.index.get(last["r"]["id"])
+                it = light(last["r"]["id"])
                 if not it:
                     continue
                 sens = sentences(it.get("body"))[:60]
                 ask = next((x for x in sens if _ASK.search(x)), None)
                 back = next((x for x in sens if _BACK.search(x)), None)
+                if not last["out"] and (ask or back) and not person_mail(it):
+                    continue
                 promise = next((x for x in sens if _PROMISE.search(x)), None)
                 sent = dt.datetime.fromtimestamp(last["ts"], tz).date()
                 subj = kp.subject(it["title"]) or it["title"]

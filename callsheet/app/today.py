@@ -26,6 +26,7 @@ import tidy as TY
 import heads
 import ledger as L
 import need as N
+import filters as F
 
 SOURCES = {"gmail": ("mail", "Email"), "signal": ("signal", "Signal"), "slack": ("slack", "Slack"),
            "sms": ("text", "Text"), "calendar": ("cal", "Calendar"), "reports": ("note", "Report"),
@@ -36,6 +37,14 @@ APP = {"gmail": "Gmail", "slack": "Slack", "signal": "Signal", "sms": "Messages"
 for _m in (SOURCES, FROM, APP):          # 0.20.0: a live text notification (texts.py, sms_live) reads as a text
     _m["sms_live"] = _m["sms"]
 HORIZON_DAYS = 30
+# 0.24.0 (B1): not a bill though typed one (the audit: a repair notice, a coupon, an order)
+NOT_BILL = re.compile(r"\b(?:coupons?|promo(?:tion(?:al)?)?\s+codes?|\d+\s?% off|deals?|rewards?|cash\s?back|"
+                      r"repairs?|service\s+request|refunds?|receipts?|orders?\s+(?:shipped|confirmed|placed|received)|"
+                      r"thanks?\s+(?:you\s+)?for\s+your\s+(?:order|payment)|payment\s+(?:received|confirmed|"
+                      r"successful|scheduled)|you\s+paid|paid\s+in\s+full|autopay\s+(?:is\s+)?(?:on|set))\b", re.I)
+MONEY_RX = re.compile(r"[$€£][0-9][0-9,]*(?:\.[0-9]{1,2})?")
+TRIP_WORDS = re.compile(r"\b(?:trips?|vacation|cabin|camp(?:ing)?|travel\w*|flights?|fly(?:ing)?|hotel|lodge|"
+                        r"getaway|cruise|resort|airbnb|road\s?trip|out\s+of\s+town|ooo)\b", re.I)
 EXPAND_S = 48 * 3600            # a clash this near shows both sides; a later one is one line
 RED_S = 86400                   # under 24 h: the red treatment
 WEEK_S = 7 * 86400              # under a week: amber
@@ -51,9 +60,11 @@ FILES = frozenset({"not_for_me", "junk"})        # these chips file the items (d
 NOTE_MAX = 300
 FEEDS_SHOWN = 5                 # 0.21.0: "From your channels, feeds and reports" shows this many, then "n more"
 TYPE_WORD = {"ask": "Ask", "commitment": "Your word", "event": "Event", "cleanup": "Clean up"}
-CLEAN_GROUPS = (("channels", "From your channels", "slack"), ("promo", "Promotions", "news"),
+CLEAN_GROUPS = (("people", "From people", "mail"),   # 0.24.0: real people apart from promotions (the audit)
+                ("channels", "From your channels", "slack"), ("promo", "Promotions", "news"),
                 ("newsletter", "Newsletters", "news"), ("receipt", "Receipts", "mail"),
                 ("chatter", "Slack chatter", "slack"), ("other", "Notifications", "note"))
+_REAL_ASK = frozenset({"decision", "reply", "appointment", "deadline", "bill", "payment", "document", "meeting"})
 _RECEIPT = re.compile(r"receipt|order|invoice|payment|paid|statement|shipping|delivery", re.I)
 _NEWS = re.compile(r"newsletter|digest|weekly|promo|offer|deal|sale|update", re.I)
 _BIZ = re.compile(r"\b(rentals?|billing|films?|studios?|supply|inc|llc|ltd|co|team|support|bank|store|shop|club|"
@@ -211,6 +222,22 @@ def slot_word(ts, now, tz):
     if 1 < n < 7:
         return f"{d:%a} {t12(d)}"
     return f"{short_day(d)}, {t12(d)}"
+
+
+_VAGUE = re.compile(r"(?:right )?now|asap|a\.s\.a\.p\.?|as soon as (?:possible|you can)|soon|soonish|whenever|later|"
+                    r"at some point|when(?:ever)? you (?:can|get a chance)|any ?time|eventually|shortly|in a (?:bit|while)|"
+                    r"when you have (?:a )?(?:minute|moment|time)|no rush|today-ish", re.I)
+_TIME_CUE = re.compile(r"\d|noon|midnight|morning|afternoon|evening|night|tonight|today|tomorrow|weekend|"
+                       r"\b(?:mon|tue|wed|thu|fri|sat|sun)|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.I)
+
+
+def real_time(it):
+    """0.24.0 (B2): True when the item's time comes from the message's own words: not a vague phrase ("now", "asap",
+    "soon") and not a guess with no day or time word in it. Otherwise the item view shows the words, not a time."""
+    ph = " ".join(str(it.get("phrase") or "").split()).strip(" .!?,")
+    if ph and _VAGUE.fullmatch(ph):
+        return False
+    return not (it.get("approx") and not _TIME_CUE.search(ph))
 
 
 def first(name):
@@ -499,6 +526,30 @@ class Today:
                 "yes_ts": yes_ts, "link": self._reply(it, ss), "predecessor": it.get("predecessor"),
                 "confidence": it.get("confidence")}
 
+    def _mail_kind(self, it, srcs):
+        """0.24.0 (B2, secret shopper pain point 8): who stands behind an item's message. "person" (a reply may be
+        wanted), "code" (a security alert, sign-in or one-time code), "promo" (marketing, a list he never answers) or
+        "machine" (no-reply, role and mailing-service mail, a bill or a receipt). Only "person" mail shows "No reply
+        yet" and a Reply button."""
+        if it.get("subtype") == "security" or it.get("never_hide") and it.get("subtype") != "invite":
+            return "code"
+        o = self._origin(srcs) or {}
+        if it.get("type") == "commitment" and it.get("who") == L.OWNER or o.get("direction") != "in":
+            return "person"
+        if TY.NEVER_HIDE.search(" ".join((str(o.get("subject") or ""), str(o.get("text") or "")[:800]))) and \
+                it.get("subtype") != "invite":
+            return "code"
+        try:
+            if TY.promo_of(o)[0] == "promo" or F.Reputation.load(self.ms).bulk(TY.address(o)):
+                return "promo"
+        except Exception:  # noqa: BLE001 - the sorting facts are a nicety here
+            pass
+        if TY.machine_mail(o) or it.get("type") == "cleanup" or it.get("subtype") in ("bill", "receipt", "payment"):
+            return "machine"
+        if o.get("source") == "sms" and re.fullmatch(r"\+?\d{3,6}", str(o.get("sender") or "")):
+            return "code" if re.search(r"\bcode\b", str(o.get("text") or ""), re.I) else "machine"
+        return "person"
+
     def _invite_link(self, it, srcs):
         """Where the owner answers an invite themselves: the calendar entry (Google's own https link), else the mail."""
         if it.get("cal_ref") is not None:
@@ -539,7 +590,15 @@ class Today:
                          "marks": heads.security_marks(alert), "ts": ts,
                          "link": dict(link, label="Open in " + link["app"]) if link else None})
         rows.sort(key=lambda r: -r["ts"])
-        return rows
+        out, seen = [], {}
+        for r in rows:                     # 0.24.0: one card per sender, alert and day (the audit: 2 of 5 were twins)
+            k = F.alert_key(r["who"], r["what"], r["ts"], tz)
+            if k in seen:
+                seen[k].setdefault("same", []).append(r["id"])
+                continue
+            seen[k] = r
+            out.append(r)
+        return out
 
     def _feeds(self, now, tz):
         """"From your channels, feeds and reports": the connectors' newest items and the unexpired reports, newest
@@ -773,6 +832,7 @@ class Today:
                 "banner": self._banner(),
                 "now_next": {"security": self._security(lv, now, tz),
                              "clashes": clashes, "followups": loose, "cleared": self._cleared(day0, now, tz),
+                             "reported": self._reported(day0, tz),
                              "clashes_left_out": left_out,
                              "timeline": self._timeline(day0, day1, now, tz, busy_events, busy_items, lv)},
                 "headsup": self.headsup(now, tz, clashes),
@@ -806,9 +866,14 @@ class Today:
                 if s.get("subtype") == "invite":
                     src = "Calendar · invite"
             when = ""
-            if s0:
+            whole = bool(e["all_day"]) if s["kind"] == "event" else bool(it.get("all_day"))
+            if s0 and whole:                 # 0.24.0: a whole-day trip shows its dates, never "12:00 am – 12:00 am"
+                d0, d1 = local(s0, tz).date(), local((s1 or s0 + 86400) - 1, tz).date()
+                when = f"{d0:%a} {d0:%b} {d0.day}" + (f" – {d1:%a} {d1:%b} {d1.day}" if d1 > d0 else "")
+            elif s0:
                 d0 = local(s0, tz)
-                when = t12(d0) + (f" – {t12(local(s1, tz))}" if s1 and s1 > s0 else "")
+                d1 = local(s1, tz) if s1 and s1 > s0 else None
+                when = t12(d0) + ((f" – {t12(d1)}" if d1.date() == d0.date() else f" – {d1:%a} {t12(d1)}") if d1 else "")
             out.append({"kind": s["kind"], "id": s["id"], "title": title, "when": when, "need": need["need"],
                         "why": need["why"], "src": src, "first": s.get("first") or "",
                         "item": s["id"] if s["kind"] == "item" else None,
@@ -853,7 +918,7 @@ class Today:
     def _hu_row(r):
         return {"key": r["key"], "when": r["when"], "title": r["title"], "sub": r["sub"], "tag": r["tag"],
                 "word": r["word"], "day": r["day"], "kind": r["kind"], "id": r["id"], "all_day": r["all_day"],
-                "start_ts": r["start_ts"]}
+                "start_ts": r["start_ts"], "cal": r.get("cal")}
 
     def day_lanes(self, day, now=None, tz=None, clashes=None):
         """0.23.0 the day drawing (direction B): Today's Day strip, the phone's vertical day and the Agenda day."""
@@ -948,11 +1013,153 @@ class Today:
         items = self._items(ids)
         keep = [c for c in rows if all(TY.clash_ok(items.get(c[k + "_ref"]), now, tz)
                                        for k in ("a", "b") if c[k + "_kind"] == "item")]
-        return keep, len(rows) - len(keep)
+        # 0.24.0 (the audit: almost every clash was false): no empty side, no cancelled entry, no entry from a calendar
+        # he only reads, no event against its own invite or mail, no two invites of one series, no promotion
+        eids = {c[k + "_ref"] for c in keep for k in ("a", "b") if c[k + "_kind"] == "event"}
+        eids |= {it["cal_ref"] for it in items.values() if it.get("cal_ref") is not None}
+        evs = {r["id"]: dict(r) for r in self._read(
+            f"SELECT * FROM events WHERE id IN ({','.join('?' * len(eids))})", tuple(eids))} if eids else {}
+        nd = N.Need(N.ReadOnly(self.ms))
+        promo = self._promo_items([i for c in keep for k in ("a", "b") if c[k + "_kind"] == "item"
+                                   for i in [c[k + "_ref"]]])
+        out = []
+        for c in keep:
+            facts, bad = [], ""
+            for k in ("a", "b"):
+                kind, ref = c[k + "_kind"], c[k + "_ref"]
+                row = evs.get(ref) if kind == "event" else items.get(ref)
+                if kind == "event" and row is not None and nd.shared(row) and nd.event(row)["need"] != N.YES:
+                    bad = "on a calendar you only read"
+                if kind == "item" and ref in promo:
+                    bad = "a promotion"
+                facts.append(F.side_facts(kind, row, evs))
+            bad = bad or (F.clash_drop(facts[0], facts[1]) if not L.group_entries(c) else "")
+            if not bad:
+                out.append(c)
+        return out, len(rows) - len(out)
+
+    def _promo_items(self, ids):
+        """0.24.0: clash sides whose mail the promo rules call a promotion (not tidied yet)."""
+        ids = sorted(set(ids))
+        if not ids or self.tidy is None:
+            return set()
+        try:
+            known = self.tidy.known()
+            rows = self.tidy._origin_rows(ids)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 (no promo check when the rules can't be read)
+            return set()
+        return {i for i, r in rows.items() if r.get("source") == "gmail" and (TY.promo_of(r, known)[0] or
+                                                                             self._list_not_booking(r, known))}
+
+    @staticmethod
+    def _list_not_booking(r, known):
+        """0.24.0 validation (a broker's webinar mail clashed with a site visit): list mail (a mailing service, the
+        bulk flag, unsubscribe text) from no one he knows, whose subject books nothing, is never a clash side."""
+        if r.get("direction") != "in" or (known is not None and known.protects(r)):
+            return False
+        sig = set(TY.list_signals(r)) & {"mailing-service sender", "bulk", "unsubscribe text", "promotions tab"}
+        subj = str(r.get("subject") or "")
+        return bool(sig) and not TY.BOOKING.search(subj) and not TY.TRANSACTIONAL.search(subj) and \
+            not TY.NEVER_HIDE.search(subj)
+
+    # --- 0.24.0 (B1, the audit's pain points 6 and 7): one source for Chat and Talk it through --------------------
+    def quiet_ids(self, ids):
+        """Items the same rules as Today and Tidy up call noise: a promotion or list mail that books nothing
+        (_promo_items), or anything Tidy up would move to Clean up (tidy.Tidy.judge: not a bill, a channel post, a
+        sender he said never to show). Talk it through never says these aloud; Chat's lists leave them out."""
+        ids = sorted({int(i) for i in ids if isinstance(i, int)})
+        if not ids or self.tidy is None:
+            return set()
+        out = set(self._promo_items(ids))
+        try:
+            known = self.tidy.known()
+            rows = self.tidy._origin_rows(ids)  # noqa: SLF001
+            names = tuple(self.tidy.owner_names() or ())
+            for it in self._items(ids).values():
+                row = rows.get(it["id"])
+                if row is not None and self.tidy.judge(it, row, known, names):
+                    out.add(it["id"])
+        except Exception:  # noqa: BLE001 (the plain list when the rules can't be read)
+            pass
+        return out
+
+    def bills(self, now=None):
+        """The owner's bills, one list for Talk it through's Bills step and Chat's bills tool: open bill and payment
+        items (or a deadline with an amount) from the ledger, overdue first, then by due date. Never a promotion, a
+        coupon, a receipt, a repair or order notice (NOT_BILL), nor what the noise rules file (quiet_ids). Each row:
+        {item, what, who, amount, due (the ledger's own label, verbatim), late, overdue, start}."""
+        now = self.clock() if now is None else now
+        lv = self.lv.view(now=now, horizon_days=HORIZON_DAYS)
+        seen, cands = set(), []
+        for it in lv["needs_you"] + lv["now_next"] + lv["coming_up"]:
+            if it["id"] in seen or it["status"] in L.CLOSED:
+                continue
+            seen.add(it["id"])
+            sub = it.get("subtype") or ""
+            amt = it.get("amount") or ""
+            if not amt:
+                m = MONEY_RX.search(it.get("what") or "")
+                amt = m.group(0) if m else ""
+            if not (sub in ("bill", "payment") or (sub == "deadline" and amt)):
+                continue
+            if NOT_BILL.search(f"{it.get('what') or ''} {it.get('purpose') or ''}"):
+                continue
+            cands.append((it, amt))
+        quiet = self.quiet_ids([it["id"] for it, _ in cands])
+        rows = []
+        for it, amt in cands:
+            if it["id"] in quiet:
+                continue
+            late = it.get("late") or None
+            start = it.get("start_ts") or (it.get("when") or {}).get("start_ts")
+            rows.append({"item": it["id"], "what": it.get("what") or "", "who": it.get("who_name") or "",
+                         "amount": amt, "due": (it.get("when") or {}).get("label") or "",
+                         "late": (late or {}).get("word") or "", "overdue": bool(late), "start": start})
+        rows.sort(key=lambda r: (not r["overdue"], r["start"] is None, r["start"] or 0, r["item"]))
+        return rows
+
+    def trips(self, now=None, days=365):
+        """Trips, one list for Chat's trips tool and Talk it through: the ledger's trip items (trips, flights, hotels,
+        rentals) and all-day or multi-day calendar entries that read as a trip (TRIP_WORDS) or span several days on his
+        own calendar, from now on, soonest first, family calendars included. Each: {kind, id, what, when (the
+        ledger's or calendar's own label, verbatim), calendar, need, why, start}."""
+        now = self.clock() if now is None else now
+        tz = self.tz()
+        out, keys = [], set()
+        for it in self.lv.items("merged_into IS NULL AND status NOT IN ('declined','done','cancelled') AND "
+                                "(subtype='trip' OR subtype IN (%s))" % ",".join("?" * len(L.TRIP_PARTS)),
+                                tuple(sorted(L.TRIP_PARTS))):
+            p = self.lv.present(it, now)
+            sp = L.span(it, tz)
+            if sp is None or sp[1] < now or sp[0] > now + days * 86400 or it["id"] in self.quiet_ids([it["id"]]):
+                continue
+            out.append({"kind": "item", "id": it["id"], "what": p.get("what") or "", "when": p["when"]["label"] or "",
+                        "calendar": "", "need": "yours", "why": p.get("purpose") or "", "start": sp[0]})
+            keys.add(F.norm_title(p.get("what") or ""))
+        nd = N.Need(N.ReadOnly(self.ms))
+        for e in self.ms.events(since=now, until=now + days * 86400):
+            if not e["all_day"] and (e["end_ts"] or 0) - (e["start_ts"] or 0) < 20 * 3600:
+                continue
+            title = (e["title"] or "").strip()
+            r = nd.event(e)
+            multi = (e["end_ts"] or 0) - (e["start_ts"] or 0) > 36 * 3600
+            if r.get("hide") or not (TRIP_WORDS.search(title) or (multi and r["need"] == N.YES)):
+                continue
+            if F.norm_title(title) in keys:
+                continue
+            keys.add(F.norm_title(title))
+            when = L.when_label({"start_ts": e["start_ts"], "end_ts": e["end_ts"], "all_day": e["all_day"],
+                                 "start_date": e["start"][:10] if e["all_day"] else None,
+                                 "end_date": e["end"][:10] if e["all_day"] else None}, tz)
+            out.append({"kind": "event", "id": e["id"], "what": title, "when": when, "calendar": nd.cal_name(e)[:60],
+                        "need": {N.YES: "yours", N.NO: "heads-up", N.MAYBE: "maybe yours"}.get(r["need"], ""),
+                        "why": r["why"], "start": e["start_ts"]})
+        out.sort(key=lambda r: (r["start"] or 0, r["what"]))
+        return out
 
     def _clash_cap(self, clashes, sides):
-        """At most CLASH_PER_ITEM clashes per item (sure first, then soonest); the rest of one item's clashes become one
-        grouped line ("12 more clashes with …") that opens to list them."""
+        """An item with more than CLASH_PER_ITEM clashes shows them as one grouped clash ("Site visit clashes with 13
+        things", 0.24.0: all of them, not three and "9 more") that opens to list them."""
         per, out, rest = {}, [], {}
         order = sorted(clashes, key=lambda c: (c["confidence"] != "sure", c["seconds"]))
         for c in order:
@@ -962,14 +1169,13 @@ class Today:
             if key is None or not many:
                 out.append(c)
                 continue
-            per[key] = per.get(key, 0) + 1
-            (out if per[key] <= TY.CLASH_PER_ITEM else rest.setdefault(key, [])).append(c)
+            rest.setdefault(key, []).append(c)     # 0.24.0: all of one item's clashes in one grouped clash
         for key, cs in rest.items():
             side = next((s for c in cs for s in sides.get(c["id"], []) if s["kind"] == "item" and s["id"] == key), {})
             what = self._about(side) if side else "one item"
             n = len(cs)
-            g = {"title": seg((f"{n} more clash{'' if n == 1 else 'es'}", True), (f" with {what}", False)),
-                 "plain": f"{n} more clash{'' if n == 1 else 'es'} with {what}", "count": n, "trip": None,
+            g = {"title": seg((what[:1].upper() + what[1:], True), (f" clashes with {n} things", False)),
+                 "plain": f"{what} clashes with {n} things", "count": n, "trip": None,
                  "entries": [{"id": c["id"], "icon": "cal", "chip": c["when"], "text": c["line"], "age": c["until"]}
                              for c in cs]}
             first_c = min(cs, key=lambda c: c["seconds"])
@@ -1035,6 +1241,22 @@ class Today:
             return []
         return [{"at": t12(local(best[0], tz)), "why": best[1]}]
 
+    def _reported(self, day0, tz):
+        """0.24.0 (B2): what his own messages closed today ("You wrote that it's done: “sent the invoice”"), newest
+        first, each with Undo (POST api/today/undone)."""
+        rows = self._read("SELECT h.item, h.at, h.note FROM ledger_history h JOIN ledger_items i ON i.id=h.item WHERE "
+                          "h.kind='done_report' AND h.at >= ? AND i.status='done' ORDER BY h.at DESC LIMIT 5", (day0,))
+        items = self._items([r["item"] for r in rows])
+        out = []
+        for r in rows:
+            it = items.get(r["item"])
+            if it is None:
+                continue
+            who = it.get("who_name") if it.get("who") != L.OWNER else ""
+            out.append({"id": it["id"], "title": f"{who}: {it['what']}" if who else it["what"],
+                        "at": t12(local(r["at"], tz)), "why": r["note"]})
+        return out
+
     def _why_cleared(self, c, now):
         w = c["resolved_why"] or ""
         if w == "dismissed":
@@ -1061,7 +1283,15 @@ class Today:
                 "cancelled": "it was cancelled"}.get(w, "")
 
     def _timeline(self, day0, day1, now, tz, busy_events, busy_items, lv):
-        evs = [e for e in self.ms.events(since=day0, until=day1) if not e["all_day"] and e["start_ts"] is not None]
+        evs, same = [], set()
+        for e in self.ms.events(since=day0, until=day1):
+            if e["all_day"] or e["start_ts"] is None or e.get("status") == "cancelled":
+                continue
+            k = (F.norm_title(e["title"]), e["start_ts"])
+            if k in same:                    # 0.24.0: one entry on two calendars is one row
+                continue
+            same.add(k)
+            evs.append(e)
         spans = [(e["start_ts"], e["end_ts"] or e["start_ts"] + 3600) for e in evs]
         rows, done = [], 0
         entries = []
@@ -1125,9 +1355,13 @@ class Today:
         back = TY.backfill_before(self.ms)
         quiet = TY.quiet_items(self.ms, [it["id"] for it in lv["needs_you"] if it["id"] not in skip and (
             (it["from"][0].get("ts") if it["from"] else None) or it["created_at"]) < back]) if back else set()
+        nd = N.Need(N.ReadOnly(self.ms))
+        rdb = N.ReadOnly(self.ms)
         for it in lv["needs_you"]:
             if it["id"] in skip:
                 continue
+            if it.get("subtype") == "invite" and heads.shared_invite_item(nd, rdb, self._item(it["id"]) or {}):
+                continue   # 0.24.0 (B1): shown in Heads-up from its calendar entry ("not addressed to you")
             f = it["from"][0] if it["from"] else {}
             src = f.get("source") or "gmail"
             mine = it["type"] == "commitment"
@@ -1164,11 +1398,93 @@ class Today:
         # 0.20.0: a VIP's asks first (0.17.0 rules), 0.22.0: then what is late, then oldest
         rows.sort(key=lambda r: (not r["vip"], not r["late"], -r["seconds"]))
         older.sort(key=lambda r: r["seconds"])
+        rows, older = self._one_per_thread(rows, older, now, tz)
+        waiting, w_old = self._waiting([it for it in lv.get("waiting") or [] if it.get("waiting_why") and
+                                        it["id"] not in skip], now, res)
+        if w_old:
+            older = sorted(older + w_old, key=lambda r: r["seconds"])
         return {"total": len(rows), "rows": rows,
+                "waiting": {"total": len(waiting), "rows": waiting, "label": "Waiting on others",
+                            "note": "What others owe you. They aren't yours to do."},
                 "older": {"total": len(older), "rows": older, "ids": [r["id"] for r in older],
                           "label": "Older, still open?",
                           "note": f"Asks and items more than {TY.AGE_DAYS} days old, or from your first catch-up with "
                                   "nothing new since. Still open and still found in search."}}
+
+    WAIT_QUIET_S = 30 * 86400
+
+    def _waiting(self, items, now, res=None):
+        """0.24.0 (B2, the audit: 30 rows in Waiting on others on Nov 17): what others owe him, one row per
+        conversation and thing (`more` counts the rest); nothing from automated senders (no-reply, list and mailing
+        service mail, a list sender he never answers: no one owes him there); an item 30 days old with no message
+        since goes to "Older, still open?". Returns (rows, older rows)."""
+        if not items:
+            return [], []
+        ids = [it["id"] for it in items]
+        full = {}
+        for r in self._read("SELECT s.item, s.role, m.* FROM ledger_sources s JOIN messages m ON m.id=s.message WHERE "
+                            f"s.item IN ({','.join('?' * len(ids))}) ORDER BY m.ts", ids):
+            full.setdefault(r["item"], []).append(dict(r))
+        try:
+            rep = F.Reputation.load(self.ms)
+        except Exception:  # noqa: BLE001 - without the history, the message's own signals still count
+            rep = None
+        rows, older, lead = [], [], {}
+        for it in items:
+            srcs = full.get(it["id"], [])
+            o = self._origin(srcs) or {}
+            if o.get("direction") == "in" and o.get("source") == "gmail":
+                sig = [x for x in TY.list_signals(o) if x != "role sender"]
+                if sig or (rep is not None and rep.bulk(TY.address(o))):
+                    continue                       # an automated sender owes him nothing
+            first_ts = o.get("ts") or it["created_at"]
+            last_ts = max([s["ts"] for s in srcs if s.get("ts")] or [first_ts])
+            who = it["who_name"] if it["who"] != L.OWNER else "You"
+            row = {"id": it["id"], "who": who, "what": it["what"], "why": it.get("waiting_why") or "",
+                   "age": waited(now - first_ts)}
+            keys = [("w", " ".join(str(who).casefold().split()), " ".join(sorted(L.words(it["what"]))))]
+            if o.get("thread"):
+                keys.append(("t", o.get("source"), o.get("account"), o.get("thread"), str(who).casefold()))
+            got = next((lead[k] for k in keys if k in lead), None)
+            if got is not None:
+                got.setdefault("ids", [got["id"]]).append(it["id"])
+                got["more"] = len(got["ids"]) - 1
+                continue
+            if now - first_ts > self.WAIT_QUIET_S and now - last_ts > self.WAIT_QUIET_S:
+                f = it["from"][0] if it["from"] else {}
+                src = f.get("source") or o.get("source") or "gmail"
+                row = dict(row, icon=SOURCES.get(src, ("mail", ""))[0], source=SOURCES.get(src, ("", "Message"))[1],
+                           why=f"Waiting on them: {it['what']}", mine=False,
+                           likely=it["confidence"] != "sure", never_hide=False, seconds=int(now - first_ts),
+                           vip=False, invite=None, late="", amount="", area=self.area_of(res, o or None),
+                           old_why="waiting on them for more than 30 days, with nothing new")
+                older.append(row)
+            else:
+                rows.append(row)
+            for k in keys:
+                lead.setdefault(k, row)
+        return rows, older
+
+    def _one_per_thread(self, rows, older, now, tz):
+        """0.24.0 (the audit: one thread filled 8 of 21 rows): one Needs you row per conversation and person, and one
+        per duplicate alert (sender, subject, day). The others are counted on the row (`more`, `ids`) and stay open."""
+        srcs = self._srcs([r["id"] for r in rows + older])
+        lead, out = {}, ([], [])
+        for which, lst in ((0, rows), (1, older)):
+            for r in lst:
+                o = self._origin(srcs.get(r["id"], [])) or {}
+                keys = [("t", o.get("source"), o.get("account"), o.get("thread"), r["who"].lower())] if \
+                    o.get("thread") and not r.get("invite") else []
+                keys.append(("a",) + F.alert_key(r["who"], r["why"], o.get("ts") or now, tz))
+                got = next((lead[k] for k in keys if k in lead), None)
+                if got is not None and not r.get("invite") and not r.get("never_hide"):
+                    got.setdefault("ids", [got["id"]]).append(r["id"])
+                    got["more"] = len(got["ids"]) - 1
+                    continue
+                for k in keys:
+                    lead.setdefault(k, r)
+                out[which].append(r)
+        return out
 
     def _coming(self, lv, busy_items, busy_events, now, tz):
         today = local(now, tz).date()
@@ -1201,9 +1517,20 @@ class Today:
                          "what": what, "item": it["id"], "event": it.get("cal_ref"), "source": src,
                          "icon": SOURCES.get(src, ("", ""))[0], "from": FROM.get(src, ""),
                          "on_calendar": bool(it.get("cal_ref")), "likely": it["confidence"] != "sure"})
+        nd, same = N.Need(N.ReadOnly(self.ms)), set()
         for e in self.ms.events(since=tomorrow0, until=horizon1):
             if e["id"] in busy_events or e["id"] in cal_refs or e["start_ts"] is None or e["start_ts"] < tomorrow0:
                 continue
+            if e.get("status") == "cancelled":
+                continue
+            ne = nd.event(e)                 # 0.24.0: a hidden calendar, or a shared calendar's entry (Heads-up's)
+            if ne["hide"] or (nd.shared(e) and ne["need"] != N.YES):
+                continue
+            k = (e["ical_uid"] or F.norm_title(e["title"]), e["start_ts"])
+            k2 = (F.norm_title(e["title"]), e["start_ts"])
+            if k in same or k2 in same:      # 0.24.0: one entry on two calendars is one row
+                continue
+            same |= {k, k2}
             if e["all_day"] and e["start"]:
                 d0 = dt.date.fromisoformat(e["start"][:10])
                 d1 = dt.date.fromisoformat(e["end"][:10]) - dt.timedelta(days=1) if e["end"] else d0
@@ -1214,7 +1541,8 @@ class Today:
                 d1 = local(e["end_ts"], tz).date() if e["end_ts"] else d0
                 what = f"{e['title']} · {t12(s)}"
             rows.append({"d0": d0, "d1": max(d0, d1), "ts": e["start_ts"], "what": what, "item": None, "event": e["id"],
-                         "source": "calendar", "icon": "", "from": "", "on_calendar": True, "likely": False})
+                         "source": "calendar", "icon": "", "from": "", "on_calendar": True, "likely": False,
+                         "cal": self._cal_of(nd, e)})
         rows += self._birthdays(rows, tomorrow0, today, end_day, tz)
         rows.sort(key=lambda r: (r["ts"], r["what"]))
         marks = [""] * HORIZON_DAYS
@@ -1255,7 +1583,8 @@ class Today:
                                 "item": r["item"], "event": r["event"], "icon": r["icon"], "from": r["from"],
                                 "on_calendar": r["on_calendar"], "likely": r["likely"],
                                 "add": None if r["on_calendar"] or r.get("birthday") else
-                                {"on": False, "why": "needs calendar access"}, "birthday": bool(r.get("birthday"))})
+                                {"on": False, "why": "needs calendar access"}, "birthday": bool(r.get("birthday")),
+                                "cal": r.get("cal")})
         last = rows[-1]["d0"] if rows else None
         nearest = rel_day(rows[0]["d0"], today) if rows else ""
         can_add, targets = False, []
@@ -1281,6 +1610,11 @@ class Today:
                 "last": f"{last:%b} {last.day}" if last else "", "nearest": nearest,
                 "summary": f"{len(rows)} things in the next {HORIZON_DAYS} days" + (f", the nearest {nearest}." if rows else ".")}
 
+    @staticmethod
+    def _cal_of(nd, e):
+        """0.24.0: "From calendar X: change how it counts": the calendar of a calendar row and its choice."""
+        return {"account": e["account"], "calendar": e["calendar"], "name": nd.cal_name(e)[:60], "use": nd.use_of(e)}
+
     def _birthdays(self, rows, tomorrow0, today, end_day, tz):
         """0.21.0: contacts' birthdays as Coming up rows (yearly; source "contacts"), unless the calendar or the ledger
         already has that birthday on that day."""
@@ -1303,16 +1637,36 @@ class Today:
                         "likely": False, "birthday": True})
         return out
 
+    def _is_person(self, it, src, people):
+        """0.24.0: a Clean up line from a real person (a colleague in a channel, a person's mail), not a promotion."""
+        if src in ("slack", "signal", "texts"):
+            return bool(it.get("who_name")) and str(it.get("who") or "").lower() in people
+        return str(it.get("who") or "").lower() in people
+
+    def _people(self):
+        """Addresses and handles of people who wrote to him and that he wrote to (one thread each way)."""
+        try:
+            rows = self._read("SELECT DISTINCT lower(sender) AS a FROM messages WHERE direction='in' AND thread IN "
+                              "(SELECT thread FROM messages WHERE direction='out') AND sender != ''")
+        except Exception:  # noqa: BLE001
+            return set()
+        return {r["a"] for r in rows}
+
     def _clean(self, lv, hidden, now, tz, samples=None):
         groups = {k: [] for k, _, _ in CLEAN_GROUPS}
+        people = self._people()
         for it in lv["clean_up"]:
             if it["id"] in hidden:
                 continue
             f = it["from"][0] if it["from"] else {}
             src = f.get("source") or "gmail"
             g = clean_group(it, src)
+            if g not in ("promo",) and it["who"] != L.OWNER and self._is_person(it, src, people):
+                g = "people"                 # 0.24.0: colleagues' posts apart from promotions
             d = local(f.get("ts") or it["created_at"], tz)
             groups[g].append({"id": it["id"], "what": it["what"], "icon": dict((k, i) for k, _, i in CLEAN_GROUPS)[g],
+                              "who": it.get("who_name") or "",
+                              "back": (it.get("subtype") or "") in _REAL_ASK or it["type"] == "ask" and g == "people",
                               "source": src, "day": ago(f.get("ts") or it["created_at"], now, tz) if (now - d.timestamp()) >= 86400 or d.date() != local(now, tz).date() else t12(d),
                               "ts": f.get("ts") or it["created_at"]})
         out, ids = [], []
@@ -1350,6 +1704,54 @@ class Today:
         return out
 
     # --- the item and clash views ------------------------------------------------------------------------------------
+    FIND_SECTIONS = {"security": (0, "Security"), "now_next": (1, "Now and next"), "needs_you": (2, "Needs you"),
+                     "coming_up": (3, "Coming up"), "none": (4, "Waiting on others"), "clean_up": (5, "Clean up"),
+                     "past": (6, "Earlier")}
+
+    def find(self, q, now=None, limit=6):
+        """0.24.0 (B2, secret shopper: Find gave only "Ask: …" for "Portola" and "Schuyler"): the open items whose
+        words, person or source mail (sender, subject) hold every one of the owner's words; Today's own rows first
+        (Needs you, Coming up, then Waiting on others and Clean up), newest first, rows that read the same once.
+        Each row opens that item's view."""
+        words = [w for w in re.findall(r"\w+", str(q or "").casefold()) if len(w) > 1][:6]
+        if not words:
+            return []
+        now = self.clock() if now is None else now
+        tz = self.tz()
+        hay = ("lower(COALESCE(i.what,'') || ' ' || COALESCE(i.who_name,'') || ' ' || COALESCE(i.who,'') || ' ' || "
+               "COALESCE(i.says_name,'') || ' ' || COALESCE(i.purpose,'') || ' ' || COALESCE(GROUP_CONCAT("
+               "COALESCE(m.sender_name,'') || ' ' || COALESCE(m.sender,'') || ' ' || COALESCE(m.subject,''), ' '),''))")
+        rows = self._read("SELECT i.*, MIN(m.ts) AS first_ts FROM ledger_items i LEFT JOIN ledger_sources s ON "
+                          "s.item=i.id LEFT JOIN messages m ON m.id=s.message WHERE i.merged_into IS NULL AND i.status "
+                          "NOT IN ('declined','done','cancelled') GROUP BY i.id HAVING "
+                          + " AND ".join(f"{hay} LIKE ?" for _ in words) + " ORDER BY i.updated_at DESC LIMIT 400",
+                          ["%" + w + "%" for w in words])
+        found = []
+        for r in rows:
+            it = L.row_dict(r)
+            sec = L.section_of(it, now, tz)
+            if sec == "none" and not (it["status"] == "waiting_on_them" or it.get("owed") == "to_owner"):
+                sec = "past"   # a plan whose time has passed
+            rank, word = self.FIND_SECTIONS.get(sec, (6, "Earlier"))
+            ts = it.get("start_ts") or r["first_ts"] or it.get("created_at")
+            day = short_day(local(ts, tz)) if ts else ""
+            who = it.get("who_name") if it.get("who") != L.OWNER else "You"
+            what = " ".join(str(it.get("what") or it.get("type") or "item").split())
+            label = f"{who}: {what}" if who else what
+            found.append((rank, -(it.get("updated_at") or 0), {
+                "id": it["id"], "label": label if len(label) <= 120 else label[:119] + "…",
+                "sub": " · ".join(x for x in (word, day) if x), "section": sec}))
+        out, seen = [], set()
+        for _r, _u, row in sorted(found, key=lambda x: (x[0], x[1])):
+            key = " ".join(row["label"].casefold().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(row)
+            if len(out) >= limit:
+                break
+        return out
+
     def item_view(self, item_id, now=None):
         now = self.clock() if now is None else now
         tz = self.tz()
@@ -1361,37 +1763,50 @@ class Today:
         if it.get("predecessor"):
             items.update(self._items([it["predecessor"]]))
         side = self._side("item", it["id"], items, srcs, now, tz)
+        mail = self._mail_kind(it, srcs.get(it["id"], []))   # 0.24.0 (B2): person, code, promo or machine
+        side["expects"] = mail == "person"
         clashes = self._read("SELECT * FROM ledger_conflicts WHERE state='open' AND verdict IN ('clash','maybe') AND "
                              "((a_kind='item' AND a_ref=?) OR "
                              "(b_kind='item' AND b_ref=?)) ORDER BY slot_start", (it["id"], it["id"]))
         sp = self._span(it)
         kicker = [t12(local(now, tz)), TYPE_WORD.get(it["type"], "Item")]
         when = None
-        if sp:
+        real = bool(sp) and real_time(it)   # 0.24.0 (B2): never a time the message didn't give ("From “now”")
+        if real:
             label = self._when_word(it, sp, tz)
             kicker.append(label)
-            when = {"label": label, "sub": self._when_sub([side], sp, tz)}
+            when = {"label": label, "sub": self._when_sub([side], sp, tz, now=now)}
+        elif it.get("phrase"):
+            when = {"label": f"“{it['phrase']}”", "sub": "The message gives no exact time."}
         name = side["name"]
         title = f"{name}: {it['what']}" if name and it["who"] != L.OWNER else it["what"]
         fus = [f for f in self._followups() if f["item"] == it["id"]]
         rems = [r for r in self._reminders("open") if r["item"] == it["id"] or (fus and r["followup"] == fus[0]["id"])]
         out = {"kind": "item", "id": it["id"], "type": it["type"], "status": it["status"], "kicker": kicker,
-               "title": title, "until": until(sp[0] - now) if sp and sp[0] > now else "",
+               "title": title, "until": until(sp[0] - now) if real and sp[0] > now else "",
                "stand": [self._stand(side, now, tz)], "when": when,
                "reply": (side["link"] if it.get("subtype") == "invite" else
-                         dict(side["link"], label=("Reply to " if it["type"] == "ask" else "Message ") + side["first"]))
-               if side.get("link") and side["first"] else None,
+                         dict(side["link"], label=("Reply to " if it["type"] == "ask" else "Message ") + side["name"])
+                         if side["expects"] else
+                         dict(side["link"], label="Open in " + str(side["link"].get("app") or "the app"), quiet=True))
+               if side.get("link") and side["name"] else None,
+               "automated": not side["expects"], "security": mail == "code" or it.get("subtype") == "security",
+               "invite": it.get("subtype") == "invite",
                "remind_at": self._due_word(rems[-1]["due_ts"], now, tz) if rems else "",
-               "followup": {"id": fus[0]["id"], "who": first(fus[0]["tell_name"])} if fus else None,
+               "followup": {"id": fus[0]["id"], "who": fus[0]["tell_name"]} if fus else None,
                "clashes": [{"id": c["id"], "when": slot_word(c["slot_start"], now, tz) if c["slot_start"] else ""}
                            for c in clashes],
                "confidence": it["confidence"], "likely_from": self._likely(it, srcs.get(it["id"], [])),
                "threads": [self._thread(side, items, srcs, now, tz)],
                "context": self._context(it, side, srcs.get(it["id"], []), now, tz),
                "chat": self._chat_sugs([side], sp, tz), "open": it["status"] not in L.CLOSED}
+        if it["status"] == "done":   # 0.24.0 (B2): closed by his own "sent it": say so (Put back on my list undoes it)
+            h = self._read("SELECT kind, note FROM ledger_history WHERE item=? AND status_to='done' ORDER BY id DESC "
+                           "LIMIT 1", (it["id"],))
+            out["closed_why"] = h[0]["note"] if h and h[0]["kind"] == "done_report" else ""
         out["threads"] = [t for t in out["threads"] if t]
         out["add"] = out["added"] = None   # 0.21.0 Add to calendar (calwrite.py): only for an item with a time
-        if self.cal is not None and sp:
+        if self.cal is not None and real and mail not in ("code", "promo") and it["type"] != "cleanup":
             try:
                 s = self.cal.states([it["id"]]).get(it["id"]) or {}
                 out["add"], out["added"] = s.get("add"), s.get("added")
@@ -1474,7 +1889,8 @@ class Today:
         if s["kind"] == "event":
             return {"badge": "On your calendar", "mark": "", "text": seg((s["title"], True)), "age": s["until"]}
         about = self._about(s)
-        text = seg((s["first"], True), (": " + about, False)) if s["first"] else seg((about, False))
+        who = s.get("name") or s["first"]   # 0.24.0 (B2): the whole name ("Portola Valley Garden", not "Portola")
+        text = seg((who, True), (": " + about, False)) if who else seg((about, False))
         st = s.get("status")
         if s.get("mine"):
             if st in ("declined", "cancelled"):
@@ -1491,6 +1907,9 @@ class Today:
         if rep:
             d = local(rep, tz)
             return {"badge": "You replied", "mark": "ok", "text": text, "age": f"{day_word(d.date(), today)} {t12(d)}"}
+        if s.get("expects") is False:   # 0.24.0 (B2): no-reply, marketing and code mail wait on no answer
+            return {"badge": "No reply needed", "mark": "", "text": text,
+                    "age": "sent " + ago(s["ts"], now, tz).replace(" ago", "") if s.get("ts") else ""}
         return {"badge": "No reply yet", "mark": "wn", "text": text,
                 "age": "asked " + ago(s["ts"], now, tz).replace(" ago", "") if s.get("ts") else ""}
 
@@ -1507,19 +1926,23 @@ class Today:
                     return r[0]["ts"]
         return None
 
-    def _when_sub(self, sides, sp, tz, calendar=True):
+    def _when_sub(self, sides, sp, tz, calendar=True, now=None):
         bits = []
         for s in sides:
             if s["kind"] == "item" and s.get("phrase"):
-                bits.append(f"“{s['phrase']}” ({s['first']})" if s["first"] else f"“{s['phrase']}”")
+                who = s.get("name") or s["first"]
+                bits.append(f"“{s['phrase']}” ({who})" if who else f"“{s['phrase']}”")
         out = ("From " + " and ".join(bits) + ". ") if bits else ""
         if not calendar:
             return out.strip()
-        return out + self._calendar_then(sp, tz, {s["id"] for s in sides if s["kind"] == "event"})
+        return out + self._calendar_then(sp, tz, {s["id"] for s in sides if s["kind"] == "event"}, now=now)
 
-    def _calendar_then(self, sp, tz, skip=()):
+    def _calendar_then(self, sp, tz, skip=(), now=None):
         a, b = sp
         b = b or a + 3600
+        now = self.clock() if now is None else now
+        if local(a, tz).date() < local(now, tz).date():   # 0.24.0 (B2): a past day is no "clear" day
+            return ""
         d = local(a, tz).date()
         day0, day1 = L.day_bounds(d, tz)
         evs = [e for e in self.ms.events(since=day0, until=day1) if not e["all_day"] and e["start_ts"] is not None
@@ -1539,7 +1962,7 @@ class Today:
         o = self._origin(srcs) or {}
         what = o.get("subject") or (SOURCES.get(o.get("source"), ("", "a message"))[1] + " message")
         shown = self.ms.shown_name(o) if o.get("direction") == "in" else ""
-        return f"Likely, from {first(shown or o.get('sender') or '')}’s “{what}”".replace("’s “", "’s “") \
+        return f"Likely, from {shown or o.get('sender') or ''}’s “{what}”" \
             if o.get("direction") == "in" else f"Likely, from your “{what}”"
 
     def _thread(self, side, items, srcs, now, tz):
@@ -1577,7 +2000,7 @@ class Today:
             day = "Today" if n == 0 else "Yesterday" if n == 1 else f"{d:%A}" if 0 < n < 7 else f"{d:%a} {d:%b} {d.day}"
             text = clean_text(r["text"]) or r["subject"] or "(no text)"
             m = {"id": r["id"], "me": r["direction"] == "out", "who": "You" if r["direction"] == "out" else
-                 first(r["sender_name"] or r["sender"]), "time": t12(d), "day": day, "text": text,
+                 (self.ms.shown_name(r) or r["sender_name"] or r["sender"]), "time": t12(d), "day": day, "text": text,
                  "mark": "ask" if r["id"] in ask_ids else "yes" if r["id"] in yes_ids else ""}
             if m["mark"] == "ask":
                 m["hl"] = self._highlight(text, side)
@@ -1588,7 +2011,7 @@ class Today:
             start = max(0, ask_at - 1)
         last_in = msgs[-1] if msgs else None
         no_reply = bool(ask_at is not None and not any(m["me"] for m in msgs[ask_at + 1:]) and last_in and not last_in["me"]
-                        and it.get("status") == "open")
+                        and it.get("status") == "open" and side.get("expects") is not False)
         subj = o["subject"] if o["source"] == "gmail" else ""
         return {"item": side["id"], "who": side["name"], "first": side["first"], "source": o["source"],
                 "icon": SOURCES.get(o["source"], ("mail", ""))[0], "chip": SOURCES.get(o["source"], ("", "Message"))[1],
@@ -1701,6 +2124,80 @@ class Today:
             r["bar"] = round(max(0.04, r["seconds"] / top), 3)
         return {"total": len(rows), "rows": rows, "time": t12(local(now, tz))}
 
+    # --- 0.24.0: noise controls where the noise is (the audit, pain point 9) -------------------------------------------
+    def move_back(self, item_id):
+        """"Move back to Needs you" on a Clean up line that looks like a real ask (a decision, a reply): it comes back
+        as it was before it was tidied (else as an ask), saying so. {item, label}."""
+        it = self._item(item_id) if isinstance(item_id, int) and not isinstance(item_id, bool) else None
+        if not it or it["type"] != "cleanup":
+            raise Invalid("That isn't in Clean up.")
+        now = self.clock()
+
+        def run(db):
+            if not L.bring_back(db, it["id"], "you moved it back", now):
+                checks = [c for c in it.get("checks") or [] if not (isinstance(c, dict) and c.get("field") in
+                                                                      ("tidy", "back"))]
+                checks.append({"field": "back", "value": "", "why": "you moved it back"})
+                db.execute("UPDATE ledger_items SET type='ask', checks=?, updated_at=? WHERE id=?",
+                           (json.dumps(checks), now, it["id"]))
+                L.history(db, it["id"], "owner_back", now, note="you moved it back to Needs you",
+                          fields={"type": ["cleanup", "ask"]})
+        self.ms.write(run)
+        return {"item": it["id"], "label": f"Back in Needs you: {it['what']}"}
+
+    def sender_rule(self, item_id, kind):
+        """"Never from this sender" / "Treat as promotion" on any item: the item is filed (Not for me), the sender is
+        taught (filters.sender_rules: read-time rules and Tidy up use it) and that sender's other open items move to
+        Clean up in one run. {rule, run, moved, label} for one Undo."""
+        if kind not in F.RULE_KINDS:
+            raise Invalid("Pick Never from this sender or Treat as promotion.")
+        it = self._item(item_id) if isinstance(item_id, int) and not isinstance(item_id, bool) else None
+        if not it:
+            raise Invalid("There's no such item.")
+        o = self._origin(self._srcs([it["id"]]).get(it["id"], [])) or {}
+        addr = TY.address(dict(o)) if o else ""
+        if not addr or o.get("direction") == "out":
+            raise Invalid("This item has no sender to teach.")
+        if it.get("subtype") in ("security", "invite"):
+            raise Invalid("Security alerts and invites always show.")
+        now = self.clock()
+        label = f"{F.RULE_KINDS[kind]}: {o.get('sender_name') or addr}"
+
+        def w(db):
+            F.ensure(db)
+            rid = db.execute("INSERT INTO sender_rules (address, kind, at, item, label) VALUES (?,?,?,?,?)",
+                             (addr, kind, now, it["id"], label[:200])).lastrowid
+            if it["status"] not in L.CLOSED:
+                L.set_status(db, it["id"], "done", now, note=label[:200], kind="owner")
+            return rid
+        rid = self.ms.write(w)
+        F.forget(self.ms)
+        same = [r["item"] for r in self._read(
+            "SELECT DISTINCT s.item FROM ledger_sources s JOIN messages m ON m.id=s.message WHERE lower(m.sender)=? "
+            "AND m.direction='in'", (addr,))]
+        res = self.tidy.run(how="sender", only=same) if self.tidy is not None and same else {"run": None, "moved": 0}
+        self.ms.write(lambda db: db.execute("UPDATE sender_rules SET run=? WHERE id=?", (res.get("run"), rid)))
+        return {"rule": rid, "run": res.get("run"), "moved": res.get("moved", 0), "item": it["id"], "label": label}
+
+    def sender_rule_undo(self, rid):
+        if isinstance(rid, bool) or not isinstance(rid, int):
+            raise Invalid("Send the rule's id as a number.")
+        r = self._read("SELECT * FROM sender_rules WHERE id=?", (rid,))
+        if not r or r[0]["undone_at"] is not None:
+            raise Invalid("That is already undone.")
+        r, now = r[0], self.clock()
+
+        def w(db):
+            db.execute("UPDATE sender_rules SET undone_at=? WHERE id=?", (now, rid))
+            it = L.get_item(db, r["item"]) if r["item"] is not None else None
+            if it is not None and it["status"] == "done":
+                L.set_status(db, it["id"], "open", now, note="Undo: " + r["label"][:180], kind="owner")
+        self.ms.write(w)
+        F.forget(self.ms)
+        if r["run"] is not None and self.tidy is not None:
+            self.tidy.undo(r["run"])
+        return {"undone": rid}
+
     # --- the owner's presses ------------------------------------------------------------------------------------------
     def _ids(self, ids):
         if not isinstance(ids, list) or not ids or len(ids) > 500 or any(isinstance(i, bool) or not isinstance(i, int)
@@ -1737,8 +2234,8 @@ class Today:
         def run(db):
             out = []
             for i, it in items.items():
-                h = db.execute("SELECT status_from FROM ledger_history WHERE item=? AND kind='owner' AND status_to='done' "
-                               "ORDER BY id DESC LIMIT 1", (i,)).fetchone()
+                h = db.execute("SELECT status_from FROM ledger_history WHERE item=? AND kind IN ('owner','done_report') "
+                               "AND status_to='done' ORDER BY id DESC LIMIT 1", (i,)).fetchone()
                 if it["status"] == "done" and h:
                     L.set_status(db, i, h["status_from"] or "open", now, note="you undid Done", kind="owner")
                     C.check_item(db, i, now, tz)

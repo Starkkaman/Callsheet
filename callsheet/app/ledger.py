@@ -688,6 +688,75 @@ def back_why(msg):
 
 
 # --- one message's reading -------------------------------------------------------------------------------------------
+# 0.24.0 (B2, secret shopper cause d: "sent…", "approved … proposal" became his to-dos): a message from the owner
+# that reports something finished closes the open promise or ask it finishes, in that thread, instead of opening one.
+_DONE_VERB = {
+    "sent": "send", "done": "do", "fixed": "fix", "booked": "book", "paid": "pay", "submitted": "submit",
+    "finished": "finish", "completed": "complete", "mailed": "mail", "emailed": "email", "ordered": "order",
+    "signed": "sign", "filed": "file", "returned": "return", "shipped": "ship", "uploaded": "upload",
+    "shared": "share", "posted": "post", "delivered": "deliver", "handled": "handle", "sorted": "sort",
+    "resolved": "resolve", "renewed": "renew", "replied": "reply", "transferred": "transfer",
+    "forwarded": "forward", "approved": "approve", "registered": "register", "deposited": "deposit",
+    "installed": "install", "printed": "print", "bought": "buy", "wrote": "write", "written": "write",
+    "called": "call", "texted": "text", "dropped": "drop", "picked": "pick", "returned": "return",
+    "cancelled": "cancel", "canceled": "cancel", "scanned": "scan", "attached": "attach", "updated": "update",
+    "reviewed": "review", "merged": "merge", "deployed": "deploy", "wrapped": "wrap", "took": "take",
+}
+_DONE_LEAD = re.compile(r"^(?:(?:i|i've|ive|i have|we|we've|we have|have|has|just|already|finally|all|now|ok|okay|"
+                        r"yes|yep|done)[\s,:;-]+)*(" + "|".join(sorted(_DONE_VERB, key=len, reverse=True)) + r")\b", re.I)
+_DONE_TAIL = re.compile(r"\b(?:is|are|was|were|been|got|all|now|it's|its)\s+(?:all\s+)?(done|sent|fixed|paid|booked|"
+                        r"submitted|finished|completed|sorted|handled|signed|filed|shipped|returned)\b", re.I)
+_DONE_FILL = frozenset("all now ok okay yes yep just already finally ive have has done it its thing".split())
+_DONE_NOT = re.compile(r"\b(?:will|won't|wont|shall|going to|gonna|need(?:s|ed)? to|have to|has to|should|must|"
+                       r"plan(?:s|ning)? to|to be|not|never|n't|yet|tomorrow|tonight|later|next|soon|by (?:mon|tue|wed|"
+                       r"thu|fri|sat|sun|the end|eod|end of)|make sure|ensure|remind|once|when|if|unless|before|after)\b"
+                       r"|\?", re.I)
+
+
+def done_report(it, at=None):
+    """The verb (as he'd promise it: "send") when a new item from the owner's own message reports a thing finished
+    ("sent the invoice", "the deck is done"), else "". A plan with a time still to come is a plan, not a report."""
+    what = " ".join(str(it.get("what") or "").split())
+    if it.get("type") not in ("commitment", "ask") or it.get("status") in CLOSED or not what or _DONE_NOT.search(what):
+        return ""
+    if it.get("subtype") in ("security", "invite"):
+        return ""
+    if at is not None and ((it.get("start_ts") is not None and (it.get("end_ts") or it["start_ts"]) > at) or
+                           (it.get("start_ts") is None and it.get("start_date"))):
+        return ""
+    m = _DONE_LEAD.match(what) or _DONE_TAIL.search(what)
+    return _DONE_VERB.get(m.group(1).lower(), "") if m else ""
+
+
+def close_reported(db, msg, it, verb, now):
+    """Close the one open promise or ask to him in the message's thread that the report finishes; the item id, or
+    None (several fit equally, or none). The history keeps the reason; Undo puts it back as it was."""
+    row = db.execute("SELECT source, thread FROM messages WHERE id=?", (msg.get("id"),)).fetchone()
+    if row is None or not row["thread"]:
+        return None
+    cands = [row_dict(r) for r in db.execute(
+        "SELECT * FROM ledger_items WHERE merged_into IS NULL AND status NOT IN ('declined','done','cancelled') AND "
+        "subtype NOT IN ('security','invite') AND id IN (SELECT s.item FROM ledger_sources s JOIN messages m ON "
+        "m.id=s.message WHERE m.thread=? AND m.source=? AND m.id != ?) ORDER BY id DESC LIMIT 30",
+        (row["thread"], row["source"], msg.get("id")))]
+    cands = [c for c in cands if (c["type"] == "commitment" and c.get("who") == OWNER) or
+             (c["type"] == "ask" and c["status"] != "waiting_on_them" and c.get("owed") != "to_owner")]
+    if not cands:
+        return None
+    said = _DONE_LEAD.sub(lambda m: m.group(0)[:m.start(1) - m.start(0)] + verb, " ".join(str(it["what"]).split()), 1)
+    scored = sorted(((similar(c["what"] + " " + (c.get("purpose") or ""), said), c) for c in cands),
+                    key=lambda x: -x[0])
+    best = scored[0]
+    if len(cands) > 1 and (best[0] < 0.5 or (len(scored) > 1 and scored[1][0] == best[0])):
+        return None
+    if len(cands) == 1 and best[0] == 0 and words(said) - {_stem(verb), verb} - _DONE_FILL:
+        return None          # "sent the photos" doesn't finish "book the table"
+    what = " ".join(str(it["what"]).split())
+    set_status(db, best[1]["id"], "done", now, msg.get("id"), kind="done_report",
+               note=f"You wrote that it's done: “{what if len(what) <= 80 else what[:79] + '…'}”")
+    return best[1]["id"]
+
+
 def apply(db, msg, parsed, now, tz):
     """Apply one message's normalised reading (extract.normalize): updates first, then the new items (merged into an
     existing item when they repeat it). Returns {"created", "merged", "updated", "closed", "items", "drops",
@@ -714,7 +783,23 @@ def apply(db, msg, parsed, now, tz):
         _update(db, it, u, mid, now, out)
     closed_now = set(out["closed"])
     moves = tidied_moves(db)
-    for it in parsed.get("items") or []:
+    keep = []
+    for n, it in enumerate(parsed.get("items") or []):
+        verb = done_report(it, msg.get("ts")) if msg.get("direction") == "out" else ""
+        if not verb:
+            keep.append(it)
+            continue
+        done = close_reported(db, msg, it, verb, now)
+        if done is not None:
+            out["updated"].append(done)
+            out["closed"].append(done)
+            closed_now.add(done)
+        out["drops"].append({"what": "item", "why": (f"a report that it's done: closed item {done}" if done is not None
+                                                     else "a report that it's done, not a promise"),
+                             "value": str(it.get("what") or "")[:120]})
+        later = [dict(u, new=u["new"] - 1) if u.get("new") is not None and u["new"] > len(keep) else u
+                 for u in later if u.get("new") != len(keep)]
+    for it in keep:
         same = find_same(db, it, tz, msg.get("ts") or now, mid)
         if same is None and moves:
             # 0.22.1: a tidied item stays the one place its message lands; a real new signal brings it back
@@ -1038,6 +1123,11 @@ PAST_DUE = re.compile(r"\b(?:past[- ]due|overdue|was due|were due|final notice|l
                       r"(?:applied|charged|added)|\d{1,3}\s+days?\s+(?:late|past[- ]due|overdue))\b", re.I)
 _N_DAYS_LATE = re.compile(r"\b(\d{1,3})\s+days?\s+(?:late|past[- ]due|overdue)\b", re.I)
 _DUE_WORD = re.compile(r"\b(?:by|due|deadline|before|no later than|eod|end of (?:the )?day|get back)\b", re.I)
+# 0.24.0 (the audit): deliveries and returns are never "N days late"; nor a guessed time, nor what others owe him
+NOT_DUE_SUBTYPES = frozenset({"delivery", "package", "shipping", "shipment", "order", "return", "refund", "tracking"})
+_NOT_DUE = re.compile(r"\b(?:deliver(?:y|ies|ed|ing)?|ship(?:ped|ping|ment)|package|parcel|tracking|out for delivery|"
+                      r"returns?|returned|refund\w*|drop[- ]off|arriv\w*)\b", re.I)
+_ASK_DUE = frozenset({"reply", "decision", "document"})
 
 
 def past_due_marked(it):
@@ -1050,6 +1140,14 @@ def has_deadline(it):
     sub = it.get("subtype") or ""
     if it["type"] == "cleanup" or sub in ATTEND_SUBTYPES or it.get("status") == "autopay":
         return False
+    if sub in NOT_DUE_SUBTYPES or (it.get("stage") or "") in ("shipped", "out_for_delivery", "delivered", "returned") \
+            or (sub not in ("bill", "payment", "invoice") and _NOT_DUE.search(f"{it.get('what') or ''}")):
+        return False                     # 0.24.0: a delivery or a return is never late
+    if it.get("approx") or (it["type"] == "commitment" and it.get("who") != OWNER) or sub == "receivable":
+        return False                     # 0.24.0: a guessed time; what others owe him is a follow-up, not his deadline
+    if it["type"] == "ask" and sub in _ASK_DUE and not past_due_marked(it) and \
+            not _DUE_WORD.search(f"{it.get('phrase') or ''}"):
+        return False                     # 0.24.0: an ask is late only with a due time ("by Friday")
     if sub in DUE_SUBTYPES or it.get("stage") == "due" or past_due_marked(it):
         return True
     return it["type"] == "commitment" and bool(_DUE_WORD.search(it.get("phrase") or ""))
@@ -1109,11 +1207,25 @@ def section_of(it, now, tz):
         return "coming_up"
     if sp[1] <= now:
         # 0.22.0: a deadline that has passed (a bill, "send it by Friday") is on the owner, shown as late; a past plan isn't
-        return "needs_you" if late_of(it, now, tz) else "none"
+        if late_of(it, now, tz):
+            return "needs_you"
+        # 0.24.0: his own promise with only a guessed time ("as soon as the hardware comes") is still his, not a past plan
+        return "needs_you" if t == "commitment" and it.get("who") == OWNER and it.get("approx") else "none"
     if it.get("all_day"):
         a, b = sp
         return "now_next" if a <= now < b else "coming_up"
     return "now_next" if sp[0] - NOW_NEXT_S <= now else "coming_up"
+
+
+def waiting_why(it, row):
+    """0.24.0 (the audit): why a Needs you item is really waiting on others: something others owe him (a receivable, a
+    promise to him, what he asked of someone). Only that: a promise of his own, timed or not, is his and stays in
+    Needs you (0.24.0 validation), and so is an ask of him quoted in mail he sent. "" when it is his to do. `row` (the presented item) is kept for the callers."""
+    if it.get("type") == "commitment" and it.get("who") == OWNER:
+        return ""
+    if (it.get("owed") or owed_of(it)) == "to_owner":
+        return "they owe you this"
+    return ""
 
 
 def urgency(start_ts, now):
@@ -1278,12 +1390,21 @@ class Ledger:
                 continue
             sec = section_of(it, now, tz)
             if sec == "none":
-                if it["type"] == "ask" and it["status"] == "waiting_on_them":
-                    groups["waiting"].append(self.present(it, now))
+                # what others owe him: an ask waiting on them; 0.24.0: a promise someone made him whose time passed (no
+                # longer "late" on him) waits on them too, instead of leaving Today
+                if (it["type"] == "ask" and it["status"] == "waiting_on_them") or \
+                        (it["type"] == "commitment" and it["status"] not in CLOSED and waiting_why(it, None)):
+                    groups["waiting"].append(dict(self.present(it, now), waiting_why=waiting_why(it, None) or
+                                                  "they owe you this"))
                 continue
             row = self.present(it, now)
             if sec == "coming_up" and row["seconds_until"] is not None and row["seconds_until"] > horizon_days * 86400:
                 continue
+            if sec == "needs_you" and it.get("subtype") not in ("security", "invite"):
+                why = waiting_why(it, row)   # 0.24.0: what others owe him waits on them; his promises stay his
+                if why:
+                    groups["waiting"].append(dict(row, waiting_why=why))
+                    continue
             groups[sec].append(row)
         if self.vip_of:
             for r in groups["needs_you"]:

@@ -84,6 +84,134 @@ TOOL_DEFS = (
          "q": {"type": "string", "description": "Only events with these words."}},
          "required": ["from", "to"], "additionalProperties": False}},
 )
+# 0.24.0 (B1, the audit's pain point 6: Chat contradicted the screens): read-only lookups of the same lists the screens
+# show (Today's bills, Replies' waiting on you, trips, the need rule), so the answer matches what the owner sees. Times
+# and dates are Callsheet's own labels, returned verbatim (`when`/`due`); the answer's times are post-checked.
+_NOARGS = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+LIST_DEFS = (
+    {"name": "bills",
+     "description": "The owner's bills, the same list as the Bills step of Talk it through: real bills and payments "
+                    "only (no promotions, coupons, receipts or notices), overdue first, then by due date. Each has its "
+                    "item number, what, who, amount, due (say it exactly as written) and late when it is overdue.",
+     "schema": _NOARGS},
+    {"name": "replies_waiting",
+     "description": "Who is waiting on the owner for a reply: the same list as Replies, \"Waiting on you\", oldest "
+                    "first, with who, what they asked, how long they have waited and the source.",
+     "schema": _NOARGS},
+    {"name": "trips",
+     "description": "The owner's trips from now on, soonest first: trips, flights and hotels from the ledger and "
+                    "all-day or multi-day calendar entries that are trips (family calendars too), each with when (say "
+                    "it exactly as written), its calendar and whether it is the owner's or a heads-up.",
+     "schema": _NOARGS},
+    {"name": "need_of",
+     "description": "Whether something is the owner's: calendar entries and items matching the words, each with its "
+                    "calendar, the owner's choice for that calendar (Mine, Ask me, Heads-up, Hide), Callsheet's "
+                    "verdict (yours, heads-up, maybe) and why (\"on a calendar you only read\", \"you said yes\").",
+     "schema": {"type": "object", "properties": {
+         "q": {"type": "string", "description": "The owner's words for it (e.g. ABCS, the program block)."}},
+         "required": ["q"], "additionalProperties": False}},
+)
+LIST_RULE = ("For bills use bills; for who is waiting on a reply use replies_waiting; for trips use trips; for "
+             "\"is X mine?\" or \"does X need me?\" use need_of. These are the lists the screens show: answer from "
+             "them, with the same counts. Say every time and date exactly as a tool's when or due field gives it; "
+             "never work out, round or move a time yourself.")
+_ROUTES = (
+    ("bills", re.compile(r"\b(?:bills?|invoices?|payments?\s+due|what\s+do\s+i\s+owe|anything\s+to\s+pay)\b", re.I)),
+    ("replies_waiting", re.compile(
+        r"\b(?:haven'?t|have\s+not|didn'?t|not\s+yet|still\s+need\s+to|need\s+to|owe)\b[^?.!]{0,30}\b(?:repl\w*|answer\w*|"
+        r"respond\w*|got\s+back|write\s+back|get\s+back)\b|\bwaiting\s+on\s+(?:me|my\s+(?:reply|answer))\b|"
+        r"\bwho(?:'s|\s+is)\s+waiting\b", re.I)),
+    ("trips", re.compile(r"\b(?:trips?|vacations?|travel\w*|flights?|getaways?|cabin)\b", re.I)),
+)
+_MINE = re.compile(r"^\W*(?:is|are)\s+(?:the\s+)?(?P<x>.{2,60}?)\s+(?:mine|for\s+me|my\s+(?:event|meeting|thing|"
+                   r"calendar|problem|job))\s*\??\s*$|\bdoes\s+(?:the\s+)?(?P<y>.{2,60}?)\s+need\s+me\b|"
+                   r"\bdo\s+i\s+(?:need|have)\s+to\s+(?:go\s+to|attend|be\s+at)\s+(?:the\s+)?(?P<z>.{2,60}?)\s*\??\s*$", re.I)
+_DRAFT = re.compile(r"\b(?:draft|write)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:reply|response|answer)\s+(?:to|for)\s+"
+                    r"(?P<who>[^\W\d_][\w'’.-]*(?:\s+[A-Z][\w'’.-]*)?)", re.I)
+
+
+_FIND_KIND = {"bill": "bill payment due", "payment": "bill payment due", "security": "security alert",
+              "invite": "invite invitation", "receipt": "receipt"}
+FIND_MAX = 5000   # 0.24.0 (B1): find scores this many open items (the owner's store had 1650)
+
+
+def route(text):
+    """(tool, args) for a question one of the screens' lists answers (Chat looks there first), else None."""
+    t = own_words(text or "")
+    m = _MINE.search(t)
+    if m:
+        x = (m.group("x") or m.group("y") or m.group("z") or "").strip(" .?!\"'“”")
+        if x:
+            return "need_of", {"q": x[:80]}
+    for name, rx in _ROUTES:
+        if rx.search(t):
+            return name, {}
+    return None
+
+
+def reply_target(text):
+    """The person in "draft a reply to Schuyler" (the owner's own words), else None."""
+    m = _DRAFT.search(own_words(text or ""))
+    if not m:
+        return None
+    who = re.sub(r"(?i)\s+(?:about|re|on|saying|that|and)$", "", m.group("who")).strip(" .,?!'’")
+    return who if who and who.lower() not in _STOP else None
+
+
+_TIME = re.compile(r"\b(\d{1,2})(?::([0-5]\d))?\s?([ap])\.?m\b\.?|\b(\d{1,2}):([0-5]\d)\b", re.I)
+_RANGE_TIME = re.compile(r"\b(\d{1,2})(?::([0-5]\d))?\s?(?:–|-|to)\s?(\d{1,2})(?::([0-5]\d))?\s?([ap])\.?m\b", re.I)
+
+
+def times_in(text):
+    """{(hour 0-23 or None when the half of the day isn't said, minute)} for the clock times in text."""
+    out = set()
+    s = str(text or "")
+    for m in _RANGE_TIME.finditer(s):   # "8:15 – 9 am": the first time shares the second's am/pm
+        ap = m.group(5).lower()
+        for h, mi in ((m.group(1), m.group(2)), (m.group(3), m.group(4))):
+            hh = int(h) % 12 + (12 if ap == "p" else 0)
+            out.add((hh, int(mi or 0)))
+            if ap == "a" and m.group(1) == h and int(h) > int(m.group(3) or 0):
+                out.add(((int(h) % 12) + 12, int(mi or 0)))   # "11 – 1 pm": 11 am
+    for m in _TIME.finditer(s):
+        if m.group(3):
+            hh = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "p" else 0)
+            out.add((hh, int(m.group(2) or 0)))
+        else:
+            h = int(m.group(4))
+            if h <= 23:
+                out.add((h, int(m.group(5))))
+    return out
+
+
+def time_check(answer, sources):
+    """The clock times in the answer that no tool result of this turn has (the times come from the ledger or the
+    calendar, never from the model): [the time as written]."""
+    have = set()
+    for s in sources:
+        have |= times_in(s)
+    loose = {(h % 12, m) for h, m in have}
+    bad = []
+    for m in _TIME.finditer(str(answer or "")):
+        one = times_in(m.group(0))
+        if not one:
+            continue
+        h, mi = next(iter(one))
+        if (h, mi) in have or (not m.group(3) and (h % 12, mi) in loose):
+            continue
+        w = " ".join(m.group(0).split())
+        if w.endswith(".") and not re.search(r"[ap]\.m\.$", w, re.I):
+            w = w[:-1]   # the sentence's full stop, not part of the time
+        if w not in bad:
+            bad.append(w)
+    return bad[:5]
+
+
+def time_note(bad):
+    return ("Check the time" + ("s" if len(bad) > 1 else "") + ": " + ", ".join(bad) +
+            (" isn't" if len(bad) == 1 else " aren't") + " in your calendar or items as Callsheet has them.")
+
+
 SETTING_TOOL, ACTION_TOOL = "propose_setting", "propose_action"
 # 0.21.0 Add to calendar (approved 2026-11-11; calwrite.py): "calendar" is a card action, never applied at once
 # (no Undo is possible: Callsheet has no permission to delete events), always the owner's Confirm.
@@ -198,7 +326,7 @@ STORE_INTRO = ("You are the chat in Callsheet, the owner's private assistant. Yo
 STORE_RULE = ("search_messages finds messages; open_thread reads a conversation in order, both directions; ledger_list "
               "and ledger_item show what the owner owes, what others owe the owner, what's coming up and clashes; calendar "
               "lists events in a range. Message and event ids are sources: cite them in square brackets, like "
-              "[1000000123]. A ledger item number is not a source: cite its source messages.")
+              "[1000000123]. A ledger item number is not a source: cite its source messages. " + LIST_RULE)
 SETTING_RULE = ("The owner asked to change how Callsheet works (VIPs, alerts, quiet hours, clean up, digests, the "
                 "brief and its times, the assistant's name). Call propose_setting once with exactly what the owner said: Callsheet checks "
                 "it against the owner's words and either applies it at once (the owner can Undo) or shows a card the "
@@ -314,6 +442,14 @@ _NEG = re.compile(r"\b(?:don'?t|dont|do\s+not|never|stop|no\s+more|off|mute|paus
 _ALWAYS = re.compile(r"\b(?:always|any\s*time|anytime|even|through)\b", re.I)
 _STOP = frozenset("a an the to for of and or in on at with my your our his her is are be me you it this that from as "
                   "about by any all so do does please can could would just also than then them they their".split())
+
+
+def _find_when(it):
+    """A dated item's day for find's matches, so rows that read alike can be told apart ("" when it has none)."""
+    try:
+        return ledger_mod.when_label(it) if it.get("start_ts") is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _words(text):
@@ -1205,11 +1341,27 @@ class StoreTools:
                 "merged_into IS NULL AND status IN ('done','declined','cancelled')")][::-1]
         else:
             rows = v[which]
+        older = set()
+        if which == "needs_you":
+            rows, older = self._as_today(rows, now)
         rows = self._filter(rows, args)
-        out = [self._ledger_out(r) for r in rows[:lim]]
+        out = [dict(self._ledger_out(r), **({"older": True} if r["id"] in older else {})) for r in rows[:lim]]
         words = {"needs_you": "Needs you", "coming_up": "Coming up", "now_next": "Now and next", "cleanup": "Clean up"}
         return {"tool": "ledger_list", "list": which, "count": len(rows), "items": out}, \
             f"Looked at {words.get(which, 'your ' + which)}"
+
+    def _as_today(self, rows, now):
+        """0.24.0 (B1, live check: "what do I need to do today" read the ledger's own order, none of the screen's top
+        rows): Needs you as Today shows it, in its order (one row a conversation, no shared-calendar invites, what
+        others owe him under Waiting), then its "Older, still open?" rows (marked older). (rows, older ids)."""
+        try:
+            nv = self._today_view().view(now=now)["needs_you"]
+        except Exception:  # noqa: BLE001 (the ledger's list when Today can't say)
+            return rows, set()
+        by = {r["id"]: r for r in rows}
+        older = [r["id"] for r in (nv.get("older") or {}).get("rows") or [] if r["id"] in by]
+        shown = [r["id"] for r in nv.get("rows") or [] if r["id"] in by]
+        return [by[i] for i in dict.fromkeys(shown + older)], set(older) - set(shown)
 
     def _ledger_item(self, args):
         self._only(args, ("item",), "ledger_item")
@@ -1277,6 +1429,119 @@ class StoreTools:
             out["note"] = f"Only {EVENTS_MAX} events are shown; ask for a shorter range."
         return out, f"Looked at the calendar, {since:%-d %b} to {until:%-d %b}"
 
+    # 0.24.0 (B1): the screens' own lists
+    def _today_view(self):
+        td = getattr(self, "today", None)
+        if td is None:
+            import today as today_mod   # late: today imports this module's neighbours
+            td = today_mod.Today(self.msgstore, self.ledger, self.clock)
+            self.today = td
+        return td
+
+    def _bills(self, args):
+        self._only(args, (), "bills")
+        out = []
+        rows = self._today_view().bills(now=self.clock())
+        for r in rows[:LIST_MAX]:
+            it = self.ledger.item(r["item"], detail=False)
+            row = self._ledger_out(it) if it else {"item": r["item"]}
+            row.pop("when", None)
+            row.update(what=_clip(r["what"], 200), amount=r["amount"] or None, due=r["due"] or None)
+            if r["who"]:
+                row["who"] = _clip(r["who"], 60)
+            if r["late"]:
+                row["late"] = r["late"]
+            out.append(row)
+        late = sum(1 for r in rows if r["overdue"])
+        return {"tool": "bills", "count": len(rows), "overdue": late, "bills": out}, "Looked at your bills"
+
+    def _replies_waiting(self, args):
+        self._only(args, (), "replies_waiting")
+        v = self._today_view().replies(now=self.clock())
+        out = []
+        for r in v["rows"][:LIST_MAX]:
+            it = self.ledger.item(r["id"], detail=False)
+            row = self._ledger_out(it) if it else {"item": r["id"]}
+            row.update(who=_clip(r["who"], 60), what=_clip(r["why"], 200), waited=r["age"], source=r["source"])
+            if r.get("invite"):
+                row["invite"] = True
+            out.append(row)
+        return {"tool": "replies_waiting", "count": v["total"], "waiting_on_you": out}, "Looked at Replies"
+
+    def _trips(self, args):
+        self._only(args, (), "trips")
+        out = []
+        rows = self._today_view().trips(now=self.clock())
+        for r in rows[:LIST_MAX]:
+            if r["kind"] == "event":
+                ev = self._event_seen(r["id"])
+                row = {"id": msgstore.EVENT_ID_BASE + r["id"]}
+                if ev is not None and ev.get("instructions"):
+                    self.flagged.add(row["id"])
+                    row["instructions"] = True
+            else:
+                it = self.ledger.item(r["id"], detail=False)
+                row = self._ledger_out(it) if it else {"item": r["id"]}
+                row.pop("when", None)
+            row.update(what=_clip(r["what"], 160), when=r["when"], calendar=r["calendar"] or None,
+                       whose=r["need"] or None, why=_clip(r["why"], 120) or None)
+            out.append(row)
+        return {"tool": "trips", "count": len(rows), "trips": out}, "Looked at your trips"
+
+    def _need_of(self, args):
+        self._only(args, ("q",), "need_of")
+        q = self._text(args, "q", 120) or ""
+        want = {w for w in _words(q) if w not in _STOP and len(w) > 1}
+        if not want:
+            raise ArgError("q needs the owner's words for it.")
+        import need as need_mod
+        nd = need_mod.Need(need_mod.ReadOnly(self.msgstore))
+        now = self.clock()
+        evs, seen_t = [], set()
+        for e in self.msgstore.events(now - 30 * 86400, now + 180 * 86400):
+            if not want <= _words(f"{e['title']} {e['location']}"):
+                continue
+            key = (e["title"], e["start_ts"])
+            if key in seen_t:
+                continue
+            seen_t.add(key)
+            full = self.msgstore._read("SELECT * FROM events WHERE id=?", (e["id"],))  # noqa: SLF001
+            if not full:
+                continue
+            r = nd.event(full[0])
+            ev = self._event_seen(e["id"])
+            evs.append({"id": msgstore.EVENT_ID_BASE + e["id"], "title": _clip(e["title"], 120),
+                        "when": ledger_mod.when_label({"start_ts": e["start_ts"], "end_ts": e["end_ts"],
+                                                       "all_day": e["all_day"],
+                                                       "start_date": e["start"][:10] if e["all_day"] else None,
+                                                       "end_date": e["end"][:10] if e["all_day"] else None}, self.tz),
+                        "calendar": _clip(nd.cal_name(full[0]), 60),
+                        "calendar_choice": need_mod.USE_WORDS.get(nd.use_of(full[0]), ""),
+                        "verdict": {need_mod.YES: "yours", need_mod.NO: "heads-up, not yours",
+                                    need_mod.MAYBE: "maybe yours: Callsheet asks you"}.get(r["need"], ""),
+                        "why": r["why"], "shared_calendar": bool(nd.shared(full[0]))})
+            if ev is not None and ev.get("instructions"):
+                self.flagged.add(evs[-1]["id"])
+                evs[-1]["instructions"] = True
+            if len(evs) >= 8:
+                break
+        items = []
+        for it in self.ledger.items("merged_into IS NULL AND status NOT IN ('declined','done','cancelled')")[:600]:
+            if not want <= _words(f"{it.get('what') or ''} {it.get('purpose') or ''}"):
+                continue
+            r = nd.item(it)
+            row = self._ledger_out(self.ledger.present(it, now))
+            row.update(verdict={need_mod.YES: "yours", need_mod.NO: "heads-up, not yours",
+                                need_mod.MAYBE: "maybe yours"}.get(r["need"], ""), why=r["why"])
+            items.append(row)
+            if len(items) >= 5:
+                break
+        note = "" if evs or items else "Nothing on the calendar or in the ledger matches these words."
+        out = {"tool": "need_of", "q": _clip(q, 80), "events": evs, "items": items}
+        if note:
+            out["note"] = note
+        return out, f"Checked whether “{_clip(q, 40)}” is yours"
+
     def _find(self, args):
         """0.22.0 find (read-only): what the owner means in his own words. Callsheet scores its own labels against
         the words; every match shown becomes a target this chat can propose."""
@@ -1287,6 +1552,65 @@ class StoreTools:
         q = self._text(args, "q", 120) if args.get("q") is not None else ""
         want = {w for w in _words(q) if w not in _STOP and len(w) > 1}
         now, lv = self.clock(), self.ledger
+        cands = self._find_cands(kind, now, lv)
+        if kind == "alert":   # 0.24.0 (B1, live check: "dismiss the Amazon payment method alert" found nothing): the
+            # open items too, after the alerts ("alert" in his words needn't be a security alert or a clash)
+            have = {(c[0], c[1]) for c in cands}
+            cands += [c for c in self._find_cands("item", now, lv) if (c[0], c[1]) not in have]
+        scored = sorted(((len(want & _words(c[3])), i, c) for i, c in enumerate(cands)), key=lambda x: (-x[0], x[1]))
+        if want and kind != "cleanup":
+            scored = self._find_tidy(scored, now, lv)
+        hits = [c for sc, _i, c in scored if sc > 0 or not want][:8]
+        top = scored[0][0] if scored else 0
+        best = [c for sc, _i, c in scored if want and sc == top and sc > 0]
+        out = []
+        for k, ref, lab, _t, when in (c[:5] for c in hits):
+            {"clash": self.seen_clashes, "followup": self.seen_followups, "item": self.seen_items}[k].add(int(ref))
+            out.append(dict({k: ref, "label": lab}, **({"when": when} if when else {})))
+        note = ("Nothing matches; ask the owner which one." if not out else
+                "One clear match." if len(best) == 1 else
+                "Several match: call propose_action with all of their numbers and Callsheet asks the owner which one.")
+        return {"tool": FIND_TOOL, "kind": kind, "count": len(out), "matches": out, "note": note}, "Looked for it"
+
+    def _find_tidy(self, scored, now, lv):
+        """0.24.0 (B2, secret shopper Q10: "dismiss the PayPal bill" asked "which one?" of three rows that read the
+        same, beside autopay and Clean up copies he never sees). Among equal scores, what Today shows comes first and
+        Clean up rows and hidden items after; rows whose words read the same are said once (the one Today shows,
+        then the newest with a date)."""
+        try:
+            shown = {r.get("id") for k, rows in lv.view(now=now, horizon_days=400).items()
+                     if isinstance(rows, list) and k != "clean_up" for r in rows if isinstance(r, dict)}
+        except Exception:  # noqa: BLE001 - the order is a nicety; find still answers
+            shown = set()
+
+        def rank(x):
+            sc, i, c = x
+            it = c[5] if len(c) > 5 else {}
+            hidden = c[0] == "item" and c[1] not in shown
+            return (-sc, hidden, it.get("type") == "cleanup", it.get("start_ts") is None, -int(c[1] or 0), i)
+        seen, out = set(), []
+        for x in sorted(scored, key=rank):
+            key = (x[2][0], " ".join(str(x[2][2]).casefold().split()))
+            if x[0] > 0 and key in seen:
+                continue
+            seen.add(key)
+            out.append(x)
+        top = out[0][0] if out else 0
+        best = [x for x in out if x[0] == top]
+        if top and len(best) > 1:   # one Today row beats copies he can't see there
+            vis = [x for x in best if x[2][0] != "item" or (x[2][1] in shown and
+                                                             (x[2][5] if len(x[2]) > 5 else {}).get("type") != "cleanup")]
+            dated = [x for x in vis if len(x[2]) > 5 and x[2][5].get("start_ts") is not None]
+            if len(vis) > 1 and len(dated) == 1 and all(len(x[2]) > 5 and x[2][5].get("subtype") == "bill"
+                                                        for x in vis):
+                vis = dated   # "the bill" is the one that falls due; the undated rows are its statements
+            if len(vis) == 1:
+                out = vis + [x for x in out if x is not vis[0]]
+                out = [out[0]] + [(min(x[0], top - 1), x[1], x[2]) if x[0] == top else x for x in out[1:]]
+        return out
+
+    def _find_cands(self, kind, now, lv):
+        """find's candidates of one kind: (kind, ref, label, text scored, when)."""
         cands = []
         if kind == "alert":
             for c in lv.conflicts("open", now)[:200]:
@@ -1302,25 +1626,17 @@ class StoreTools:
                 lab = _clip(prefs_mod.item_words(it), 160)
                 cands.append(("item", it["id"], lab, lab + " security alert", ""))
         elif kind == "item":
-            for it in lv.items("merged_into IS NULL AND status NOT IN ('declined','done','cancelled')")[:400]:
+            # 0.24.0 (B1, live check): every open item (was the oldest 400 of his 1650: newer ones were never found)
+            for it in lv.items("merged_into IS NULL AND status NOT IN ('declined','done','cancelled')")[:FIND_MAX]:
                 lab = _clip(prefs_mod.item_words(it), 160)
-                cands.append(("item", it["id"], lab, lab, ""))
+                sub = str(it.get("subtype") or "")   # 0.24.0 (B2): "the PayPal bill" names a bill by its kind too
+                cands.append(("item", it["id"], lab, " ".join((lab, _FIND_KIND.get(sub, sub))),
+                              _find_when(it), it))
         else:
-            for r in lv.view(now=now, horizon_days=400)["clean_up"][:300]:
+            for r in lv.view(now=now, horizon_days=400)["clean_up"][:FIND_MAX]:
                 lab = _clip(prefs_mod.item_words(r), 160)
                 cands.append(("item", r["id"], lab, lab, ""))
-        scored = sorted(((len(want & _words(c[3])), i, c) for i, c in enumerate(cands)), key=lambda x: (-x[0], x[1]))
-        hits = [c for sc, _i, c in scored if sc > 0 or not want][:8]
-        top = scored[0][0] if scored else 0
-        best = [c for sc, _i, c in scored if want and sc == top and sc > 0]
-        out = []
-        for k, ref, lab, _t, when in hits:
-            {"clash": self.seen_clashes, "followup": self.seen_followups, "item": self.seen_items}[k].add(int(ref))
-            out.append(dict({k: ref, "label": lab}, **({"when": when} if when else {})))
-        note = ("Nothing matches; ask the owner which one." if not out else
-                "One clear match." if len(best) == 1 else
-                "Several match: call propose_action with all of their numbers and Callsheet asks the owner which one.")
-        return {"tool": FIND_TOOL, "kind": kind, "count": len(out), "matches": out, "note": note}, "Looked for it"
+        return cands
 
     # the owner-pressed cards (they keep the arguments; nothing is written)
     def _propose_setting(self, args):

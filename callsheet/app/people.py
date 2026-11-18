@@ -1072,6 +1072,29 @@ class People:
         return {"me": self.me(), "proposals": self.proposals(), "people": people, "total": total,
                 "shown": len(people), "audit": self.audit()}
 
+    def find(self, q, limit=5):
+        """0.24.0 (B2, secret shopper: Find gave only "Ask: …" for "Portola" and "Schuyler"): the people whose name or
+        a handle's value or label holds the owner's words, most used first; light rows (id, name, vip, confirmed)."""
+        k = norm_name(q)[:80]
+        if len(k) < 2:
+            return []
+        with self.store.lock:
+            hit = {r["person"] for r in self.db.execute("SELECT person FROM person_handles WHERE value LIKE ? OR "
+                                                        "lower(label) LIKE ?", ("%" + k + "%", "%" + k + "%"))}
+            rows = self.db.execute("SELECT p.id, p.name, p.vip, p.state, (SELECT COALESCE(SUM(n),0) FROM person_handles"
+                                   " h WHERE h.person=p.id) AS n FROM people p WHERE p.state IN ('suggested','confirmed')"
+                                   " ORDER BY p.vip DESC, p.state='confirmed' DESC, n DESC, p.name").fetchall()
+        out, seen = [], set()
+        for r in rows:
+            nm = norm_name(r["name"])
+            if (k in nm or r["id"] in hit) and nm not in seen:
+                seen.add(nm)
+                out.append({"id": r["id"], "name": r["name"], "vip": bool(r["vip"]),
+                            "confirmed": r["state"] == "confirmed"})
+                if len(out) >= limit:
+                    break
+        return out
+
 
 def _split(text):
     """The index's people field as [(name, lower-case email)] (know_profile.split_people without the import)."""

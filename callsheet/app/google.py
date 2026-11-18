@@ -604,6 +604,13 @@ def _request_body(method, url, params=None, token=None, limit=MAX_TEXT_BYTES):
 REPLY_HEADERS = ("From", "Reply-To", "To", "Cc", "Subject", "Message-ID", "References", "In-Reply-To", "Date")
 
 
+def gmail_message_labels(token, message_id):
+    """0.24.0: one stored message's labels and list headers (messages.get format=metadata: labelIds, From,
+    List-Unsubscribe, Precedence …), for mail stored before labels were kept. The same read-only GET as the reader's."""
+    return request("GET", api_base() + "/gmail/v1/users/me/messages/" + _q(message_id), token=token,
+                   params=[("format", "metadata")] + [("metadataHeaders", h) for h in METADATA_HEADERS])
+
+
 def gmail_message_meta(token, message_id):
     """One message's headers for a reply (messages.get format=metadata)."""
     return request("GET", api_base() + "/gmail/v1/users/me/messages/" + _q(message_id), token=token,

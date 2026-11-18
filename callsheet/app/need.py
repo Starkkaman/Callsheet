@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS calendar_use (
   primary_cal INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account, calendar));
 CREATE TABLE IF NOT EXISTS headsup_seen (
   id INTEGER PRIMARY KEY, key TEXT NOT NULL, sig TEXT NOT NULL DEFAULT '', at REAL NOT NULL, undone_at REAL);
-CREATE INDEX IF NOT EXISTS headsup_seen_key ON headsup_seen (key)
+CREATE INDEX IF NOT EXISTS headsup_seen_key ON headsup_seen (key);
+CREATE TABLE IF NOT EXISTS owner_addresses (address TEXT PRIMARY KEY)
 """
 
 # a general notice on a calendar he only reads: deliveries, closures, school and community days, someone's trip
@@ -122,9 +123,63 @@ class Need:
         got = self.uses().get((_get(e, "account"), _get(e, "calendar")))
         return got[0] if got and got[0] in USES else "mine"
 
+    def owners(self):
+        """0.24.0: the owner's own addresses (his connected accounts and his identity in People, copied here by
+        sync_calendars) and his calendars marked primary (a primary calendar's id is its account's address)."""
+        if getattr(self, "_owners", None) is None:
+            out = {str(cal).lower() for (_a, cal), (_u, _n, prim) in self.uses().items() if prim}
+            try:
+                out |= {str(r["address"]).lower() for r in self.db.execute("SELECT address FROM owner_addresses")}
+            except sqlite3.OperationalError:
+                pass
+            self._owners = out - {""}
+        return self._owners
+
+    def own_calendar(self, e):
+        """0.24.0: is this entry's copy on one of his own calendars? Google's `self` flags (attendee, organizer,
+        creator) mean "this calendar", so on a group or shared calendar they are the calendar, not him (the audit:
+        need.py:200 read a group calendar's "accepted" as his yes). A calendar Setup doesn't list (an old row, a
+        replay) is his."""
+        got = self.uses().get((_get(e, "account"), _get(e, "calendar")))
+        if got is None:
+            return True
+        return bool(got[2]) or str(_get(e, "calendar")).lower() in self.owners()
+
+    def me_of(self, e, atts=None):
+        """His own attendee entry: one with his address, else (on his own calendar) the `self` one."""
+        atts = attendees(e) if atts is None else atts
+        mine = self.owners()
+        got = next((a for a in atts if str(a.get("address") or "").lower() in mine), None)
+        if got is None and self.own_calendar(e):
+            got = next((a for a in atts if a.get("self")), None)
+        return got
+
+    def shared(self, e):
+        """0.24.0: an entry on a calendar he only reads (a group or someone else's calendar) where he isn't a personal
+        attendee and didn't make it: a colleague's out-of-office, a program block, a shift swap."""
+        if self.own_calendar(e):
+            return False
+        mine = self.owners()
+        if str(_get(e, "organizer")).lower() in mine or str(_get(e, "creator")).lower() in mine:
+            return False
+        return self.me_of(e) is None
+
     def cal_name(self, e):
         got = self.uses().get((_get(e, "account"), _get(e, "calendar")))
         return (got[1] if got else "") or str(_get(e, "calendar"))
+
+    def group_invite(self, e):
+        """0.24.0 (B1): an invite on a shared or group calendar: the calendar itself is the guest (its `self` entry is
+        waiting for an answer) and he isn't on the guest list. Invites are never hidden (the project rules), so it is
+        a heads-up ("Invite on the shared IT calendar · not addressed to you"): never closed, never an RSVP ask."""
+        if _get(e, "status") == "cancelled" or not self.shared(e):
+            return False
+        return any(a.get("self") and str(a.get("response") or "") == "needsAction" for a in attendees(e))
+
+    def group_invite_why(self, e):
+        name = self.cal_name(e) or "group"
+        cal = name if name.lower().endswith("calendar") else name + " calendar"
+        return "Invite on the shared " + cal + " · not addressed to you"
 
     def rules(self):
         """{("organizer"|"calendar", key): (need, pref id)}: the owner's answers, newest last (prefs kind `need`)."""
@@ -185,15 +240,25 @@ class Need:
 
         def res(need, why, word="Happening", ask=False, hide=False):
             return {"need": need, "why": why, "word": word, "ask": ask, "hide": hide, "use": use}
-        if use == "hide":
-            return res(NO, "on a calendar you hid", hide=True)
         if _get(e, "status") == "cancelled":
             return res(NO, "cancelled", hide=True)
         atts = attendees(e)
-        me = next((a for a in atts if a.get("self")), None)
+        me = self.me_of(e, atts)            # 0.24.0: his own entry, never a group calendar's `self`
         resp = str((me or {}).get("response") or "")
+        if self.group_invite(e):            # 0.24.0 (B1): never his RSVP: a heads-up
+            if use == "hide":               # not addressed to him: his Hide choice holds (decided 2026-11-18)
+                return res(NO, "on a calendar you hid", hide=True)
+            out = res(NO, self.group_invite_why(e), "FYI")
+            out.update(shared=True, invite=True)
+            return out
+        if use == "hide" and not (me is not None and resp in ("", "needsAction") and not me.get("organizer")):
+            return res(NO, "on a calendar you hid", hide=True)   # an invite addressed to him always shows
         org = str(_get(e, "organizer")).lower()
-        mine_made = org == "self" or str(_get(e, "creator")).lower() == "self" or bool(me and me.get("organizer"))
+        own, mine = self.own_calendar(e), self.owners()
+        mine_made = (own and (org == "self" or str(_get(e, "creator")).lower() == "self")) or org in mine or \
+            str(_get(e, "creator")).lower() in mine or bool(me and me.get("organizer"))
+        if not own and not mine_made and me is None:
+            return self._shared(e, res, use)
         if resp == "declined":
             return res(NO, "you said no", hide=True)
         if resp == "accepted":
@@ -234,6 +299,25 @@ class Need:
         if mine_made:
             return res(YES, "you made it")
         return res(MAYBE, "on " + self.cal_name(e), ask=True)
+
+    def _shared(self, e, res, use):
+        """0.24.0: an entry on a shared calendar he isn't personally on: per that calendar's choice. Mine is his; Ask me
+        is a heads-up, or the "Does this need you?" card when the code can't tell (never a clash or an RSVP)."""
+        if use == "mine":
+            return res(YES, "on your calendar")
+        if use == "headsup":
+            return res(NO, "on " + self.cal_name(e))
+        taught, _ = self.taught(e)
+        if taught:
+            return res(taught, "you said these need you" if taught == YES else "you said these are only FYI",
+                       "FYI" if taught == NO else "Happening")
+        title = str(_get(e, "title"))
+        if _get(e, "all_day") or _NOTICE.search(title) or _SOMEONES.match(title) or _get(e, "transparency") == \
+                "transparent":
+            return res(NO, "on " + self.cal_name(e))
+        out = res(NO, "on " + self.cal_name(e) + ", not as you", ask=True)
+        out["shared"] = True
+        return out
 
     def _waiting(self, e):
         """Related messages: an open ask (not the invite's own item) that stands for this entry."""
@@ -313,9 +397,14 @@ def default_use(cal):
     return "mine" if cal.get("primary") else "ask"
 
 
-def sync_calendars(db, accounts):
-    """accounts: store.Store.accounts() (each calendar's `use`, else its default). Returns True when a choice changed."""
+def sync_calendars(db, accounts, owner_addrs=()):
+    """accounts: store.Store.accounts() (each calendar's `use`, else its default). owner_addrs (0.24.0): his own
+    addresses (accounts, People's "me"), kept for `Need.owners`. Returns True when a choice changed."""
     ensure(db)
+    addrs = {str(a.get("email") or "").lower() for a in accounts or []} | {str(x).lower() for x in owner_addrs or ()}
+    db.execute("DELETE FROM owner_addresses")
+    for a in sorted(addrs - {""}):
+        db.execute("INSERT OR IGNORE INTO owner_addresses (address) VALUES (?)", (a[:300],))
     old = {(r["account"], r["calendar"]): r["use"] for r in db.execute("SELECT account, calendar, use FROM calendar_use")}
     new = {}
     for a in accounts or []:
@@ -395,23 +484,30 @@ def _entry(kind, row, r, n, tz, now):
     all_day = bool(_get(row, "all_day", 0))
     d0 = dt.datetime.fromtimestamp(s, tz) if s is not None else None
     d1 = dt.datetime.fromtimestamp(e, tz) if e else None
-    if all_day:
+    if all_day and d0 and d1 and (d1 - d0).days > 1:
+        last = (d1 - dt.timedelta(seconds=1)).date()
+        when = f"{d0:%a} {d0:%b} {d0.day} – {last:%a} {last:%b} {last.day}"   # 0.24.0: a multi-day entry's dates
+    elif all_day:
         when = "All day"
     elif d0 and d1 and d1 > d0:
         when = f"{t12(d0)} – {t12(d1)}" if d1.date() == d0.date() else f"{t12(d0)} – {d1:%a} {t12(d1)}"
     else:
         when = t12(d0) if d0 else ""
+    cal = None
     if kind == "event":
         title = (row["title"] or "").strip() or "(No title)"
         tag = "FYI" if r["word"] == "FYI" else (n.cal_name(row) or "Calendar")[:24]
         rid = row["id"]
+        # 0.24.0: "From calendar X: change how it counts" on the row (Setup's choice, inline)
+        cal = {"account": row["account"], "calendar": row["calendar"], "name": n.cal_name(row)[:60], "use": n.use_of(row)}
     else:
         title = (row.get("what") or "").strip() or "(No title)"
         tag = "Delivery" if row.get("subtype") == "delivery" else (row.get("who_name") or "Message")[:24]
         rid = row["id"]
     return {"key": f"{'e' if kind == 'event' else 'i'}:{rid}", "kind": kind, "id": rid, "start_ts": s, "end_ts": e,
             "all_day": all_day, "title": title, "sub": r["why"][:1].upper() + r["why"][1:], "tag": tag,
-            "word": r["word"], "sig": sig_of(kind, row), "day": d0.date().isoformat() if d0 else "", "when": when}
+            "word": r["word"], "sig": sig_of(kind, row), "day": d0.date().isoformat() if d0 else "", "when": when,
+            "cal": cal}
 
 
 # --- the day drawing (Today's Day strip, the phone's vertical day, the Agenda day) ------------------------------------

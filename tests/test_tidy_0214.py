@@ -216,7 +216,7 @@ class TestTidyUp(Base):
         td = today.Today(self.ms, self.lv, lambda: self.now[0])
         td.tidy = t
         self.assertEqual(self.lv.view()["counts"]["needs_you"], 3)
-        self.assertEqual(td.view()["banner"]["text"], "Callsheet now filters promotions better. Tidy up 2 items?")
+        self.assertEqual(td.view()["banner"]["text"], "Tidy up 2 items Callsheet now recognises as promotions or noise?")
         r = t.run()
         self.assertEqual((r["moved"], r["counts"]), (2, {"promo": 1, "channels": 1}))
         v = self.lv.view()
@@ -278,10 +278,10 @@ class TestOlderAndClashes(Base):
                "line": [["x", False]], "until": "in 2 days"} for n in range(1, 7)]
         sides = {n: [{"kind": "item", "id": 7, "what": "Class special rate"}] for n in range(1, 7)}
         out = td._clash_cap(cl, sides)   # noqa: SLF001
-        self.assertEqual(len(out), tidy.CLASH_PER_ITEM + 1)
+        self.assertEqual(len(out), 1)          # 0.24.0: all of one item's clashes in one grouped clash
         g = [c for c in out if c.get("more")][0]
-        self.assertEqual(g["group"]["plain"], "3 more clashes with Class special rate")
-        self.assertEqual([e["id"] for e in g["group"]["entries"]], [4, 5, 6])
+        self.assertEqual(g["group"]["plain"], "Class special rate clashes with 6 things")
+        self.assertEqual([e["id"] for e in g["group"]["entries"]], [1, 2, 3, 4, 5, 6])
 
 
 class TestRefreshAndPage(Base):

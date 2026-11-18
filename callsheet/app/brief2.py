@@ -53,12 +53,18 @@ TOPICS = {"day": ("day", "your day", "calendar", "schedule", "agenda", "today"),
           "mail": ("mail", "from your mail", "digests", "newsletters"),
           "feeds": ("feeds", "feed", "channels", "channel", "reports", "report", "youtube", "news", "videos"),
           "cleanup": ("clean up", "cleanup", "clean-up", "junk")}
-MAX_FACTS = 8
+MAX_FACTS = 6             # 0.24.0 (B1): the facts one step sends (was 8; steps 5-6 took about 95 s on the owner's data)
+FACT_TEXT = 140           # 0.24.0 (B1): characters of one fact's text
+FACTS_CHARS = 2400        # 0.24.0 (B1): the step's facts in the prompt, at most (the last facts go first)
 MAX_TEXT = 600            # characters of one step's spoken text
 MAX_WORDS = 70
 SHORT_WORDS = 30
-MAX_TOKENS = 600
+MAX_TOKENS = 360          # 0.24.0 (B1): was 600 (70 words and the JSON fit in about 200)
 STEP_TIMEOUT_S = 120
+STEP_BUDGET_S = 45        # 0.24.0 (B1): a step's model time; past it, the whole sentences so far or the plan's own
+MIN_SEND_S = 5            # 0.24.0 (B1, live check): no request goes out with less of the step's time than this
+SAVE_EVERY_S = 0.4        # 0.24.0 (B1): the words so far are saved this often while a step is written
+CLEAN_GROUPS_SAID = 3     # 0.24.0 (B1): Clean up's groups said and drawn (the rest is "Other")
 WAIT_CHAT_S = 180         # a step waits this long for Chat to let the model go before its template is used
 RETRY_S = 2.0
 REUSE_S = 3 * 3600        # "Talk it through" reuses today's run this long when nothing changed
@@ -192,6 +198,7 @@ class Planner:
         steps = steps[:MAX_STEPS]
         for i, s in enumerate(steps):
             s["n"] = i + 1
+            s["facts"] = fit_facts(s["facts"])
             s["template"] = self._template(s)
         hm = f"{n:%I}".lstrip("0") + f":{n:%M} {n:%p}".lower()
         out = {"v": VERSION, "day": n.date().isoformat(), "at": now, "call": call,
@@ -199,6 +206,16 @@ class Planner:
         out["sig"] = hashlib.sha256(json.dumps([[s["key"], s["refs"], s["facts"], s["short"], s["note"]]
                                                 for s in steps], sort_keys=True, default=str).encode()).hexdigest()[:16]
         return out
+
+    def _quiet(self, ids):
+        """0.24.0 (B1): the items Today's and Tidy up's rules call promotions or noise (never said aloud)."""
+        q = getattr(self.today, "quiet_ids", None)
+        if q is None:
+            return set()
+        try:
+            return q([i for i in ids if isinstance(i, int)])
+        except Exception:  # noqa: BLE001 (the plain list when the rules can't be read)
+            return set()
 
     @staticmethod
     def _step(key, facts, refs, visual, chips, count=None, title=None):
@@ -247,6 +264,8 @@ class Planner:
         """0.23.0: the heads-ups, one short step: what is on that doesn't need him ("Happening" / "FYI")."""
         hu = v.get("headsup") or {}
         rows = [r for d in hu.get("days") or [] for r in d["rows"]]
+        quiet = self._quiet([r["id"] for r in rows if r.get("kind") == "item"])
+        rows = [r for r in rows if not (r.get("kind") == "item" and r["id"] in quiet)]
         if not rows:
             return None
         facts = [{"ref": r["key"], "word": r["word"], "what": r["title"], "when": r["when"],
@@ -256,6 +275,8 @@ class Planner:
 
     def _needs(self, v):
         rows = v["needs_you"]["rows"]
+        quiet = self._quiet([r["id"] for r in rows if not r.get("never_hide")])
+        rows = [r for r in rows if r["id"] not in quiet]
         if not rows:
             return None
         facts = [{"ref": f"item:{r['id']}", "who": r["who"], "why": r["why"], "waiting": r["age"],
@@ -269,6 +290,8 @@ class Planner:
     def _coming(self, v):
         cu = v["coming_up"]
         rows = [r for g in cu["groups"] for r in g["rows"]]
+        quiet = self._quiet([r["item"] for r in rows if r.get("item")])
+        rows = [r for r in rows if not (r.get("item") and r["item"] in quiet)]
         if not rows:
             return None
         facts, refs = [], []
@@ -282,47 +305,63 @@ class Planner:
                               "from": r["from"] or ("your calendar" if r["on_calendar"] else ""),
                               "likely": r["likely"]})
         return self._step("coming", facts, refs, [{"type": "upcoming", "days": 30, "items": refs[:12]}],
-                          ["What’s on this week?", "Anything I should prepare?"], count=cu["total"])
+                          ["What’s on this week?", "Anything I should prepare?"], count=len(refs))
 
     def _money(self, lv, now, tz):
-        seen, bills, trips = set(), [], []
-        for it in lv["now_next"] + lv["coming_up"] + lv["needs_you"]:
-            if it["id"] in seen or it["status"] in ("declined", "done", "cancelled"):
-                continue
-            seen.add(it["id"])
-            sub = it.get("subtype") or ""
-            amt = it.get("amount") or ""
-            if not amt:
-                m = _MONEY.search(it.get("what") or "")
-                amt = m.group(0) if m else ""
-            if sub in ("bill", "payment") or it.get("amount") or (sub == "deadline" and amt):
-                bills.append((it, amt))
-            elif sub == "trip" or sub in L.TRIP_PARTS:
-                trips.append(it)
+        """Bills and trips. 0.24.0 (B1): the bills are Today's (Today.bills, the list Chat's bills tool reads): real
+        bills only, overdue first; the trips are Today.trips' in the next 30 days."""
+        if hasattr(self.today, "bills"):
+            rows = self.today.bills(now=now)
+            bills = [({"id": r["item"], "what": r["what"], "who_name": r["who"],
+                       "when": {"label": r["due"]}, "late": r["late"]}, r["amount"]) for r in rows]
+            trips = [t for t in self.today.trips(now=now) if (t["start"] or 0) < now + 30 * 86400] \
+                if hasattr(self.today, "trips") else []
+        else:   # (a test's Today without the lists: the ledger as before)
+            seen, bills, trips = set(), [], []
+            for it in lv["now_next"] + lv["coming_up"] + lv["needs_you"]:
+                if it["id"] in seen or it["status"] in ("declined", "done", "cancelled"):
+                    continue
+                seen.add(it["id"])
+                sub = it.get("subtype") or ""
+                amt = it.get("amount") or ""
+                if not amt:
+                    m = _MONEY.search(it.get("what") or "")
+                    amt = m.group(0) if m else ""
+                if sub in ("bill", "payment") or it.get("amount") or (sub == "deadline" and amt):
+                    bills.append((it, amt))
+                elif sub == "trip" or sub in L.TRIP_PARTS:
+                    trips.append({"kind": "item", "id": it["id"], "what": it["what"], "when": it["when"]["label"],
+                                  "why": it.get("purpose") or "", "calendar": "", "need": "yours"})
         if not bills and not trips:
             return None
         facts, vis = [], []
-        for it, amt in bills[:6]:
-            facts.append({"ref": f"item:{it['id']}", "what": it["what"], "due": it["when"]["label"],
-                          "amount": amt, "who": it.get("who_name") or ""})
-        for it in trips[:2]:
-            facts.append({"ref": f"item:{it['id']}", "what": it["what"], "when": it["when"]["label"],
-                          "for": it.get("purpose") or ""})
+        for it, amt in bills[:5]:
+            f = {"ref": f"item:{it['id']}", "what": it["what"], "due": it["when"]["label"],
+                 "amount": amt, "who": it.get("who_name") or ""}
+            if it.get("late"):
+                f["late"] = it["late"]
+            facts.append(f)
+        for t in trips[:2]:
+            facts.append({"ref": f"{'item' if t['kind'] == 'item' else 'cal'}:{t['id']}", "what": t["what"],
+                          "when": t["when"], "for": t.get("why") or "",
+                          **({"calendar": t["calendar"]} if t.get("calendar") else {})})
         if bills:
             vis.append({"type": "bills", "days": 30, "items": [dict({"ref": f"item:{it['id']}"},
                                                                     **({"amount": a} if a else {}))
                                                                for it, a in bills[:6]]})
-        if trips:
+        legs = [f"item:{t['id']}" for t in trips[:2] if t["kind"] == "item"]
+        if legs:
             m = _DEST.search(trips[0]["what"] or "")
             if m:
-                vis.append({"type": "trip", "to": m.group(1), "legs": [f"item:{it['id']}" for it in trips[:2]]})
+                vis.append({"type": "trip", "to": m.group(1), "legs": legs})
         title = ("Bills" if len(bills) > 1 else "A bill") if bills else ""
         if trips:
             title = (title + " and " if title else "") + ("a trip" if len(trips) == 1 else "trips")
         title = title[:1].upper() + title[1:]
-        chips = ([f"Remind me Monday about {first(bills[0][0].get('who_name') or 'it')}"] if bills else []) + \
-                (["When do I leave?"] if trips else [])
-        return self._step("money", facts, [f["ref"] for f in facts], vis, chips, count=len(bills) or None, title=title)
+        chips = ([f"Remind me Monday about {chip_name(bills[0][0].get('who_name') or bills[0][0].get('what'))}"]
+                 if bills else []) + (["When do I leave?"] if trips else [])
+        refs = [f["ref"] for f in facts] + [f"item:{it['id']}" for it, _a in bills[5:]]
+        return self._step("money", facts, refs, vis, chips, count=len(bills) or None, title=title)
 
     def _mail(self, lv, v, rules, extra):
         """Security alerts and invites (never hidden), digests the owner said to always mention (or that stand out),
@@ -337,6 +376,8 @@ class Planner:
                 continue
             seen.add(it["id"])
             why = None
+            if it.get("subtype") == "invite" and it["id"] not in shown:
+                continue   # 0.24.0 (B1): an invite to answer is in Needs you; a shared calendar's is a heads-up
             if it.get("never_hide") and it["id"] not in shown:
                 why = "never_hide"
             elif it["type"] == "cleanup" and it.get("subtype") == "newsletter":
@@ -392,15 +433,22 @@ class Planner:
             cu = self.today.cleanup(now=now)
         except Exception:  # noqa: BLE001 (no clean up when Today can't say)
             return None
-        groups = cu.get("groups") or []
+        groups = [{"label": g["label"], "n": len(g["rows"])} for g in cu.get("groups") or [] if g.get("rows")]
         total = cu.get("total") or 0
         if not total:
             return None
-        facts = [{"kind": g["label"], "count": len(g["rows"])} for g in groups]
+        groups.sort(key=lambda g: -g["n"])
+        if len(groups) > CLEAN_GROUPS_SAID + 1:   # 0.24.0 (B1): the words and the picture say the same groups
+            groups = groups[:CLEAN_GROUPS_SAID] + [{"label": "Other", "n": sum(g["n"] for g in
+                                                                               groups[CLEAN_GROUPS_SAID:])}]
+        if sum(g["n"] for g in groups) != total:
+            groups.append({"label": "Other", "n": total - sum(g["n"] for g in groups)})
+        facts = [{"kind": g["label"], "count": g["n"]} for g in groups]
         facts.append({"total": total, "since": cu.get("since") or ""})
         refs = [f"item:{i}" for i in (cu.get("ids") or [])][:200]
-        return self._step("cleanup", facts, refs, [{"type": "cleanup"}],
-                          ["Mark them all done", "Keep the receipts"], count=total)
+        vis = [{"type": "cleanup", "groups": [{"label": re.sub(r"[0-9]", "", g["label"])[:40] or "Other",
+                                               "n": g["n"]} for g in groups if g["n"] > 0][:8]}]
+        return self._step("cleanup", facts, refs, vis, ["Mark them all done", "Keep the receipts"], count=total)
 
     # the words when the model can't write them ------------------------------------------------------------------------
     @staticmethod
@@ -442,7 +490,8 @@ class Planner:
             parts = []
             for x in f:
                 if "due" in x:
-                    parts.append(f"{x['what']}" + (f", due {x['due']}" if x["due"] else "") + ".")
+                    parts.append(f"{x['what']}" + (f", {x['late']}" if x.get("late") else
+                                                   f", due {x['due']}" if x["due"] else "") + ".")
                 else:
                     parts.append(f"{x['what']}: {x['when']}.")
             return " ".join(parts[:2 if short else 4])
@@ -464,6 +513,34 @@ class Planner:
             t = f"{count_word(tot)} {plural(tot, 'thing', 'things')} to clean up"
             return t + (f": {_join(kinds)}." if kinds and not short else ".") + " Clear them in one go?"
         return s["title"] + "."
+
+
+def chip_name(name):
+    """0.24.0 (B1): a sender or title for a chip ("Remind me Monday about CableWholesale"): no quotes, no trailing
+    commas or company suffix, at most four words (the audit: "about 'CableWholesale.com,")."""
+    t = re.sub(r"[\"“”‘’'`]+", " ", str(name or "")).strip()
+    t = re.split(r"\s*[,;:|(<\[]\s*", t, maxsplit=1)[0]
+    t = re.sub(r"\.(?:com|net|org|co|io)\b", "", t, flags=re.I)
+    t = re.sub(r"(?i)\s+(?:inc|llc|ltd|corp|co)\.?$", "", t).strip(" .-")
+    words = t.split()
+    return " ".join(words[:4]) if words else "it"
+
+
+def fit_facts(facts):
+    """0.24.0 (B1): the step's facts within the prompt caps: each text at most FACT_TEXT characters, at most
+    MAX_FACTS facts, and the whole at most FACTS_CHARS (the last facts go first)."""
+    def clip(v):
+        if isinstance(v, str) and len(v) > FACT_TEXT:
+            return v[:FACT_TEXT - 1].rstrip() + "…"
+        if isinstance(v, list):
+            return [clip(x) for x in v[:6]]
+        return v
+    out = [{k: clip(v) for k, v in f.items()} if isinstance(f, dict) else f for f in facts]
+    keep = [f for f in out if isinstance(f, dict) and ("total" in f or "free" in f)]   # the totals stay (wherever)
+    rest = [f for f in out if f not in keep][:MAX_FACTS]
+    while rest and len(json.dumps(rest + keep, ensure_ascii=False)) > FACTS_CHARS:
+        rest.pop()
+    return rest + keep
 
 
 # --- the model's answer --------------------------------------------------------------------------------------------
@@ -497,6 +574,16 @@ visual: the picture for this step. Callsheet suggests {{"type": "{vtype}", "refs
 type fits better: {vocab}. refs are ids from <facts> only.
 more: at most one extra block (a full block from the same list, with "type" and its fields; refs from <facts> \
 only) when it adds something; else []."""
+
+
+def _streams(call):
+    """Does `call` take the stream sink (call(body, sink))? A test's call(body) doesn't."""
+    try:
+        import inspect
+        ps = list(inspect.signature(call).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return len(ps) >= 2 or any(p.kind == p.VAR_POSITIONAL for p in ps)
 
 
 def _data(obj):
@@ -564,6 +651,60 @@ def content_of(res):
     return res
 
 
+class Stopped(writer.Busy):
+    """0.24.0 (B1): the step's writing stopped on purpose: the owner pressed Skip, or the step's time was up."""
+
+
+_TEXT_START = re.compile(r'"text"\s*:\s*"')
+
+
+def partial_text(raw):
+    """0.24.0 (B1): the "text" value of a JSON answer still being written (what is on screen while it streams)."""
+    m = _TEXT_START.search(raw or "")
+    if not m:
+        return ""
+    out, i, s = [], m.end(), raw
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            break
+        if c == "\\":
+            if i + 1 >= len(s):
+                break
+            nx = s[i + 1]
+            if nx == "u":
+                if i + 6 > len(s):
+                    break
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                except ValueError:
+                    pass
+                i += 6
+                continue
+            out.append({"n": " ", "t": " ", "r": " ", "b": "", "f": ""}.get(nx, nx))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return " ".join("".join(out).split())
+
+
+_SENT = re.compile(r"(?:[^.!?]|[.!?](?![\s\"”’)]|$))*[.!?]+[\"”’)]*(?=\s|$)")   # a point inside "$84.20" ends nothing
+
+
+def whole_sentences(text, words=MAX_WORDS):
+    """The leading whole sentences of text, within `words` words ("" when not even one is whole)."""
+    out, n = [], 0
+    for m in _SENT.finditer(text or ""):
+        sent = m.group(0).strip()
+        k = len(sent.split())
+        if not sent or n + k > words:
+            break
+        out.append(sent)
+        n += k
+    return " ".join(out)
+
+
 def parse(raw, key):
     """The model's answer -> {text, visual, more} or raises ValueError with a plain reason."""
     raw = content_of(raw)
@@ -584,7 +725,10 @@ def parse(raw, key):
         raise ValueError("no text")
     text = " ".join(text.split())
     if len(text) > MAX_TEXT or len(text.split()) > MAX_WORDS + 15:
-        raise ValueError("too long")
+        cut = whole_sentences(text[:MAX_TEXT])   # 0.24.0 (B1): its first sentences, not a second request
+        if not cut:
+            raise ValueError("too long")
+        text = cut
     if re.search(r"[\x00-\x08\x0b-\x1f\x7f]|<\s*/?\s*[a-z]+[^>]*>|\[[^\]]*\]\([^)]*\)", text):
         raise ValueError("markup in the text")
     vis = raw.get("visual")
@@ -720,6 +864,8 @@ class Brief:
         self.planner = Planner(ms, lv, today, prefs)
         self.thread = None
         self.on_done = []     # hooks(run id, call): the "Your brief is ready" notification
+        self.skips = set()    # 0.24.0 (B1): (run, step) the owner skipped while it was written
+        self.live = {}        # 0.24.0 (B1): (run, step) -> the words so far (shown while the step is written)
         ensure(ms)
 
     def _name(self):
@@ -808,7 +954,8 @@ class Brief:
         lat = []
         for st in p["steps"]:
             t0 = self.monotonic()
-            out = self.write_step(st, total, model, owner)
+            out = self.write_step(st, total, model, owner, rid=rid)
+            self.live.pop((rid, st["key"]), None)
             out["secs"] = round(self.monotonic() - t0, 2)
             lat.append(out["secs"])
             if out["by"] == "model":
@@ -827,33 +974,84 @@ class Brief:
             except Exception as e:  # noqa: BLE001 (a failed notification never stops the brief)
                 self.log(f"Callsheet brief: a hook failed ({type(e).__name__})")
 
-    def _ask(self, body):
-        """One model request; waits while Chat has the model (Busy), up to WAIT_S."""
+    def skip(self, rid, key):
+        """0.24.0 (B1): Skip on a step being written: the writing stops and the plan's own sentence is shown."""
+        r = self.run(rid) if rid else self.latest()
+        if r is None or not any(st["key"] == key for st in r["plan"]["steps"]):
+            return False
+        self.skips.add((r["id"], key))
+        return True
+
+    def _ask(self, body, sink=None):
+        """One model request; waits while Chat has the model (Busy), up to WAIT_S. 0.24.0 (B1): `sink(kind, piece)`
+        hears the answer as it streams (a call that takes one argument is called without it). 0.24.0 (B1, live check:
+        the first step waited 74 s for Chat's idle time): the wait ends with the step's time (`sink.left`)."""
         end = self.monotonic() + WAIT_CHAT_S
+        left = getattr(sink, "left", None)
         while True:
             try:
+                if left is not None and left() < MIN_SEND_S:
+                    raise writer.Busy("the step's time is up")
+                if sink is not None and _streams(self.call):
+                    return self.call(body, sink)
                 return self.call(body)
+            except Stopped:
+                raise
             except writer.Busy:
-                if self.monotonic() >= end:
+                if self.monotonic() >= end or (left is not None and left() < MIN_SEND_S + RETRY_S):
                     raise
                 self.sleep(RETRY_S)
 
-    def write_step(self, st, total, model, owner=()):
-        out = {"key": st["key"], "by": "template", "why": "", "checks": [], "visual_checks": [], "warning": None,
-               "visual": st["visual"], "more": []}
+    def _sink(self, rid, key, t0):
+        """0.24.0 (B1): hears the streamed answer: keeps the words so far for the page, and stops the request when
+        the owner pressed Skip or the step's time (STEP_BUDGET_S) is up."""
+        st = {"raw": "", "saved": 0.0}
+
+        def sink(kind, piece):
+            if kind == "content" and isinstance(piece, str):
+                st["raw"] += piece
+                now = self.monotonic()
+                if now - st["saved"] >= SAVE_EVERY_S:
+                    st["saved"] = now
+                    self.live[(rid, key)] = partial_text(st["raw"])
+            if (rid, key) in self.skips:
+                raise Stopped("skipped")
+            if self.monotonic() - t0 > STEP_BUDGET_S:
+                raise Stopped("out of time")
+        sink.state = st
+        sink.left = lambda: STEP_BUDGET_S - (self.monotonic() - t0)   # the request's timeout (api.brief_call)
+        return sink
+
+    def write_step(self, st, total, model, owner=(), rid=None):
+        out = {"key": st["key"], "by": "template", "why": "", "checks": [], "visual": st["visual"],
+               "visual_checks": [], "warning": None, "more": []}
         res = None
-        if self.call is None or not model:
+        t0 = self.monotonic()
+        sink = self._sink(rid, st["key"], t0)
+        if (rid, st["key"]) in self.skips:
+            out["why"] = "you skipped it"
+        elif self.call is None or not model:
             out["why"] = "no local model"
         else:
             try:
                 body = request_body(model, st, total, owner[0] if owner else "", self.slot, name=self._name())
-                ans = self._ask(body)
+                ans = self._ask(body, sink)
                 try:
                     res = parse(ans, st["key"])
                 except ValueError as e:      # 0.22.x: one repair try (the local model on real mail: a step "too long")
+                    if self.monotonic() - t0 > STEP_BUDGET_S / 2:   # 0.24.0 (B1): no second try past half the time
+                        raise
                     self.log(f"Callsheet brief: step {st['key']} answer unusable ({e}); asking once more")
-                    res = parse(self._ask(repair_body(body, ans, str(e), st)), st["key"])
+                    sink.state["raw"] = ""
+                    res = parse(self._ask(repair_body(body, ans, str(e), st), sink), st["key"])
                     out["repaired"] = str(e)
+            except Stopped as e:
+                said = whole_sentences(partial_text(sink.state["raw"]))
+                if str(e) == "skipped" or not said:
+                    out["why"] = "you skipped it" if str(e) == "skipped" else "the model took too long"
+                else:   # 0.24.0 (B1): out of time: the whole sentences written so far
+                    res = {"text": said, "visual": {"type": "none", "refs": []}, "more": []}
+                    out["cut"] = True
             except writer.Busy:
                 out["why"] = "the model was busy"
             except (writer.WriterError, ValueError, KeyError, TypeError, IndexError) as e:
@@ -863,6 +1061,8 @@ class Brief:
         if res is None:
             out["text"] = st["template"]
             out["segs"] = [[st["template"], None]]
+            if out["why"]:
+                self.log(f"Callsheet brief: step {st['key']} from the plan ({out['why']})")
             return out
         texts, counts = self.texts(st)
         segs, checks = ground(res["text"], texts, counts, owner, name=self._name())
@@ -959,6 +1159,9 @@ class Brief:
             w = r["steps"].get(st["key"])
             s = {"key": st["key"], "n": st["n"], "title": st["title"], "count": st.get("count"),
                  "chips": st["chips"], "state": "ready" if w else "writing", "items": st["items"][:200]}
+            if not w:   # 0.24.0 (B1): the words as they are written, and whether Skip was pressed
+                s["partial"] = self.live.get((r["id"], st["key"]), "")
+                s["skipped"] = (r["id"], st["key"]) in self.skips
             if w:
                 c = self.blocks(w, facts)
                 s.update(text=w["text"], segs=w.get("segs") or [[w["text"], None]], by=w["by"],
@@ -967,7 +1170,7 @@ class Brief:
             steps.append(s)
         return {"run": {"id": r["id"], "day": r["day"], "call": r["call"], "state": r["state"],
                         "date_line": p["date_line"], "date_short": p["date_short"], "created_at": r["created_at"],
-                        "steps": steps, "total": len(steps)}, "voice": VOICE}
+                        "steps": steps, "total": len(steps)}, "voice": VOICE, "assistant": self._name()}
 
     def step_scope(self, rid, key):
         """A brief reply's scope: the step's title and its ledger items (from the cached plan, never from the page)."""

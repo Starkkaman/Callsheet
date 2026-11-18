@@ -46,6 +46,7 @@ import conflicts as conflicts_mod  # noqa: E402 (0.16.0)
 import extract as extract_mod  # noqa: E402 (0.16.0)
 import ledger as ledger_mod  # noqa: E402 (0.16.0)
 import need as need_mod  # noqa: E402 (0.23.0)
+import filters as filters_mod  # noqa: E402 (0.24.0 the audit's filtering fixes)
 import prefs as prefs_mod  # noqa: E402 (0.17.0)
 import today as today_mod  # noqa: E402 (0.18.0)
 import heads as heads_mod  # noqa: E402 (0.21.0)
@@ -67,7 +68,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_brief.json"
 # The app's version, the same as `version` in callsheet/config.yaml (the image only holds app/, so it is
 # kept here; tests/test_server.py fails if the two differ). Sent in api/state and put into index.html.
-APP_VERSION = "0.23.0"
+APP_VERSION = "0.24.0"
 DRAFT_SUG = "Draft a reply to "   # 0.21.0: today.py's Chat suggestion that means Draft a reply
 
 
@@ -173,6 +174,7 @@ class App:
             ("GET", r"talk", self.talk),                     # 0.21.0: Talk it through (brief2.py)
             ("POST", r"talk/start", self.talk_start),
             ("POST", r"talk/reply", self.talk_reply),
+            ("POST", r"talk/skip", self.talk_skip),          # 0.24.0 (B1): Skip a step while it is written
             ("GET", r"state", self.state),
             ("POST", r"google-client", self.set_client),
             ("DELETE", r"google-client", self.delete_client),
@@ -241,7 +243,11 @@ class App:
                         ("POST", r"today/tidy/later", self.today_tidy_later),
                         ("POST", r"today/gotit", self.today_gotit),            # 0.23.0 heads-ups: Got it per item
                         ("POST", r"today/gotit/undo", self.today_gotit_undo),
-                        ("POST", r"today/need", self.today_need)]              # 0.23.0 "Does this need you?"
+                        ("POST", r"today/need", self.today_need),              # 0.23.0 "Does this need you?"
+                        ("POST", r"today/back", self.today_back),              # 0.24.0 Move back to Needs you
+                        ("POST", r"today/sender", self.today_sender),          # 0.24.0 Never from this sender / promo
+                        ("POST", r"today/sender/undo", self.today_sender_undo),
+                        ("POST", r"today/calendar", self.today_calendar)]      # 0.24.0 a calendar row's choice
         self.routes += [("GET", r"calendar/access", self.cal_access),            # 0.21.0 Add to calendar (calwrite.py)
                         ("POST", r"calendar/access/check", self.cal_access_check),
                         ("POST", r"calendar/access/start", self.cal_access_start),
@@ -766,12 +772,45 @@ class App:
         self._sync_cals(recheck=True)          # 0.23.0: Mine / Ask me / Heads-up / Hide, where the ledger reads it
         return out
 
+    def _one_per_thread(self, *_a, **_k):
+        """0.24.0 after reads: the thread-level merge (filters.thread_merges) and items whose mail is in Trash close."""
+        now = self.clock()
+        try:
+            self.messages.write(lambda db: (filters_mod.thread_merges(db, now), filters_mod.close_trashed(db, now)))
+        except Exception as e:  # noqa: BLE001 (reading goes on)
+            print(f"one per thread: {type(e).__name__}", file=sys.stderr, flush=True)
+
+    def _labels_refreshed(self, aid, gids):
+        """0.24.0: Gmail labels changed on these stored messages (the one-time refresh, Trash, deleted): their items
+        whose every message is in Trash close, then the tidy rules re-run on the rest (one run, with Undo)."""
+        gids = [str(g) for g in gids or []][:500]
+        if not gids or not getattr(self, "messages", None):
+            return
+        marks = ",".join("?" * len(gids))
+        items = sorted({r["item"] for r in self.messages._read(  # noqa: SLF001
+            f"SELECT DISTINCT s.item FROM ledger_sources s JOIN messages m ON m.id=s.message WHERE m.source='gmail' "
+            f"AND m.account=? AND m.msg_id IN ({marks})", (aid, *gids))})
+        filters_mod.forget(self.messages)
+        if not items:
+            return
+        now = self.clock()
+        self.messages.write(lambda db: filters_mod.close_trashed(db, now, items))
+        if getattr(self, "tidy", None) is not None:
+            self.tidy.run(how="labels", only=items)
+
     def _sync_cals(self, recheck=False):
         """0.23.0: Setup's calendar choices copied into messages.db (need.calendar_use); a change re-checks clashes."""
         if not getattr(self, "messages", None):
             return False
         accounts = self.store.accounts()
-        changed = self.messages.write(lambda db: need_mod.sync_calendars(db, accounts))
+        mine = set()
+        try:                                   # 0.24.0: his identity in People (send-as addresses) as well
+            with self.store.lock:
+                mine = {str(r[0]).lower() for r in self.store.db.execute(
+                    "SELECT value FROM person_handles WHERE person='me' AND kind='email'")}
+        except Exception:  # noqa: BLE001 (the accounts' addresses still count)
+            mine = set()
+        changed = self.messages.write(lambda db: need_mod.sync_calendars(db, accounts, mine))
         if changed and recheck and getattr(self, "today", None):
             self.today.recheck()
         return changed
@@ -898,6 +937,7 @@ class App:
                 ("GET", r"index/settings", self.get_index_settings),
                 ("PATCH", r"index/settings", self.patch_index_settings),
                 ("GET", r"index/search", self.index_search),
+                ("GET", r"find", self.find),   # 0.24.0 (B2): Find's people, items and messages
                 ("GET", r"index/item/(\d{1,12})", self.index_item),
                 ("POST", r"index/drive/check", self.index_drive_check),
                 ("POST", r"index/drive/start", self.index_drive_start),
@@ -971,6 +1011,54 @@ class App:
                           area=q.get("area") or None, people=q.get("people") or None, since=since,
                           until=until, limit=limit, offset=offset)
         return {"q": q.get("q") or "", "results": rows}
+
+    def find(self, body=None):
+        """GET api/find?q= (0.24.0, B2; secret shopper: Find gave only "Ask: …" while the message store had hits):
+        people, open items and messages for Find, each with what its row opens (the People page, the item's view,
+        the message, or the item that message made). Read-only; a part that can't be read is left empty."""
+        q = (body or {}).get("q") if isinstance(body, dict) else ""
+        q = " ".join(str(q or "").split())[:120]
+        out = {"q": q, "people": [], "items": [], "messages": []}
+        if len(q) < 2:
+            return out
+        try:
+            out["people"] = self.people.find(q)
+        except Exception:  # noqa: BLE001 - Find shows what it can
+            pass
+        if self.today is not None:
+            try:
+                out["items"] = self.today.find(q)
+            except Exception:  # noqa: BLE001
+                pass
+        if self.index is not None:
+            try:
+                rows = self.index.search(q, source=",".join(library_mod.MESSAGE_SOURCES), limit=8)
+            except Exception:  # noqa: BLE001
+                rows = []
+            made = {}
+            mids = [int(r["id"]) - msgstore.STORE_ID_BASE for r in rows
+                    if msgstore.STORE_ID_BASE <= int(r["id"]) < msgstore.EVENT_ID_BASE]
+            if mids and self.messages is not None:
+                for m in self.messages._read(  # noqa: SLF001
+                        "SELECT s.message, s.item FROM ledger_sources s JOIN ledger_items i ON i.id=s.item WHERE "
+                        f"s.message IN ({','.join('?' * len(mids))}) AND i.merged_into IS NULL ORDER BY s.at",
+                        mids):
+                    made.setdefault(m["message"] + msgstore.STORE_ID_BASE, m["item"])
+            seen = set()
+            for r in rows:
+                if r.get("relaxed"):
+                    continue   # Find shows rows with every word only
+                key = (str(r.get("title") or "").casefold(), str(r.get("people") or "").casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                who = people_mod._split(r.get("people"))   # noqa: SLF001
+                out["messages"].append({"id": int(r["id"]), "title": str(r.get("title") or "(no subject)")[:120],
+                                        "who": (who[0][0] or "") if who else "", "date": str(r.get("date") or "")[:10],
+                                        "source": r.get("source") or "", "item": made.get(int(r["id"]))})
+                if len(out["messages"]) >= 5:
+                    break
+        return out
 
     def index_item(self, _body, item_id):
         item = self._library().get(item_id)
@@ -1221,12 +1309,16 @@ class App:
                                      feeds=(lambda: {"feeds": conns.brief_list(), "reports": conns.reports_list()})
                                      if conns is not None else None)
         self.ledger_runner.hooks.append(self.today.tick)          # 0.18.0: Today's reminders
+        self.ledger_runner.hooks.append(self._one_per_thread)     # 0.24.0: one conversation, one item; Trash closes
         # 0.21.4 Tidy up (tidy.py): confirmed People only count as known (never suggested ones)
         # 0.22.1: the read-time rules use the same Known as Tidy up, so new mail is judged as the owner's Tidy up judged
         self.tidy = tidy_mod.Tidy(self.messages, self.clock, known=self._tidy_known,
                                   owner_names=lambda: background.owner_names(self.store, getattr(self, "people", None)))
         self.extractor.known_load = self._tidy_known
         self.today.tidy = self.tidy
+        gm = (getattr(getattr(self, "live", None), "readers", None) or {}).get("gmail")
+        if gm is not None:
+            gm.on_refreshed = self._labels_refreshed   # 0.24.0: the label refresh and Trash re-run the rules
         self.prefs.on_need = self.today.recheck     # 0.23.0: an answer (a press, Chat, Undo) re-checks the clashes
         try:
             self._sync_cals()                  # 0.23.0: the calendar choices the ledger reads (need.py)
@@ -1255,9 +1347,11 @@ class App:
         self.suggest = suggest_mod.Suggest(self.messages, self.projects, clock=self.clock) \
             if getattr(self, "projects", None) is not None else None
 
-        def brief_call(body):  # 0.21.0: one step of the talk-through on the background slot (Chat preempts it)
+        def brief_call(body, stream=None):  # 0.21.0: one step of the talk-through on the background slot (Chat preempts it)
             body["id_slot"] = background.slot_for(body.get("model"))
-            return self.background.post_bg(body, brief2_mod.STEP_TIMEOUT_S, kind="brief", units=1)
+            left = getattr(stream, "left", None)   # 0.24.0 (B1): the first word, too, comes within the step's time
+            timeout = max(1.0, min(brief2_mod.STEP_TIMEOUT_S, left())) if left else brief2_mod.STEP_TIMEOUT_S
+            return self.background.post_bg(body, timeout, kind="brief", units=1, stream=stream)
         self.brief2 = brief2_mod.Brief(self.messages, self.ledger, self.today, self.prefs, clock=self.clock,
                                        call=brief_call, model=lambda: self.background.settings()["model"],
                                        owner=lambda: background.owner_names(self.store, getattr(self, "people", None)),
@@ -1270,6 +1364,7 @@ class App:
                                               gdrafts=self.gdrafts, notes=lambda: self.memory.entries(),
                                               owner=lambda: background.owner_names(self.store, getattr(self, "people", None)),
                                               clock=self.clock, log=lambda line: print(line, file=sys.stderr, flush=True))
+        self.chat.replies = self.replies   # 0.24.0 (B1): Chat's "draft a reply to …" reads the thread as Draft a reply does
 
     def ledger_view(self, _body):
         """0.16.0 GET api/ledger: Now and next, Needs you, Coming up (30 days), Clean up, clashes, follow-ups."""
@@ -1521,6 +1616,33 @@ class App:
         except today_mod.Invalid as e:
             raise InputError(str(e)) from None
 
+    def today_back(self, body):
+        """0.24.0 POST api/today/back {item}: Move back to Needs you (a Clean up line that looks like a real ask)."""
+        return self._today().move_back(_obj(body).get("item"))
+
+    def today_sender(self, body):
+        """0.24.0 POST api/today/sender {item, kind: never|promo}: Not for me, and teach the sender (one Undo)."""
+        b = _obj(body)
+        return self._today().sender_rule(b.get("item"), b.get("kind"))
+
+    def today_sender_undo(self, body):
+        return self._today().sender_rule_undo(_obj(body).get("rule"))
+
+    def today_calendar(self, body):
+        """0.24.0 POST api/today/calendar {account, calendar, use}: "From calendar X: change how it counts" on a
+        calendar row, the same choice as Setup's (Mine / Ask me / Heads-up / Hide). Returns {use, was} for Undo."""
+        b = _obj(body)
+        acc, cal, use = b.get("account"), b.get("calendar"), b.get("use")
+        if use not in need_mod.USES:
+            raise InputError("Pick Mine, Ask me, Heads-up or Hide.")
+        a = next((x for x in self.store.accounts() if x["id"] == acc), None)
+        c = next((x for x in (a or {}).get("calendars") or [] if x.get("id") == cal), None)
+        if c is None:
+            raise InputError("There's no such calendar.")
+        was = c.get("use") or need_mod.default_use(c)
+        self.patch_account({"calendar_use": {cal: use}}, acc)
+        return {"account": acc, "calendar": cal, "use": use, "was": was, "name": c.get("summary") or cal}
+
     def today_tidy_later(self, _body):
         """The banner's Not now: the offer doesn't come back (Tidy up stays in Chat)."""
         self._tidy().dismiss()
@@ -1761,6 +1883,12 @@ class App:
         """0.21.0 POST api/talk/start: "Talk it through" (today's cached run when nothing changed)."""
         b = _obj(body)
         rid = self._brief2().start(call="talk", force=bool(b.get("fresh")))
+        return self.talk()
+
+    def talk_skip(self, body):
+        """0.24.0 (B1) POST api/talk/skip {run, step}: stop writing that step (Callsheet's own sentence is shown)."""
+        b = _obj(body)
+        self._brief2().skip(b.get("run"), str(b.get("step") or ""))
         return self.talk()
 
     def talk_reply(self, body):

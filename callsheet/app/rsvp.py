@@ -20,6 +20,7 @@ import time
 import conflicts as C
 import google
 import ledger as L
+import need as N
 import sources
 from store import Conflict, InputError, NotFound
 
@@ -77,6 +78,9 @@ class Rsvp:
         me = self_entry(att)
         if me is None or e.get("status") == "cancelled":
             return None
+        nd = N.Need(N.ReadOnly(self.ms))
+        if nd.shared(dict(e, attendees=att)) or nd.me_of(dict(e, attendees=att)) is None:
+            return None   # 0.24.0 (B1): an invite on a shared calendar isn't addressed to him: a heads-up, no RSVP
         resp = str(me.get("response") or "")
         on = bool(self.cal.granted(e["account"])) if self.cal is not None else False
         return {"event": e["id"], "answer": KEYS.get(resp, ""), "word": WORDS.get(resp, "Not answered"), "on": on,
