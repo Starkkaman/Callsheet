@@ -19,6 +19,10 @@ import threading
 import time
 
 SCOPES = ("messages:read", "ledger:read", "calendar:read", "people:read", "brief:read", "status:read")
+# 0.24.3 (owner approved 2026-11-18, "Yes, those three"): dismiss, snooze and mark done (voiceactions.py). Never a
+# default: only the per-device checkbox in Setup (or scopes at creation) grants it.
+WRITE_SCOPES = ("actions:write",)
+ALL_SCOPES = SCOPES + WRITE_SCOPES
 TOKEN_PREFIX = "csva_"
 MAX_TOKENS = 20                 # active (not revoked) tokens
 NAME_MAX = 40
@@ -202,9 +206,10 @@ class Tokens:
         name = clean_name(name)
         if scopes is None:
             scopes = list(SCOPES)
-        if not isinstance(scopes, list) or not scopes or any(s not in SCOPES for s in scopes):
+        if not isinstance(scopes, list) or any(s not in ALL_SCOPES for s in scopes) or \
+                not any(s in SCOPES for s in scopes):
             raise Invalid("Pick at least one of the read permissions.")
-        scopes = [s for s in SCOPES if s in scopes]
+        scopes = [s for s in ALL_SCOPES if s in scopes]
         if len(self._rows(active=True)) >= MAX_TOKENS:
             raise Invalid(f"There are already {MAX_TOKENS} devices. Revoke one first.")
         token = TOKEN_PREFIX + secrets.token_urlsafe(32)
@@ -223,6 +228,18 @@ class Tokens:
             raise LookupError("There's no such device, or it was revoked already.")
         with self.rate.lock:
             self.rate.hits.pop(str(tid), None)
+
+    def set_actions(self, tid, on):
+        """0.24.3: grant or take back actions:write for one device (Setup's checkbox)."""
+        row = next((r for r in self._rows(active=True) if r["id"] == str(tid)), None)
+        if row is None:
+            raise LookupError("There's no such device, or it was revoked.")
+        scopes = [s for s in ALL_SCOPES if s in row["scopes"] and s not in WRITE_SCOPES] + (list(WRITE_SCOPES) if on
+                                                                                             else [])
+        with self.store.lock:
+            self.store.db.execute("UPDATE voice_tokens SET scopes=? WHERE id=? AND revoked IS NULL",
+                                  (json.dumps(scopes), row["id"]))
+        return scopes
 
     def check(self, header):
         """The Authorization header -> the token's row, or None. Every active token's hash is compared in constant time

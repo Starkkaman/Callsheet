@@ -2064,6 +2064,10 @@ html.fa-lock{overflow:hidden}
 .vadev-t b{overflow-wrap:anywhere}
 .vadev-t .muted{font-size:var(--fs-sm)}
 .vadev .confirm{flex:1 1 100%}
+.vaact{display:flex;gap:10px;align-items:center;min-width:0;overflow-wrap:anywhere;cursor:pointer;font-size:var(--fs-sm)}
+.vadev .vaact{order:2;flex:1 1 100%}
+.vaadd .vaact{margin:4px 0 4px}
+@media (max-width:700px){.vaact{min-height:44px}}
 .vaadd{margin-top:16px}
 .vaadd .fl,.vamore .fl{display:block;margin:12px 0 4px}
 .vaadd .vascopes{margin:4px 0 12px}

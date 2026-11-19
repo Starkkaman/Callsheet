@@ -571,7 +571,8 @@ class VoiceTest(unittest.TestCase):
         self.assertEqual(v["scopes"], ALL)
         self.assertEqual((v["rate_per_minute"], v["audit_days"]), (60, 90))
         js = (APP / "static" / "app.js").read_text()
-        self.assertIn("Read-only. Reached over your home network or Tailscale; never put it behind Cloudflare.", js)
+        self.assertIn("Read-only, unless you let a device dismiss, snooze and mark done. Reached over your home network or "
+                      "Tailscale; never put it behind Cloudflare.", js)
         self.assertIn("voiceSection()", js)
         self.assertNotRegex(js[js.index("function voiceSection"):js.index("function otherSources")], r"innerHTML")
         with self.assertRaises(api.InputError):

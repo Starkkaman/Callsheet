@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.24.3
+
+- **A brief made for listening.** The voice assistant can ask for today's brief as short spoken sentences: times and
+  dates in words, first names, money rounded ("about forty dollars") except a bill's own amount, at most three things
+  named per step then "and four more", and one question when there is something to choose. It has the same steps,
+  filters and counts as the brief on screen (no promotions), and needs no model. The plain brief is unchanged.
+- **Dismiss, snooze and mark done by voice, with Undo.** In Setup › Connections › Voice assistant, a device can be
+  allowed to dismiss, snooze ("until tomorrow morning") and mark done things Today shows. It's off unless you tick
+  "Can dismiss, snooze and mark done" for that device. It uses the same buttons as Today, nothing is ever sent, each
+  change is in Recent changes with the device's name, and the device can undo it for 24 hours (you can always undo
+  it in the app). Words in a message can't trigger it.
+- **Less re-reading for the assistant.** The brief and the ledger tell the assistant when nothing has changed, so it
+  doesn't fetch them again.
+- **Two calendar entries at the same time are a clash.** When two entries on your calendars overlap and both need you
+  (you said yes or haven't answered, it's not free time, not all-day, not optional, and on a shared calendar you're
+  invited), Today shows the clash. Maybe when one is tentative or unanswered. The same event on two calendars isn't a
+  clash. A new one sends a phone alert like other clashes (quiet hours and your alert rules apply) when one of the two
+  entries was added or changed in the last 6 hours and the overlap is still ahead; a first sync of an older calendar
+  never alerts.
+- **The assistant can tell which calendar entries need you.** Calendar rows say whether the entry needs you (yes, no
+  or maybe) and carry the event's calendar id, so one event on two calendars is recognised as one.
+
 ## 0.24.2
 
 - **One clear match, no "which one?".** When you ask Chat to do something to one thing ("Dismiss the PayPal bill") and

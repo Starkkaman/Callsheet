@@ -24,7 +24,7 @@ RECENT = 30              # rows in Setup › Your rules › Recent changes
 CHANGED = "It changed after, so Undo would overwrite that."
 DONE_ALREADY = "That was already undone."
 NO_UNDO = "This can't be undone here."
-VIAS = ("chat", "today", "setup")
+VIAS = ("chat", "today", "setup", "voice")   # 0.24.3 voice: the voice assistant (voiceactions.py)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS action_log (
@@ -208,7 +208,8 @@ class Actions:
     def _do_item_done(self, ids, args, via, ref):
         if self.today is None:
             raise Invalid("Today isn't available just now.")
-        got = self.today.done(ids, note={"chat": "you marked it done in Chat"}.get(via, "you marked it done"))
+        got = self.today.done(ids, note={"chat": "you marked it done in Chat", "voice": "you marked it done by voice"}
+                              .get(via, "you marked it done"))
         return {}, {"items": got["done"]}, got
 
     _do_cleanup_clear = _do_older_clear = _do_item_done

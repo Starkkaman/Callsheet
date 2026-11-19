@@ -3700,7 +3700,7 @@
     ['Clean up', ['cleanup']], ['Digests', ['digest']], ['Brief', ['brief', 'brief_schedule']]];
   var RL_ACT = { done: 'Marked done', snooze: 'Snoozed', remind: 'Reminder', note: 'Note' };
   function rlChange(c) {   /* 0.22.0: one journal row (actions.py): what, where from, when; Undo once (refused when it changed since) */
-    var via = { chat: 'From Chat', today: 'From Today', setup: 'From Setup' }[c.via] || '';
+    var via = c.via === 'voice' ? 'By voice' + (c.ref ? ', ' + c.ref : '') : { chat: 'From Chat', today: 'From Today', setup: 'From Setup' }[c.via] || '';
     return h('div', { class: 'alr' + (c.undone_at ? ' off' : ''), 'data-rlc': String(c.id) }, [
       h('b', null, String(c.label)), c.undone_at ? h('span', { class: 'tag' }, 'Undone') : h('span', { class: 'ag' }, fmtWhen(c.at * 1000, true)),
       h('span', { class: 'sub' }, [via, c.note].filter(Boolean).join(' · ')),
@@ -4208,7 +4208,8 @@
   /* ---------- 0.21.0 Setup › Connections › Voice assistant (GET/PATCH api/voice, POST api/voice/tokens, DELETE
      api/voice/tokens/<id>; voiceapi.py, docs/voice-api.md): the read-only API for the phone voice assistant. Off by
      default. A device token is shown once (text and QR code) and kept only as a hash; revoke any time. ---------- */
-  var VA = { v: null, at: 0, loading: false, err: null, made: null, name: '', scopes: null, hosts: null };
+  var VA = { v: null, at: 0, loading: false, err: null, made: null, name: '', scopes: null, hosts: null, act: false };
+  var VA_ACT = 'Can dismiss, snooze and mark done';   /* 0.24.3 the actions:write scope (owner approved 2026-11-18) */
   var VA_SCOPE = { 'messages:read': 'Messages', 'ledger:read': 'Needs you and coming up', 'calendar:read': 'Calendar',
     'people:read': 'People', 'brief:read': 'Morning brief', 'status:read': 'Sources status' };
   function vaRedraw(fk) {
@@ -4226,7 +4227,7 @@
     if (!VA.loading && (!VA.at || Date.now() - VA.at > 60000) && !VA.made) vaLoad();
     var v = VA.v, head = h('h2', { class: 'h3', id: 'va-h' }, 'Voice assistant');
     /* the one plain line stays whole (class vaplain, not note: notes fold behind "?") */
-    var line = h('p', { class: 'vaplain' }, 'Read-only. Reached over your home network or Tailscale; never put it behind Cloudflare.');
+    var line = h('p', { class: 'vaplain' }, 'Read-only, unless you let a device dismiss, snooze and mark done. Reached over your home network or Tailscale; never put it behind Cloudflare.');
     if (!v) return h('section', { class: 'where vapi', 'aria-labelledby': 'va-h' }, [head, line,
       VA.err ? h('p', { class: 'err', role: 'alert' }, 'Couldn’t load the voice assistant settings (' + VA.err + ').') : h('p', { class: 'muted' }, 'Loading…')]);
     var enabled = v.settings.enabled, err = errBox();
@@ -4249,10 +4250,16 @@
   }
   function vaDevice(t) {
     var key = 'va:' + t.id, err = errBox();
-    var scopes = t.scopes.length === Object.keys(VA_SCOPE).length ? 'Everything, read-only' : t.scopes.map(function (x) { return VA_SCOPE[x] || x; }).join(', ');
+    var reads = t.scopes.filter(function (x) { return VA_SCOPE[x]; }), acts = t.scopes.indexOf('actions:write') >= 0;
+    var scopes = reads.length === Object.keys(VA_SCOPE).length ? (acts ? 'Reads everything' : 'Everything, read-only') : reads.map(function (x) { return VA_SCOPE[x] || x; }).join(', ');
+    var aid = 'va-act-' + t.id;
+    var abox = on(h('input', { type: 'checkbox', id: aid, checked: acts ? true : null, 'data-fk': aid }), 'change', function () {
+      run([abox], err, function () { return api('PATCH', 'api/voice/tokens/' + t.id, { actions: abox.checked }); }, function (r) { VA.v = r; vaRedraw(aid); });
+    });
     return h('li', { class: 'vadev' }, [
       h('div', { class: 'vadev-t' }, [h('b', null, t.name),
         h('span', { class: 'muted' }, scopes + ' · ' + (t.last_used ? 'Last used ' + vaWhen(t.last_used) : 'Not used yet'))]),
+      h('label', { for: aid, class: 'calrow vaact' }, [abox, h('span', null, VA_ACT)]),
       ui.confirm === key ? confirmRow('Revoke “' + t.name + '”? That device stops working at once.', 'Revoke', function (y, c, e) {
         run([y, c], e, function () { return api('DELETE', 'api/voice/tokens/' + t.id); }, function (r) { ui.confirm = null; VA.v = r; vaRedraw('va-add'); });
       }) : askBtn(key, 'Revoke'), err]);
@@ -4269,14 +4276,18 @@
       });
       return h('li', null, h('label', { for: id, class: 'calrow' }, [box, h('span', null, VA_SCOPE[sc] || sc)]));
     }));
+    var act = on(h('input', { type: 'checkbox', id: 'va-act-new', checked: VA.act ? true : null, 'data-fk': 'va-act-new' }), 'change', function () { VA.act = act.checked; });
     var make = btn('btn sm', 'Make a token', { 'data-fk': 'va-add' }, function () {
-      run([make], err, function () { return api('POST', 'api/voice/tokens', { name: VA.name.trim(), scopes: VA.scopes }); }, function (r) {
-        VA.made = r.new; r.new = undefined; VA.v = r; VA.name = ''; VA.scopes = null; vaRedraw('va-done');
+      run([make], err, function () { return api('POST', 'api/voice/tokens', { name: VA.name.trim(), scopes: VA.scopes.concat(VA.act ? ['actions:write'] : []) }); }, function (r) {
+        VA.made = r.new; r.new = undefined; VA.v = r; VA.name = ''; VA.scopes = null; VA.act = false; vaRedraw('va-done');
       });
     });
     return h('div', { class: 'vaadd' }, [
       h('label', { class: 'fl', for: 'va-name' }, 'Add a device'), name,
       h('p', { class: 'fl', id: 'va-sc-h' }, 'It may read'), boxes,
+      h('p', { class: 'fl', id: 'va-act-h' }, 'It may change'),
+      h('label', { for: 'va-act-new', class: 'calrow vaact' }, [act, h('span', null, VA_ACT)]),
+      h('p', { class: 'muted' }, 'Off unless you tick it. In Callsheet only, with Undo, listed in Recent changes; nothing is sent.'),
       h('div', { class: 'btns' }, [make]), err]);
   }
   function vaMade() {

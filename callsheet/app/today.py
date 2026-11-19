@@ -1004,7 +1004,13 @@ class Today:
     def recheck(self):
         """Re-check every clash after a calendar choice or an answer changed what needs him."""
         now, tz = self.clock(), self.tz()
-        return self.ms.write(lambda db: C.sweep(db, now, tz))
+        res = self.ms.write(lambda db: C.sweep(db, now, tz))
+        if self.alerter is not None and res.get("pairs_new"):   # 0.24.3: new calendar-pair clashes alert
+            try:
+                res["alerts"] = self.alerter.notify({"conflicts": {"new": res["pairs_new"]}})
+            except Exception as e:  # noqa: BLE001 (alerts never stop a re-check)
+                self.log(f"Callsheet: alerts failed ({type(e).__name__})")
+        return res
 
     # --- 0.21.4: the clash rule, the banner, Refresh -------------------------------------------------------------
     def _clash_rule(self, rows, now, tz):

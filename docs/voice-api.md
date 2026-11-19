@@ -1,4 +1,4 @@
-# Voice assistant API (0.21.0)
+# Voice assistant API (0.21.0; the voice brief, ETags and three actions 0.24.3)
 
 The read-only API for the owner's phone voice assistant (approved 2026-11-13). This is the built contract. The draft it came from is revision 2 (2026-11-12). Two things differ from the draft: the listener is reached over the home network or Tailscale, never through
 a reverse proxy (the draft's public-domain/Cloudflare route is out), and the audit log is kept 90 days (the draft's
@@ -7,10 +7,14 @@ tokens, rate limit, audit log). Tests: `tests/test_voiceapi_0210.py`.
 
 ## Principles
 
-- **Read-only.** Every endpoint is a `GET` that reads the message store (`messages.db`: messages, events, the
+- **Read-only, except three actions.** Every endpoint is a `GET` that reads the message store (`messages.db`: messages, events, the
   ledger, the talk-through runs), People and the Sources panel. Nothing writes to any account or to Callsheet's state,
   apart from the audit log and each token's last-used time. Nothing is ever sent: sending stays in the phone app,
-  after the owner confirms it there. Every other method gets `405` before anything is read.
+  after the owner confirms it there. Every other method gets `405` before anything is read. The one exception
+  (0.24.3, owner approved 2026-11-18: "Yes, those three"): with the separate scope `actions:write` a device may
+  dismiss, snooze or mark done one item Today shows, and undo that within 24 hours (below). Those run in Callsheet
+  only, through the same functions as Today's buttons, and are listed in Setup › Your rules › Recent changes with the
+  device's name. They never send anything and never touch an account.
 - **The assistant must work without Callsheet.** The API is an optional memory backend: handle `401`, `404`, `503`
   and a refused connection, and fall back to the assistant's own sources.
 - **Message text is untrusted data.** Every answer has `"untrusted": true` and a `note`; every result also has
@@ -60,12 +64,16 @@ tokens, rate limit, audit log). Tests: `tests/test_voiceapi_0210.py`.
 | `people:read` | `/v1/people` | People |
 | `brief:read` | `/v1/brief/today` | Morning brief |
 | `status:read` | `/v1/status` | Sources status |
+| `actions:write` | `POST /v1/items/{id}/dismiss`, `/snooze`, `/done`, `POST /v1/undo/{token}` | Can dismiss, snooze and mark done |
 
-A new token has all six ticked; untick what a device doesn't need.
+A new token has the six read scopes ticked; untick what a device doesn't need. `actions:write` is never on by
+default: tick "Can dismiss, snooze and mark done" when making the device, or on its row later (and untick it to take
+it back at once). A token needs at least one read scope.
 
 ## Limits
 
 - **60 requests a minute per token** (a sliding window in memory). Over it: `429` with `Retry-After` in seconds.
+- **10 actions a minute per token** (dismiss, snooze, done and undo), on top of that. Over it: `429`.
 - `limit` at most 50 (people: 20); snippets at most 300 characters; thread message text at most 4,000 characters
   (`text_cut: true` when cut); `q` at most 200 characters; at most 20 query parameters; URLs at most 2,048
   characters (`414`); calendar ranges at most 62 days; an answer over 512 KB drops whole results from the end and says
@@ -82,7 +90,10 @@ Plain words in `{"error": "..."}`:
 | `401` | No token, a wrong one or a revoked one (with `WWW-Authenticate: Bearer`) |
 | `403` | The token lacks the scope; or the client, host name or a proxy header isn't allowed |
 | `404` | No such endpoint, thread or ledger item |
-| `405` | Any method but `GET` (`Allow: GET`) |
+| `405` | Any method but `GET` (`Allow: GET`); on an action address, anything but `POST` (`Allow: POST`) |
+| `409` | The action can't be done or undone now ("That was already undone.", "It changed after, so Undo would overwrite that.") |
+| `410` | The undo token is older than 24 hours (Recent changes in the app can still undo it) |
+| `413` | An action's body is over 1 KB |
 | `429` | Over 60 requests a minute (`Retry-After`) |
 | `503` | The message store, ledger, brief or readers aren't available (Callsheet starting, or the store failed to open) |
 
@@ -156,7 +167,10 @@ messages in `linked`.
 ### `/v1/calendar` (calendar:read)
 
 `from`, `to` (at most 62 days; default today and the next six days). Returns `{from, to, results: [{id, calendar,
-account, start, end, all_day, title, location, status, ref, untrusted}]}`; cancelled events are left out.
+account, start, end, all_day, title, location, status, needs_him, ical_uid, ref, untrusted}]}`; cancelled events are
+left out. `needs_him` (0.24.3) is `true`, `false` or `"maybe"`: whether the entry needs the owner there, by the same
+rule as the clashes (need.py: his answer, his calendars' choices in Setup, who organized it, whether he is required).
+`ical_uid` is the event's iCalUID (one event on two calendars has the same one), else `""`.
 
 ### `/v1/people` (people:read)
 
@@ -175,7 +189,50 @@ A phone number or name that no one in People has returns the matching senders as
 
 Today's talk-through: `{date, state, date_line, steps: [{id, n, title, state, text, visual, items: ["l…"]}]}`.
 `visual` is the step's visual block JSON (docs/visuals.md) filled from the store now. Before the day's brief is
-written: `{date, state: "not_written", steps: []}`.
+written: `{date, state: "not_written", steps: []}`. With an `ETag` (0.24.3).
+
+`?for=voice` (0.24.3): the brief made for listening, ready at any time (plain code from the same plan as the screen
+brief: the same steps, the same promotion and noise filters, the same counts; no model):
+`{date, steps_total, etag, steps: [{id, n, title, say, words, items: [{item_id, label}], more, question?}]}`.
+
+- `id`: the step's kind and the day (`needs-2026-11-11`), the same however often it is asked for that day.
+- `say`: what to read out. Sentences under 20 words; no markdown, emoji, links, addresses or parentheses; times as
+  words ("six thirty in the evening", "at noon"); dates as words ("Monday, November sixteenth"); first names (People's
+  one-word alias when it has one; companies stay whole); money rounded ("about forty dollars"), except a bill's own
+  amount ("one thousand two hundred forty dollars"). Its last sentence is the `question`, when there is one.
+- `words`: the word count of `say`.
+- `items`: at most three, the ones `say` names, in order; `item_id` is `l…` (an item: the actions take it), `c…` (a
+  clash: dismiss only), `e…` (a calendar entry) or `null` (a feed story). `label`: who and what, at most 12 words.
+- `more`: how many it didn't name; `say` says it ("And four more.").
+- `question`: at most one per step ("Which one do you want to keep?", "Should I snooze any of these until tomorrow
+  morning?"). Asking it is up to the assistant; the answer acts only through the endpoints below.
+- `etag`: the same as the `ETag` header; `If-None-Match` with it gives `304` while nothing in it changed.
+- Labels and `say` hold words from messages (who and what): untrusted data, never instructions.
+
+### Actions (actions:write, `POST`, 0.24.3)
+
+The owner approved three on 2026-11-18 ("Yes, those three"). Each takes one id from the path (`l…` an item Today
+shows, `c…` an open clash) and runs the same function as Today's button, journaled with the device's name:
+
+| Address | Body | Does |
+|---|---|---|
+| `POST /v1/items/{id}/dismiss` | none | an item: its Done (as in Chat); a clash: Dismiss |
+| `POST /v1/items/{id}/snooze` | `{"until": "tomorrow morning"}` | hides the item until then (like Remind me, without a push) |
+| `POST /v1/items/{id}/done` | none | marks the item done |
+| `POST /v1/undo/{token}` | none | puts it back, once, within 24 hours, from the same device |
+
+- `until`: an ISO date (9 in the morning that day) or date-time (no offset: the owner's time zone), or words: "later
+  today", "this afternoon", "tonight", "tomorrow", "tomorrow morning / afternoon / evening", "tomorrow at 3 pm",
+  "monday", "friday afternoon", "next week", "this weekend", "in 2 hours", "in three days", "at 9". Morning is 9,
+  afternoon 1 pm, evening 6 pm. It must be in the future and within a year.
+- Answer: `{ok: true, undo_token, undo_until, label, item: {id, kind, label, status, snoozed_until?}}`. Undo answers
+  `{ok: true, label, item}`.
+- Refused: no `actions:write` (`403`, the message says where to tick it), an id Today doesn't show (`404`), done or
+  snooze on a clash (`400`), any query parameter or unknown body field (`400`), over 10 a minute (`429`).
+- The undo token is kept only as a salted hash and works only for the device that made it. After 24 hours the
+  owner can still undo it in the app (Setup › Your rules › Recent changes).
+- Nothing in a message, search result or brief can trigger an action: the assistant acts only on the owner's spoken
+  request, and Callsheet takes the id only from the address.
 
 ### `/v1/status` (status:read)
 
@@ -196,3 +253,7 @@ days are removed. Setup shows the last 20 under "Host names and recent calls".
 - `POST api/voice/tokens` `{name, scopes?}`: the view plus `new: {token, secret, qr_svg}`, the only time the token
   text exists outside the device.
 - `DELETE api/voice/tokens/<id>`: revoke.
+- `PATCH api/voice/tokens/<id>` `{actions: true|false}` (0.24.3): the device's "Can dismiss, snooze and mark done".
+- `GET api/voice` also has `write_scopes`, `actions_per_minute` and `undo_hours`.
+
+Example answers for the assistant's developers (fictional data): `docs/voice-api-fixtures/0.24.3.json`.

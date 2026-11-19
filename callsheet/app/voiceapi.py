@@ -24,8 +24,11 @@ import unicodedata
 import urllib.parse
 
 import apitokens
+import need as need_mod
 import people as people_mod
 import qr
+import voiceactions
+import voicebrief
 from store import InputError, NotFound
 
 API_VERSION = "v1"
@@ -368,7 +371,19 @@ class Reader:
                              "ts < ? AND deleted_at IS NULL LIMIT 1", (r["source"], r["account"], r["thread"], r["ts"]))
         return bool(mine)                            # a reply in a thread the owner wrote in
 
-    def _event(self, e):
+    def _event(self, e, need=None):
+        """A calendar row. need: need.Need over the store (0.24.3: needs_him, from the same rule as the clashes)."""
+        out = self._event_row(e)
+        if need is not None:
+            try:
+                n = need.event(e)["need"]
+            except Exception:  # noqa: BLE001 (a row that can't be judged is a maybe)
+                n = need_mod.MAYBE
+            out["needs_him"] = True if n == need_mod.YES else False if n == need_mod.NO else "maybe"
+            out["ical_uid"] = e["ical_uid"] if "ical_uid" in e.keys() else ""
+        return out
+
+    def _event_row(self, e):
         return {"id": f"e{e['id']}", "calendar": e["calendar"], "account": e["account"], "start": e["start"],
                 "end": e["end"], "all_day": bool(e["all_day"]), "title": _cut(e["title"], 300),
                 "location": _cut(e["location"], 300), "status": e["status"],
@@ -576,7 +591,8 @@ class Reader:
         if to - frm > CAL_MAX_DAYS * 86400 + 3600:
             raise _bad(f"Ask for at most {CAL_MAX_DAYS} days at a time.")
         rows = self.ms.events(frm, to)[:500]
-        out = [self._event(e) for e in rows]
+        need = need_mod.Need(need_mod.ReadOnly(self.ms))
+        out = [self._event(e, need) for e in rows]
         return {"from": self.iso(frm), "to": self.iso(to), "results": out}, len(out)
 
     # /v1/people -------------------------------------------------------------------------------------------------------------
@@ -700,8 +716,13 @@ class Reader:
         return {"id": x["id"], "name": x["name"], "vip": bool(x.get("vip")), "channels": chans[:12], "untrusted": True}
 
     # /v1/brief/today ------------------------------------------------------------------------------------------------------
-    def brief(self, _p):
+    def brief(self, p):
         b = self._need("brief2", "morning brief")
+        form = p.get("for") or ""
+        if form not in ("", "voice"):
+            raise _bad("for should be voice, or left out.")
+        if form == "voice":
+            return self.voice_brief(b)
         today = dt.datetime.fromtimestamp(self.clock(), self.tz()).date().isoformat()
         run = (b.view() or {}).get("run")
         if not run or run.get("day") != today:
@@ -713,6 +734,16 @@ class Reader:
                  for s in run.get("steps") or []]
         return {"date": run["day"], "state": run.get("state"), "date_line": run.get("date_line"), "steps": steps,
                 "untrusted": True}, len(steps)
+
+    def voice_brief(self, b):
+        """0.24.3: the brief for listening (voicebrief.py), from the screen brief's own plan: same steps, same filters,
+        same counts. Plain code, no model; reads only."""
+        try:
+            plan = b.planner.plan(self.clock(), call="voice")
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(503, "Callsheet couldn't put the brief together right now. Try again later.") from e
+        out = voicebrief.VoiceBrief(voicebrief.Names(self.directory())).build(plan)
+        return out, out["steps_total"]
 
     # /v1/status --------------------------------------------------------------------------------------------------------------
     def status(self, _p):
@@ -740,14 +771,31 @@ ROUTES = (  # (path pattern, endpoint template for the audit log, scope, Reader 
     (r"/v1/ledger/([lc]\d{1,12})", "/v1/ledger/{id}", "ledger:read", "ledger_one", False),
     (r"/v1/calendar", "/v1/calendar", "calendar:read", "calendar", False),
     (r"/v1/people", "/v1/people", "people:read", "people", False),
-    (r"/v1/brief/today", "/v1/brief/today", "brief:read", "brief", False),
+    (r"/v1/brief/today", "/v1/brief/today", "brief:read", "brief", True),
     (r"/v1/status", "/v1/status", "status:read", "status", False),
 )
 PARAMS = {"search_messages": {"q", "unanswered", "updated_since", "source", "person", "direction", "since", "until",
                               "limit"},
           "thread": {"limit", "before"},
           "ledger": {"kind", "updated_since", "since", "until", "person", "limit"},
-          "ledger_one": set(), "calendar": {"from", "to"}, "people": {"q", "limit"}, "brief": set(), "status": set()}
+          "ledger_one": set(), "calendar": {"from", "to"}, "people": {"q", "limit"}, "brief": {"for"}, "status": set()}
+# 0.24.3 (owner approved 2026-11-18, "Yes, those three"): the only writes, POST only, scope actions:write
+# (voiceactions.py: the same functions as Today's buttons, journaled, with Undo; nothing is sent)
+ACTION_ROUTES = (  # (path pattern, endpoint template for the audit log, kind)
+    (r"/v1/items/([lc]\d{1,12})/(dismiss)", "/v1/items/{id}/dismiss", "item"),
+    (r"/v1/items/([lc]\d{1,12})/(snooze)", "/v1/items/{id}/snooze", "item"),
+    (r"/v1/items/([lc]\d{1,12})/(done)", "/v1/items/{id}/done", "item"),
+    (r"/v1/undo/(u[A-Za-z0-9_\-]{20,64})", "/v1/undo/{token}", "undo"),
+)
+WRITE_SCOPE = "actions:write"
+
+
+def action_route(target):
+    """(route, match) when the address is one of the three actions or an undo, else None."""
+    if len(str(target or "")) > MAX_URL:
+        return None
+    path = urllib.parse.urlsplit(str(target)).path.rstrip("/") or "/"
+    return next(((r, m) for r in ACTION_ROUTES for m in [re.fullmatch(r[0], path)] if m), None)
 
 
 class Voice:
@@ -758,6 +806,7 @@ class Voice:
         self.app, self.clock = app, clock
         self.tokens = apitokens.Tokens(app.store, clock=clock)
         self.reader = Reader(app, clock=clock)
+        self.acts = voiceactions.VoiceActions(app, self.tokens, clock)
         self.host, self.port = "0.0.0.0", apitokens.DEFAULT_PORT
         self.attached = False
         self.httpd = None
@@ -798,10 +847,14 @@ class Voice:
         return self.httpd.server_address[1] if self.httpd is not None else None
 
     # one request ---------------------------------------------------------------------------------------------------------
-    def serve(self, method, target, headers, client):
-        """-> (status, extra headers, JSON-able body or None). Everything but GET is refused before anything else."""
+    def serve(self, method, target, headers, client, body=b""):
+        """-> (status, extra headers, JSON-able body or None). Everything but GET is refused before anything else,
+        except POST on the three actions and undo (0.24.3). body: the POST's bytes (False: too big)."""
         tok, endpoint = None, "-"
-        if method != "GET":
+        act = action_route(target)
+        if act is not None and method != "POST":
+            return 405, {"Allow": "POST"}, {"error": "This address only takes POST."}
+        if act is None and method != "GET":
             return 405, {"Allow": "GET"}, {"error": "This API only reads: use GET."}
         try:
             if not apitokens.client_allowed(client):
@@ -814,6 +867,9 @@ class Voice:
             if len(target) > MAX_URL:
                 raise ApiError(414, "That address is too long.")
             parts = urllib.parse.urlsplit(target)
+            if act is not None:
+                endpoint = act[0][1]
+                return self._act(act, parts, headers, body)
             route = next(((r, m) for r in ROUTES for m in [re.fullmatch(r[0], parts.path.rstrip("/") or "/")] if m),
                           None)
             endpoint = route[0][1] if route else "unknown"
@@ -843,7 +899,8 @@ class Voice:
             body = self._fit(data)
             extra = {}
             if with_etag:
-                tag = etag_of(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+                tag = data["etag"] if isinstance(data.get("etag"), str) else \
+                    etag_of(json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8"))
                 extra["ETag"] = tag
                 if etag_matches(headers.get("If-None-Match"), tag):
                     self.tokens.audit(tok, endpoint, 304, 0)
@@ -859,6 +916,43 @@ class Voice:
             return st, {}, {"error": str(e)}
         except Exception:  # noqa: BLE001
             # The traceback has no local values and never holds the token or query text.
+            sys.stderr.write("Callsheet voice API: " + type(sys.exc_info()[1]).__name__ + " in " + endpoint + "\n")
+            self._audit_safe(tok, endpoint, 500)
+            return 500, {}, {"error": "Something went wrong inside Callsheet. Check the app log."}
+
+    def _act(self, act, parts, headers, body):
+        """0.24.3: one action or undo, after the same client, proxy and host checks as a read."""
+        (_pat, endpoint, kind), match = act
+        tok = None
+        try:
+            tok = self.tokens.check(headers.get("Authorization"))
+            if tok is None:
+                raise ApiError(401, "Missing, wrong or revoked token. Make one in Callsheet Setup → Connections → "
+                                    "Voice assistant.", {"WWW-Authenticate": 'Bearer realm="callsheet"'})
+            wait = self.tokens.rate.take(tok["id"])
+            if wait is not True:
+                raise ApiError(429, f"Too many requests: at most {apitokens.RATE_N} a minute. Try again in {wait} "
+                                    "seconds.", {"Retry-After": str(wait)})
+            if WRITE_SCOPE not in tok["scopes"]:
+                raise ApiError(403, "This device can only read. To let it dismiss, snooze and mark done, tick “Can "
+                                    "dismiss, snooze and mark done” for it in Setup → Connections → Voice assistant.")
+            if parts.query:
+                raise _bad("Actions take no parameters in the address.")
+            if body is False:
+                raise ApiError(413, "That request is too big.")
+            if kind == "undo":
+                data = self.acts.undo(tok, match.group(1), body or b"")
+            else:
+                data = self.acts.act(tok, match.group(1), match.group(2), body or b"")
+            self.tokens.audit(tok, endpoint, 200, 1)
+            return 200, {}, dict(data, untrusted=True, note=NOTE)
+        except voiceactions.Refused as e:
+            self._audit_safe(tok, endpoint, e.status)
+            return e.status, {}, {"error": e.message}
+        except ApiError as e:
+            self._audit_safe(tok, endpoint, e.status)
+            return e.status, e.headers, {"error": e.message}
+        except Exception:  # noqa: BLE001
             sys.stderr.write("Callsheet voice API: " + type(sys.exc_info()[1]).__name__ + " in " + endpoint + "\n")
             self._audit_safe(tok, endpoint, 500)
             return 500, {}, {"error": "Something went wrong inside Callsheet. Check the app log."}
@@ -886,13 +980,16 @@ class Voice:
         return [("GET", r"voice", self.view),
                 ("PATCH", r"voice", self.patch),
                 ("POST", r"voice/tokens", self.add_token),
-                ("DELETE", r"voice/tokens/(vt_[0-9a-f]{12})", self.revoke_token)]
+                ("DELETE", r"voice/tokens/(vt_[0-9a-f]{12})", self.revoke_token),
+                ("PATCH", r"voice/tokens/(vt_[0-9a-f]{12})", self.patch_token)]   # 0.24.3 {actions: bool}
 
     def view(self, _body=None):
         s = self.tokens.settings()
         return {"settings": s, "port": self.port, "running": self.httpd is not None, "error": self.error,
                 "tokens": self.tokens.list(), "scopes": list(apitokens.SCOPES), "audit": self.tokens.audit_rows(),
-                "rate_per_minute": apitokens.RATE_N, "audit_days": apitokens.AUDIT_DAYS}
+                "rate_per_minute": apitokens.RATE_N, "audit_days": apitokens.AUDIT_DAYS,
+                "write_scopes": list(apitokens.WRITE_SCOPES), "actions_per_minute": voiceactions.ACT_N,
+                "undo_hours": voiceactions.UNDO_S // 3600}
 
     def patch(self, body):
         try:
@@ -913,6 +1010,17 @@ class Voice:
         out = self.view()
         out["new"] = {"token": row, "secret": token, "qr_svg": qr.svg(token)}
         return out
+
+    def patch_token(self, body, tid):
+        """0.24.3: Setup's per-device checkbox "Can dismiss, snooze and mark done" (the actions:write scope)."""
+        b = body if isinstance(body, dict) else {}
+        if set(b) != {"actions"} or not isinstance(b["actions"], bool):
+            raise InputError("Only “Can dismiss, snooze and mark done” can be changed here (on or off).")
+        try:
+            self.tokens.set_actions(tid, b["actions"])
+        except LookupError as e:
+            raise NotFound(str(e)) from None
+        return self.view()
 
     def revoke_token(self, _body, tid):
         try:
@@ -942,7 +1050,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _go(self):
         if self.command != "GET":
             self.close_connection = True
-        status, extra, body = self.voice.serve(self.command, self.path, self.headers, self.client_address[0])
+        sent = b""
+        if self.command == "POST" and action_route(self.path) is not None:   # 0.24.3: only an action's body is read
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = -1
+            sent = self.rfile.read(n) if 0 <= n <= voiceactions.BODY_MAX else False
+        status, extra, body = self.voice.serve(self.command, self.path, self.headers, self.client_address[0], sent)
         raw = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else b""
         self.send_response(status)
         for k, v in extra.items():

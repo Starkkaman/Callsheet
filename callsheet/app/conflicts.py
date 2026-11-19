@@ -1133,6 +1133,9 @@ def sweep(db, now, tz):
         elif left != ids:
             db.execute("UPDATE ledger_conflicts SET entries=?, b_ref=?, updated_at=? WHERE id=?",
                        (json.dumps(left), left[0], now, c["id"]))
+    pairs, rs = calendar_pairs(db, now, tz)      # 0.24.3: two calendar entries, no ledger item behind either
+    new += pairs
+    resolved += rs
     # 0.22.0 (FUP-04): a stale calendar entry's follow-up clears when the entry moves to the item's time or goes
     cleared = []
     for f in db.execute("SELECT * FROM ledger_followups WHERE state='open' AND event IS NOT NULL").fetchall():
@@ -1148,7 +1151,119 @@ def sweep(db, now, tz):
     chase = _chase_followups(db, [r["id"] for r in db.execute(
         "SELECT id FROM ledger_items WHERE merged_into IS NULL AND type='ask' AND subtype='receivable' AND status NOT IN "
         "('declined','done','cancelled')").fetchall()], None, now, tz)
-    return {"new": new, "resolved": resolved, "followups": chase, "cleared": cleared}
+    # 0.24.3 (the owner, 2026-11-17): new calendar-pair clashes go to Alerter.notify ("pairs_new"); the clashes the
+    # sweep makes for ledger items still never alert (their message's reading did)
+    return {"new": new, "resolved": resolved, "followups": chase, "cleared": cleared, "pairs_new": pairs}
+
+
+# --- 0.24.3: two calendar entries with no ledger item behind either ---------------------------------------------------
+CAL_PAIR_DAYS = 120           # how far ahead each sweep compares calendar entries with each other
+CAL_WHY = "calendar: {a} overlaps calendar: {b}"
+
+
+def _personal(need, e):
+    """He is personally on this entry: one of his own calendars, or (on a shared or group calendar) one of his
+    addresses is among its attendees, or he organized or made it."""
+    if need.own_calendar(e):
+        return True
+    mine = need.owners()
+    if str(e["organizer"] if "organizer" in e.keys() else "").lower() in mine or \
+            str(e["creator"] if "creator" in e.keys() else "").lower() in mine:
+        return True
+    return any(str(a.get("address") or "").lower() in mine for a in N.attendees(e))
+
+
+def calendar_need(need, e):
+    """0.24.3 (the 0.23 rule: a clash needs both sides to need him): YES or MAYBE for a calendar entry that may clash
+    with another entry, else None. Out: cancelled, all-day, free (transparent), declined, optional, FYI or hidden
+    entries, and shared or group calendar entries he isn't personally invited to. MAYBE: tentative (the entry's or
+    his), or he is required and hasn't answered."""
+    if e["status"] == "cancelled" or e["all_day"] or e["start_ts"] is None or _free(e):
+        return None
+    if not _personal(need, e) or need.group_invite(e):
+        return None
+    me = need.me_of(e)
+    resp = str((me or {}).get("response") or "")
+    if me is not None and (me.get("optional") or resp == "declined"):
+        return None
+    en = need.event(e)
+    if en["hide"] or en["need"] == N.NO:
+        return None
+    if tentative(e) or en["need"] == N.MAYBE:
+        return N.MAYBE
+    if me is not None and resp in ("", "needsAction") and not me.get("organizer"):
+        return N.MAYBE
+    return N.YES
+
+
+def _same_entry(a, b):
+    """One event on two calendars (the same iCalUID), or the very same entry copied (title and times)."""
+    ua, ub = (a["ical_uid"] or "").strip(), (b["ical_uid"] or "").strip()
+    if ua and ua == ub:
+        return True
+    return (a["title"] or "").strip().lower() == (b["title"] or "").strip().lower() and \
+        a["start_ts"] == b["start_ts"] and a["end_ts"] == b["end_ts"]
+
+
+def calendar_pairs(db, now, tz):
+    """0.24.3: overlaps between two calendar entries where neither has a ledger item behind it (those are checked
+    with their item, check_item). Both must need him (calendar_need); the overlap must end after now - 30 min. Made
+    and closed by the sweep, like other calendar changes. A new one alerts (sweep's "pairs_new", Alerter.notify) only
+    while its overlap is ahead and when one of its entries was created or changed in Google in the last 6 h
+    (Alerter._timely): a first sync or a re-run over an old calendar never alerts. -> (new, resolved)."""
+    need = N.Need(db)
+    behind = {r["cal_ref"] for r in db.execute(
+        "SELECT cal_ref FROM ledger_items WHERE cal_ref IS NOT NULL AND merged_into IS NULL AND "
+        "status NOT IN ('declined','done','cancelled')")}
+    lo, hi = now - PAST_GRACE_S, now + CAL_PAIR_DAYS * 86400
+    evs = []
+    for e in db.execute("SELECT * FROM events WHERE start_ts IS NOT NULL AND start_ts < ? AND coalesce(end_ts, "
+                        "start_ts) > ? AND all_day=0 AND status != 'cancelled' ORDER BY start_ts, id", (hi, lo)):
+        if e["id"] in behind:
+            continue
+        n = calendar_need(need, e)
+        if n is not None:
+            evs.append((event_span(e), e, n))
+    new, keep = [], set()
+    for i, ((s1, e1), a, na) in enumerate(evs):
+        for (s2, e2), b, nb in evs[i + 1:]:
+            if s2 >= e1:
+                break
+            if not (s1 < e2 and s2 < e1) or _same_entry(a, b):
+                continue
+            slot = (max(s1, s2), min(e1, e2))
+            if is_past(slot[1], now):
+                continue
+            x, y = (a, b) if a["id"] < b["id"] else (b, a)
+            verdict = N.verdict(na, nb)
+            conf = "sure" if na == N.YES and nb == N.YES else "likely"
+            old = _pair(db, "event", x["id"], "event", y["id"])
+            if old is not None:
+                db.execute("UPDATE ledger_conflicts SET slot_start=?, slot_end=?, confidence=?, verdict=?, updated_at=? "
+                           "WHERE id=?", (slot[0], slot[1], conf, verdict, now, old["id"]))
+                keep.add(old["id"])
+            elif not _kept_dismissed(db, "event", x["id"], "event", y["id"], slot):
+                cur = db.execute(
+                    "INSERT INTO ledger_conflicts (a_kind, a_ref, b_kind, b_ref, slot_start, slot_end, kind, confidence, "
+                    "why, state, created_at, updated_at, verdict) VALUES ('event',?,'event',?,?,?,'overlap',?,?,'open',?,?,?)",
+                    (x["id"], y["id"], slot[0], slot[1], conf,
+                     CAL_WHY.format(a=x["title"] or "an entry", b=y["title"] or "an entry")[:300], now, now, verdict))
+                new.append(cur.lastrowid)
+                keep.add(cur.lastrowid)
+    resolved = []
+    for c in db.execute("SELECT * FROM ledger_conflicts WHERE state='open' AND a_kind='event' AND b_kind='event' AND "
+                        "entries=''").fetchall():
+        if c["id"] in keep:
+            continue
+        end = c["slot_end"] if c["slot_end"] is not None else c["slot_start"]
+        if is_past(end, now):
+            _resolve(db, c["id"], PAST_WHY, now)
+        else:
+            gone = [r for r in db.execute("SELECT status FROM events WHERE id IN (?,?)", (c["a_ref"], c["b_ref"]))
+                    if r["status"] == "cancelled"]
+            _resolve(db, c["id"], "event cancelled" if gone else "no longer a clash", now)
+        resolved.append(c["id"])
+    return new, resolved
 
 
 # --- alerts ------------------------------------------------------------------------------------------------------------
@@ -1161,6 +1276,18 @@ def alerts_for(c):
 SECURITY_FRESH_S = 3600       # 0.21.0: a phone alert only for a security alert this new (the "urgent" setting)
 SOURCE_WORD = {"gmail": "email", "signal": "Signal", "slack": "Slack", "sms": "text", "sms_live": "text",
                "calendar": "calendar", "reports": "report"}
+
+
+def _google_ts(s):
+    """Google's RFC 3339 `updated` ("2026-11-17T18:04:05.123Z") -> epoch seconds, or None."""
+    s = str(s or "").strip()
+    if not s:
+        return None
+    try:
+        d = dt.datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith(("Z", "z")) else s)
+    except ValueError:
+        return None
+    return (d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)).timestamp()
 
 
 def _until(seconds):
@@ -1324,6 +1451,11 @@ class Alerter:
         if fresh and c.get("message") is not None:
             r = self.ms._read("SELECT ts FROM messages WHERE id=?", (c["message"],))  # noqa: SLF001
             if not r or r[0]["ts"] is None or r[0]["ts"] < now - CLASH_FRESH_S:
+                return False
+        elif fresh and c.get("a_kind") == "event" and c.get("b_kind") == "event" and not c.get("entries"):
+            # 0.24.3: a calendar-pair clash: one of its two entries is this new in Google (created or changed)
+            rows = self.ms._read("SELECT updated FROM events WHERE id IN (?,?)", (c["a_ref"], c["b_ref"]))  # noqa: SLF001
+            if not any((t := _google_ts(r["updated"])) is not None and t >= now - CLASH_FRESH_S for r in rows):
                 return False
         return True
 

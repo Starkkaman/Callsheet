@@ -1678,8 +1678,10 @@ class Runner:
         if self.alerter and now - self.last_sweep >= SWEEP_S:
             self.last_sweep = now
             tz = L.zone(self.ex.tz_name())
-            self.ex.ms.write(lambda db: C.sweep(db, now, tz))
+            swept = self.ex.ms.write(lambda db: C.sweep(db, now, tz))
             try:
+                if swept and swept.get("pairs_new"):   # 0.24.3: new calendar-pair clashes alert like the others
+                    self.alerter.notify({"conflicts": {"new": swept["pairs_new"]}})
                 self.alerter.flush()
             except Exception as e:  # noqa: BLE001 (alerts never stop the reading)
                 self.log(f"Callsheet ledger: alerts failed ({type(e).__name__})")
