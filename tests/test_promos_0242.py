@@ -105,7 +105,7 @@ class TestNewsletter(unittest.TestCase):
                                       "amount": "$120.00"}, inv))
         ticket = mail("support@" + SAAS, "Re: ticket #889 screen sync", "Can you send us the player log?")
         self.assertIsNone(self.judge(ask("send the player log"), ticket))
-        ana = mail("ana@" + SAAS, "Introducing our new account manager", "Hi Isaac, can we meet Tuesday?")
+        ana = mail("ana@" + SAAS, "Introducing our new account manager", "Hi Jordan, can we meet Tuesday?")
         self.assertTrue(known().protects(ana))                               # a person there: his domain
         self.assertIsNone(self.judge(ask("meet the account manager"), ana))
 
