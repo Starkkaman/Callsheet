@@ -35,7 +35,7 @@ AGE_S = AGE_DAYS * 86400
 CLASH_PER_ITEM = 3
 HEAD = 600                    # promo cues count in the subject and this much of the text
 BANNER_KEY = "tidy_banner_0214"
-BANNER_REV = "0240"   # bump to offer Tidy up once more after an update (0.24.0: sender history)
+BANNER_REV = "0242"   # bump to offer Tidy up once more after an update (0.24.2: brand and list addresses)
 
 # ---- rule 1: promo mail without headers -------------------------------------------------------------------------------
 # Mailing services' sending domains (a list sender, whatever the brand) and the marketing subdomains brands send from.
@@ -50,7 +50,14 @@ MARKETING_SUB = re.compile(r"^(?:e|em|email|emails|mail|mailer|mailing|news|news
                            r"rewards?|updates?|community|learn|events?)\d*\.", re.I)
 LIST_LOCAL = re.compile(r"^(?:news(?:letters?)?|offers?|deals?|promos?|promotions?|marketing|sales|shop|store|rewards?|"
                         r"members?|membership|subscriptions?|donate|donations?|fundraising|campaigns?|community|"
-                        r"events?|hello|hi|team|info|contact|updates?|email|mail|digest|specials?)\d*$", re.I)
+                        r"events?|hello|hi|team|info|contact|updates?|email|mail|digest|specials?|"
+                        # 0.24.2 (a SaaS newsletter's reply@, webinars@ …)
+                        r"reply|webinars?|academy|blog|insiders?|product-?(?:news|updates?)?)\d*$", re.I)
+# 0.24.2: local parts that are a list whoever the address is filed under (a confirmed People row, a domain he writes
+# to): never a person or a desk he deals with (not info@, team@, hello@, support@ or billing@)
+LIST_ONLY_LOCAL = re.compile(r"^(?:news(?:letters?)?|offers?|deals?|promos?|promotions?|marketing|rewards?|digest|"
+                             r"specials?|fundraising|campaigns?|community|reply|webinars?|academy|blog|insiders?|"
+                             r"product-?(?:news|updates?))\d*$", re.I)
 UNSUBSCRIBE = re.compile(r"\bunsubscrib\w*|\bopt[- ]out\b|manage (?:your )?(?:email |subscription |communication )?"
                          r"(?:preferences|settings|subscriptions?)|update your (?:email )?preferences|"
                          r"view (?:this email |it )?(?:in|on) (?:your |a )?(?:web )?browser|no longer (?:wish|want) to "
@@ -76,7 +83,20 @@ PROMO_CUE = re.compile(
     r"\bshop (?:the|our|all)\b|\bnew (?:collection|styles|season)\b|\bjust (?:dropped|landed|launched)\b|"
     r"\b(?:top|our) picks\b|\bpicked for you\b|\brecommended for you\b|\byou(?:'ll| will| might) (?:also )?(?:love|like)\b|"
     r"\b(?:try|upgrade to) (?:premium|pro|plus)\b|\bsave (?:big|more|now|\$\d)|\bdeals? (?:end|ends|inside)\b|"
-    r"\b(?:weekly|daily|monthly) (?:digest|roundup|picks|deals)\b|\bsneak peek\b|\bwhat'?s new\b", re.I)
+    r"\b(?:weekly|daily|monthly) (?:digest|roundup|picks|deals)\b|\bsneak peek\b|\bwhat'?s new\b|"
+    # 0.24.2 (leftovers: a pet-supplies retailer, a software company's newsletter)
+    r"\b(?:auto-?ship|auto-?delivery|repeat delivery|bundle|stock up) (?:and|&) save\b|\bstock up\b|"
+    r"\b(?:new|hot|best|top|today'?s|weekly|daily) deals\b|\bdeals on\b|\bbest ?sellers?\b|\btreat (?:yourself|them)\b|"
+    r"\bwebinars\b|\bsave (?:your|my) (?:seat|spot)\b|\breserve your (?:seat|spot)\b|\blive demo\b", re.I)
+# 0.24.2: a software company's newsletter words. They also fit a colleague's or a code host's own notice ("Add new
+# feature X"), so they count only with a list signal beyond a no-reply address (a list-style or brand address, the
+# bulk flag, a tab, unsubscribe text), in the subject or the start of the text
+PROMO_LIST_CUE = re.compile(
+    r"\bproduct (?:news|updates?|tour)\b|\bnew features?\b|\bfeature (?:update|release|spotlight)s?\b|"
+    r"\bintroducing\b|\bon-demand\b|\bcase stud(?:y|ies)\b|\b(?:customer|success) stor(?:y|ies)\b|\be-?book\b|"
+    r"\bwhite ?paper\b|\btips (?:and|&) tricks\b|\b\d+ (?:tips|ways|ideas) (?:to|for)\b|\b(?:month|year) in review\b|"
+    r"\b(?:monthly|quarterly) (?:update|newsletter|recap)\b|\bcommunity (?:update|digest|spotlight|newsletter)\b|"
+    r"\bmasterclass\b|\bjoin us (?:for|live|on)\b", re.I)
 TRANSACTIONAL = re.compile(
     r"\b(?:receipt|your order|order (?:#|no\.?|number|confirm\w*|status)|has shipped|shipped|out for delivery|"
     r"delivered|tracking (?:number|#)|statement (?:is )?(?:ready|available)|e-?statement|amount due|balance due|"
@@ -97,7 +117,8 @@ DUE_CUE = re.compile(r"\b(?:amount due|balance due|total due|minimum (?:payment 
                      r"due (?:on|by|date)|"
                      r"pay by|past[- ]due|overdue|statement|invoice|bill is ready|new bill|your bill|autopay|auto-pay|"
                      r"renew(?:al|s)? on|will renew|charged on|amount owed|you owe|balance of|premium|rent (?:is )?due|"
-                     r"make a payment|pay (?:your|now|online)|payment (?:is )?(?:due|scheduled|processed|posted))\b", re.I)
+                     r"make a payment|pay (?:your|now|online)|payment (?:is )?(?:due|scheduled|processed|posted)|"
+                     r"(?:will|you'?ll|you will) be charged|we'?ll charge|we will charge)\b", re.I)   # 0.24.2: a charge
 BILLING_SENDER = re.compile(r"(?:^|[._+-])(?:bill|billing|bills|ebill|statements?|invoices?|invoice|payments?|pay|"
                             r"accounts?|account-?services|customer-?service|service|alerts?|notify|notifications?|"
                             r"no-?reply|do-?not-?reply|receivables?|ar|finance|collections?|autopay)(?:$|[._+-])", re.I)
@@ -113,7 +134,17 @@ SURVEY = re.compile(r"\b(?:survey|questionnaire|how did we do|how was your (?:ex
                     r"appointment|delivery|support)|rate (?:your|us|our)|review (?:your (?:recent )?(?:purchase|order|"
                     r"visit|stay|experience)|us)|leave (?:us )?a review|tell us (?:what you think|how we did|about your)|"
                     r"share your (?:feedback|thoughts|experience)|(?:we(?:'d| would) love|we value) your (?:feedback|"
-                    r"opinion)|your (?:feedback|opinion) (?:matters|counts))\b", re.I)
+                    r"opinion)|your (?:feedback|opinion) (?:matters|counts)|"
+                    # 0.24.2 (a retailer's "how is your pup liking …?", "write a review")
+                    r"(?:write|leave|share|post) (?:a|your) (?:quick )?review|"
+                    r"(?:rate|review) (?:your|the|this|these) (?:recent )?(?:purchases?|orders?|products?|items?)|"
+                    r"how (?:are|is) (?:you|your \w+|they|it) (?:liking|enjoying|loving)|"
+                    r"(?:liking|enjoying|loving) your (?:recent |new )?(?:purchase|order|products?|items?))\b", re.I)
+# 0.24.2: a survey's subject may name the order it asks about ("Rate your order #123"); only these keep it out
+SURVEY_GUARD = re.compile(r"password|verification|sign[- ]?in|security|amount due|balance due|minimum (?:payment )?due|"
+                          r"payment (?:due|failed|declined)|invoice|autopay|auto-pay|past[- ]due|overdue|itinerary|"
+                          r"check-in|reservation|confirmation (?:#|number|code)|has shipped|out for delivery|"
+                          r"tracking (?:number|#)", re.I)
 
 
 def _labels(row):
@@ -136,6 +167,27 @@ def domain_of(addr):
     return addr.rsplit("@", 1)[1] if "@" in addr else ""
 
 
+def brand_sender(addr):
+    """0.24.2 (a pet-supplies retailer's brand@paws.brand.com): the brand's own name as the local part, sent from a
+    subdomain of the brand's domain. Shops' mailing tools send that way; a person, an order desk or a billing
+    address doesn't."""
+    a = str(addr or "").lower()
+    if "@" not in a:
+        return False
+    local, dom = a.split("@", 1)
+    labels = [x for x in dom.split(".") if x]
+    if len(labels) < 3:
+        return False
+    n = 3 if labels[-2] in people._SECOND and len(labels) >= 4 else 2   # noqa: SLF001 (co.uk and the like)
+    if len(labels) <= n:
+        return False
+    brand = labels[-n]
+
+    def flat(x):
+        return re.sub(r"[^a-z0-9]", "", x)
+    return len(flat(brand)) >= 3 and flat(local) == flat(brand)
+
+
 def list_signals(row):
     """The list or machine signals of one stored mail that work without headers: the stored bulk flag and Gmail tab
     (live mail), an automated or role local part, a mailing-service or marketing subdomain, a list-style local part,
@@ -154,6 +206,8 @@ def list_signals(row):
         out.append("role sender")
     if dom and (ESP_DOMAINS.search(dom) or MARKETING_SUB.match(dom)):
         out.append("mailing-service sender")
+    elif brand_sender(a):
+        out.append("brand list sender")
     if UNSUBSCRIBE.search(str(row.get("text") or "")):
         out.append("unsubscribe text")
     return out
@@ -197,7 +251,9 @@ def promo_of(row, known=None, names=()):
         return "", ""
     # a cue only in the text counts with a list signal beyond a no-reply address (a pharmacy's delivery notice from
     # no-reply mentions free shipping in its footer)
-    cue = PROMO_CUE.search(subj) or (PROMO_CUE.search(text[:HEAD]) if set(sig) - {"no-reply sender"} else None)
+    listy = bool(set(sig) - {"no-reply sender"})
+    cue = PROMO_CUE.search(subj) or (PROMO_CUE.search(text[:HEAD]) if listy else None) or \
+        (PROMO_LIST_CUE.search(subj) or PROMO_LIST_CUE.search(text[:HEAD]) if listy else None)
     if cue:
         return "promo", f"promo mail ({', '.join(sig)}; “{cue.group(0).strip()[:30]}”)"
     if ("promotions tab" in sig or rb) and not by_name(row, names):
@@ -250,7 +306,7 @@ def judge_mail(it, row, known=None, names=()):
     if not machine_mail(row):
         return None
     if sub not in BILL_SUBS and it.get("type") in ("ask", "commitment") and SURVEY.search(str(row.get("subject") or "")) \
-            and not TRANSACTIONAL.search(str(row.get("subject") or "")):
+            and not SURVEY_GUARD.search(str(row.get("subject") or "")):   # 0.24.2: "rate your order #123" too
         return "promo", "a survey or review request from machine mail: nothing for you to do"
     if sub in BILL_SUBS and not bill_proof(it, row):
         return "promo", "not a bill: no amount owed with a due date or statement from a billing sender"
@@ -350,12 +406,17 @@ class Known:
             # an address he never wrote to that sends list mail (the Promotions tab, a mailing service, a list sender
             # he never answers) is a list, whoever it is filed under
             return not self.list_only(row)
-        return domain_of(a) in self.domains
+        # 0.24.2 (leftovers: he once wrote to a shop's or a software company's support desk, so their whole domain
+        # was "his"): another address there that sends list mail is still a list
+        # (by the address itself or its tab, not by its history: colleagues he rarely answers stay his)
+        return domain_of(a) in self.domains and not self.list_only(row, history=False)
 
-    def list_only(self, row):
+    def list_only(self, row, history=True):
         sig = list_signals(row)
-        return "promotions tab" in sig or "mailing-service sender" in sig or \
-            bool(self.rep is not None and self.rep.bulk(address(row)))
+        local = address(row).split("@", 1)[0]
+        return "promotions tab" in sig or "mailing-service sender" in sig or "brand list sender" in sig or \
+            bool(LIST_ONLY_LOCAL.match(local)) or \
+            bool(history and self.rep is not None and self.rep.bulk(address(row)))
 
 
 # ---- rule 5: older, still open? -------------------------------------------------------------------------------------------

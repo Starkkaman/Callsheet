@@ -22,6 +22,7 @@ import datetime as dt
 import email.utils
 import html
 import json
+import re
 import sys
 import threading
 import time
@@ -152,15 +153,40 @@ def _addresses(value):
         if value else []
 
 
+CAL_PART_MIMES = ("text/calendar", "application/ics")
+_UID_LINE = re.compile(r"^UID(?:;[^:\n]*)?:(.+)$", re.M | re.I)
+
+
+def ical_uid(data):
+    """0.24.2: the UID of an iCalendar part's inline data (Gmail base64url), else "". Read for the UID only."""
+    if not data:
+        return ""
+    try:
+        text = writer._decode(data)  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        return ""
+    text = re.sub(r"\r?\n[ \t]", "", str(text)[:200000])    # unfold continued lines (RFC 5545)
+    m = _UID_LINE.search(text)
+    return m.group(1).strip()[:300] if m else ""
+
+
 def gmail_text(payload, snippet=""):
     """(text, attachments): text/plain preferred, else the HTML as text (htmltext), else the snippet. Quoted history
-    is kept. Attachments: name, type and size only (never read)."""
+    is kept. Attachments: name, type and size only (never read). 0.24.2: a calendar part that came inside the message
+    (an invite's text/calendar, nothing fetched) also gives its iCalendar UID ("uid"; one with no file name is listed
+    with "inline": true), so the mail and its calendar entry are one meeting (ledger.same_meeting)."""
     found, files = {"text/plain": None, "text/html": None}, []
     for p in writer._parts(payload or {}):  # noqa: SLF001
         mime = str(p.get("mimeType", "")).lower()
         body = p.get("body") or {}
+        uid = ical_uid(body.get("data")) if mime in CAL_PART_MIMES or str(p.get("filename") or "").lower().endswith(
+            ".ics") else ""
         if p.get("filename"):
-            files.append({"name": str(p["filename"])[:200], "type": mime[:100], "size": int(body.get("size") or 0)})
+            files.append(dict({"name": str(p["filename"])[:200], "type": mime[:100], "size": int(body.get("size") or 0)},
+                              **({"uid": uid} if uid else {})))
+            continue
+        if uid:
+            files.append({"name": "", "type": mime[:100], "size": int(body.get("size") or 0), "uid": uid, "inline": True})
             continue
         if mime in found and found[mime] is None and body.get("data"):
             found[mime] = writer._decode(body["data"])  # noqa: SLF001

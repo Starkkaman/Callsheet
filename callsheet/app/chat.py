@@ -1212,6 +1212,7 @@ class Tools(chatstore.StoreTools, gdrafts.DraftTools):
         self.store_on = bool(messages is not None and scope is None and _has_messages(messages))
         self.setting, self.action = setting, action
         self.setting_args = self.action_args = None
+        self.action_auto = None   # 0.24.2: (mode, label) when Callsheet proposed the action itself (one clear match)
         self.ignored_setting = self.ignored_action = 0
         self.gdraft, self.gdraft_args, self.ignored_gdraft = gdraft, None, 0   # 0.21.0 the Gmail draft card
         self.seen_items = set()   # ledger item numbers a ledger tool showed in this turn
@@ -3090,6 +3091,7 @@ class Chat:
                         self._chat_mark("end", mark)
                 by = "Local · " + eff["model"][:60]
             raw = raw.strip()[:MAX_ANSWER]
+            raw = chatstore.auto_answer(raw, tools.action_auto)   # 0.24.2: no "which one?" after one clear match
             bad_times = chatstore.time_check(raw, tools.results) if tools.results else []
             if bad_times:   # 0.24.0 (B1): a time no tool gave (the model re-derived it): said, never silently kept
                 raw = raw.rstrip() + "\n\n" + chatstore.time_note(bad_times)
@@ -3132,6 +3134,7 @@ class Chat:
                      f"{f', {tools.ignored_connect} propose_connector calls ignored' if tools.ignored_connect else ''}"
                      f"{f', {tools.ignored_setting} propose_setting calls ignored' if tools.ignored_setting else ''}"
                      f"{f', {tools.ignored_action} propose_action calls ignored' if tools.ignored_action else ''}"
+                     f"{', one clear match: Callsheet proposed it' if tools.action_auto else ''}"
                      f"{', store tools' if tools.store_on else ''}"
                      f"{self._web_counts(tools)}"
                      f", {stats['in']} in / "

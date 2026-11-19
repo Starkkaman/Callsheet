@@ -436,6 +436,20 @@ def _invite_events(db):
         "status NOT IN ('declined','done','cancelled')").fetchall()}
 
 
+LINK_TYPES = ("event", "commitment")    # 0.24.2: items that become their calendar entry's (cal_ref) when they're one
+
+
+def _one_meeting(db, it, o, my_entry, ctx, tz):
+    """0.24.2: two items for one meeting: one stands for a calendar entry (an invite, a mail that repeats it) and the
+    other's mail is that entry's (same_meeting)."""
+    if my_entry is not None and o.get("cal_ref") is None:
+        return bool(L.same_meeting(db, o, my_entry, tz))
+    if my_entry is None and o.get("cal_ref") is not None:
+        e = db.execute("SELECT * FROM events WHERE id=?", (o["cal_ref"],)).fetchone()
+        return bool(e is not None and L.same_meeting(db, it, e, tz, ctx=ctx))
+    return False
+
+
 def check_item(db, item_id, now, tz, message=None, regroup=True):
     """(new conflict ids, resolved ids) after item_id was created or changed. regroup: also re-check the trips whose
     grouped clash this item's calendar entry is (or should be) in."""
@@ -449,6 +463,7 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
     my_need = need.item(it)["need"]
     trips = set()                         # 0.22.x: trips whose grouped clash to re-check (regroup)
     past = set()                          # 0.24.1: sides whose overlap with it has ended (no clash; open ones resolve)
+    same = set()                          # 0.24.2: sides that are the same meeting (its email and its calendar entry)
     if mine:
         lo = min(s for s, _, _ in mine) - TIGHT_TRAVEL_S - 86400
         hi = max(e for _, e, _ in mine) + TIGHT_TRAVEL_S + 86400
@@ -458,14 +473,29 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
             "candidates != '[]')", (item_id, lo - 86400 * 30, hi))]
         sides = []
         stands = _invite_events(db)       # 0.21.0: an unanswered invite stands for its calendar entry (heads.py)
+        ctx = L.meeting_ctx(db, it)       # 0.24.2: its mail's calendar part and senders (same_meeting)
+        my_entry = db.execute("SELECT * FROM events WHERE id=?", (it["cal_ref"],)).fetchone() \
+            if it.get("cal_ref") is not None else None
         for o in others:
             if not blocks(o) or _related(db, it, o) or (o.get("cal_ref") is not None and o["cal_ref"] == it.get(
                     "cal_ref")) or not chat_clashes(db, o):
+                continue
+            if _one_meeting(db, it, o, my_entry, ctx, tz):
+                same.add(("item", o["id"]))   # 0.24.2: its email and its calendar invite are one meeting
                 continue
             for s, e, _ in item_spans(o, tz, db):
                 sides.append(("item", o["id"], (s, e), o.get("subtype") or "", o))
         for e in db.execute("SELECT * FROM events WHERE start_ts < ? AND coalesce(end_ts, start_ts) > ?", (hi, lo)):
             if not event_blocks(e) or e["id"] == it.get("cal_ref") or e["id"] in stands:
+                continue
+            why = L.same_meeting(db, it, e, tz, ctx=ctx) if it.get("cal_ref") is None else ""
+            if why:                       # 0.24.2: the email of this calendar entry: one item, never a clash
+                same.add(("event", e["id"]))
+                if it["type"] in LINK_TYPES or it.get("subtype") == "invite":
+                    L.update_fields(db, item_id, {"cal_ref": e["id"]}, now)
+                    it["cal_ref"] = e["id"]
+                    L.history(db, item_id, "changed", now, message, fields={"calendar": e["title"] or ""},
+                              note=f"the same meeting as your calendar entry ({'its invite names it' if why == 'uid' else why})")
                 continue
             if it.get("parent"):
                 par = L.get_item(db, it["parent"])
@@ -579,6 +609,10 @@ def check_item(db, item_id, now, tz, message=None, regroup=True):
         if is_past(c["slot_end"] if c["slot_end"] is not None else c["slot_start"], now) or \
                 (not ents and other in past) or (ents and all(("event", x) in past for x in ents)):
             _resolve_past(db, c, now)        # 0.24.1: its time has passed
+            resolved.append(c["id"])
+            continue
+        if not ents and (other in same or (other[0] == "event" and other[1] == it.get("cal_ref"))):
+            _resolve(db, c["id"], "the same meeting", now)   # 0.24.2: never a clash with itself
             resolved.append(c["id"])
             continue
         why = "moved away" if mine else f"{it['status']}" if not L.holds_time(it) else "no longer holds time"

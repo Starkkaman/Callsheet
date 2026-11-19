@@ -551,11 +551,103 @@ def _appointment_match(db, it, sp, message=None):
     return best
 
 
+# --- 0.24.2: an email and a calendar entry for the same meeting -----------------------------------------------------
+MEETING_SLACK_S = 900     # "the same time": starts within 15 minutes
+
+
+def mail_uids(db, messages):
+    """The iCalendar UIDs the stored mails carry (their calendar part, live.gmail_text)."""
+    out = set()
+    for m in messages:
+        if m is None:
+            continue
+        r = db.execute("SELECT attachments FROM messages WHERE id=?", (m,)).fetchone()
+        for f in _loads(r["attachments"], []) if r else []:
+            if isinstance(f, dict) and str(f.get("uid") or "").strip():
+                out.add(str(f["uid"]).strip())
+    return out
+
+
+def _col(row, k):
+    try:
+        return row[k]
+    except (KeyError, IndexError):
+        return None
+
+
+def organizers(e):
+    """The calendar entry's organizer addresses (its organizer, the guest marked organizer); never "self"."""
+    out = {str(_col(e, "organizer") or "").strip().lower()}
+    for a in _loads(_col(e, "attendees"), []) if isinstance(_col(e, "attendees"), str) else (_col(e, "attendees") or []):
+        if isinstance(a, dict) and a.get("organizer"):
+            out.add(str(a.get("address") or "").strip().lower())
+    return {x for x in out if x and x != "self"}
+
+
+def item_messages(db, it):
+    return [r["message"] for r in db.execute("SELECT message FROM ledger_sources WHERE item=?", (it["id"],))] \
+        if it.get("id") is not None else []
+
+
+def meeting_ctx(db, it, messages=None):
+    """What same_meeting reads of an item's mail once: {"uids", "senders"}."""
+    msgs = [m for m in (list(messages) if messages is not None else item_messages(db, it)) if m is not None]
+    senders = {str(it.get("who") or "").strip().lower()}
+    for m in msgs:
+        r = db.execute("SELECT sender FROM messages WHERE id=? AND direction='in'", (m,)).fetchone()
+        if r:
+            senders.add(str(r["sender"] or "").strip().lower())
+    return {"uids": mail_uids(db, msgs), "senders": {x for x in senders if x}}
+
+
+def same_meeting(db, it, e, tz, messages=None, ctx=None):
+    """0.24.2 (the owner: an email and a calendar invite for the same meeting showed as a clash): is calendar entry e
+    the meeting this item's mail is about? "uid": the mail's calendar part names the entry's iCalUID; "title, time and
+    organizer": a word of the title in common, starts within 15 minutes, and the mail is from the entry's organizer.
+    "" when it isn't. ctx: meeting_ctx (else read here)."""
+    if e is None or it is None:
+        return ""
+    ctx = ctx if ctx is not None else meeting_ctx(db, it, messages)
+    uid = str(_col(e, "ical_uid") or "").strip()
+    if uid and uid in ctx["uids"]:
+        return "uid"
+    sp = span(it, tz)
+    if sp is None or it.get("all_day") or _col(e, "all_day") or _col(e, "start_ts") is None or \
+            abs(sp[0] - e["start_ts"]) > MEETING_SLACK_S:
+        return ""
+    common = {w for w in words(e["title"]) & words(f"{it.get('what') or ''} {it.get('purpose') or ''}")
+              if w not in _TIME_TOKENS and not w.isdigit()}
+    if not common:
+        return ""
+    return "title, time and organizer" if organizers(e) & ctx["senders"] else ""
+
+
+def uid_match(db, it, tz, message):
+    """The calendar entry the mail's calendar part names (the one nearest the item's time), else None."""
+    uids = mail_uids(db, [message]) if message is not None else set()
+    if not uids:
+        return None
+    sp = span(it, tz)
+    rows = db.execute(f"SELECT id, start_ts FROM events WHERE status != 'cancelled' AND ical_uid IN "
+                      f"({','.join('?' * len(uids))})", tuple(sorted(uids))).fetchall()
+    if sp is not None:
+        rows = [r for r in rows if r["start_ts"] is not None and abs(r["start_ts"] - sp[0]) <= 86400]
+        rows.sort(key=lambda r: abs(r["start_ts"] - sp[0]))
+    return rows[0]["id"] if rows else None
+
+
 def cal_match(db, it, tz, message=None):
     """The calendar event this item repeats (start within 15 minutes or the same all-day date, and a similar title,
-    or exactly the same times; an appointment also by _appointment_match), else None."""
+    or exactly the same times; an appointment also by _appointment_match), else None. 0.24.2: first the entry its
+    mail's calendar part names (iCalUID); then also a word of the title, the same time and the entry's organizer as
+    the sender (same_meeting)."""
+    if it["type"] not in ("event", "commitment"):
+        return None
+    hit = uid_match(db, it, tz, message)
+    if hit is not None:
+        return hit
     sp = span(it, tz)
-    if sp is None or it["type"] not in ("event", "commitment"):
+    if sp is None:
         return None
     if it.get("subtype") in APPOINTMENT and not it.get("all_day") and it.get("start_ts") is not None:
         hit = _appointment_match(db, it, sp, message)
@@ -583,6 +675,9 @@ def cal_match(db, it, tz, message=None):
             score = sim + (1 if same_times else 0)
             if score > best_score:
                 best, best_score = e["id"], score
+        elif exact and message is not None and same_meeting(db, it, e, tz, [message]):
+            if sim + 0.25 > best_score:      # 0.24.2: from its organizer, a word of the title in common
+                best, best_score = e["id"], sim + 0.25
     return best
 
 

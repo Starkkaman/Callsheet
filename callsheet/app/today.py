@@ -1058,7 +1058,8 @@ class Today:
         bulk flag, unsubscribe text) from no one he knows, whose subject books nothing, is never a clash side."""
         if r.get("direction") != "in" or (known is not None and known.protects(r)):
             return False
-        sig = set(TY.list_signals(r)) & {"mailing-service sender", "bulk", "unsubscribe text", "promotions tab"}
+        sig = set(TY.list_signals(r)) & {"mailing-service sender", "bulk", "unsubscribe text", "promotions tab",
+                                         "brand list sender"}   # 0.24.2
         subj = str(r.get("subject") or "")
         return bool(sig) and not TY.BOOKING.search(subj) and not TY.TRANSACTIONAL.search(subj) and \
             not TY.NEVER_HIDE.search(subj)

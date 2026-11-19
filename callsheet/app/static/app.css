@@ -1313,6 +1313,17 @@ h2,h3,.tabbar button{font-family:var(--font-head,var(--font-display));font-weigh
   /* stacked or wrapping controls: a hit area can't be 44 px when the rows are closer than that, so these grow */
   .app.app :is(.chip,.sw,.act,.tbtn,.xbtn,.hbtn){padding-block:calc((44px - 1lh) / 2)}
   .app .helpq{z-index:2;margin:11px 11px 11px 12px}
+  /* 0.24.2: the "?" is a 44 px button on a phone (its box, not only its hit area), the 22 px ring drawn inside it; the
+     same space in the row as before (22 px + 11 px around). Desktop is unchanged. */
+  .app .helpq,.app .helpq:hover,.app .helpq[aria-expanded=true]{width:44px;height:44px;margin:0 0 0 1px;background:none;box-shadow:none}
+  .app .helpq::after{inset:11px;z-index:-1;border-radius:var(--chip-radius);box-shadow:inset 0 0 0 var(--rule-w) var(--rule);pointer-events:none}
+  .app .helpq:hover::after{box-shadow:inset 0 0 0 var(--rule-w) var(--text)}
+  .app .helpq[aria-expanded=true]::after{background:var(--sel);box-shadow:none}
+  .app .helpq:focus-visible{outline:0}
+  .app .helpq:focus-visible::after{outline:2px var(--focus-style,solid);outline-offset:var(--focus-offset,2px)}
+  /* 0.24.2: "Connect Slack workspace" (the panel look's .act is 32 px) and the Projects chips (43.98 px from 1lh) */
+  .app .cbtn .act{min-height:44px;display:inline-flex;align-items:center}
+  .app :is(.vnav,.chips) .chip{min-height:44px}
   .app .bv :is(.ck,.np:not(.wide)){width:44px;height:44px}
   .app .bv .np.wide{min-height:44px}
   .app .bv :is(.rmain,.bopen,.tline,.dfold){min-height:44px}

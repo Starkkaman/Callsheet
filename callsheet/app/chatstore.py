@@ -854,6 +854,55 @@ def time_supported(latest, until, now_local):
     return day_said or bool(hours)
 
 
+def asked(action, intent):
+    """Did the owner's own latest message ask for this action? "Dismiss" on an item (a bill, a notice, a security
+    alert) is its Done, like the item's own button (0.24.2)."""
+    acts = intent["actions"]
+    return action in acts or (action == "done" and "dismiss" in acts)
+
+
+_ONE_PLURAL = re.compile(r"\b(?:all|these|those|both|them|everything|each|every)\b", re.I)
+SERVER_ITEM_VERBS = ("done", "not_for_me", "calendar")
+
+
+_WHICH = re.compile(r"\bwhich\s+(?:one|of\s+(?:these|those|them|the))\b|\bwhich\s+(?:\w+\s+){0,3}(?:do|did)\s+you\s+"
+                    r"mean\b|\bwhich\s+(?:\w+\s+){0,3}(?:would|should)\s+(?:you\s+like|i)\b", re.I)
+
+
+def auto_answer(raw, auto):
+    """0.24.2: the answer when Callsheet proposed the action itself: the model's own words, unless they still ask
+    "which one?" (then one plain sentence from Callsheet's own label)."""
+    if not auto or not _WHICH.search(raw or ""):
+        return raw
+    mode, label = auto
+    return (f"Done: {label}. You can Undo it on the card." if mode == "done" else
+            f"Here it is for you to confirm: {label}.")
+
+
+def server_action(intent, find_kind, target_kind, ref):
+    """0.24.2 (the owner: "find" said "One clear match" and the model still asked which PayPal bill): the
+    propose_action arguments Callsheet uses itself when find names exactly one target and the owner's own latest
+    message names one action that needs nothing more (no time, no note words). None otherwise (the model goes on)."""
+    if intent is None or _ONE_PLURAL.search(intent["text"]):
+        return None
+    acts = set(intent["actions"])
+    if "not_for_me" in acts:
+        acts.discard("note")              # "not for me" reads as a note too; the note needs words, the filing doesn't
+    if target_kind == "clash":
+        verbs = {"dismiss": {"action": "dismiss", "clashes": [ref]}}
+    elif target_kind == "followup":
+        verbs = {"told": {"action": "told", "followups": [ref]}}
+    elif find_kind == "cleanup":
+        verbs = {"clear": {"action": "clear", "items": [ref]}}
+    else:
+        if "dismiss" in acts:             # dismissing an item is its Done (asked())
+            acts = (acts - {"dismiss"}) | {"done"}
+        verbs = {v: {"action": v, "items": [ref]} for v in SERVER_ITEM_VERBS}
+    if len(acts) != 1:
+        return None
+    return verbs.get(next(iter(acts)))
+
+
 def build_action_card(intent, args, owner_texts, seen_items, items_of, now, tz, note_check=None, name=None):
     """The action card for the model's propose_action arguments: {status, action, items, fields, title, label, rows,
     reason}. Only items a ledger tool showed in this chat, only the action the owner asked for, more than one item only
@@ -864,7 +913,7 @@ def build_action_card(intent, args, owner_texts, seen_items, items_of, now, tz, 
 
     def refuse(why):
         return {"status": "refused", "action": action if action in CARD_ACTIONS else "", "reason": why}
-    if action not in intent["actions"]:
+    if not asked(action, intent):
         return refuse("That isn't what you asked for, so there's no card.")
     if action == "tidy":          # 0.21.4: everything at once, by the rules (chat.py fills the count); no items
         if set(args) - {"action", "items"} or args.get("items"):
@@ -1570,7 +1619,41 @@ class StoreTools:
         note = ("Nothing matches; ask the owner which one." if not out else
                 "One clear match." if len(best) == 1 else
                 "Several match: call propose_action with all of their numbers and Callsheet asks the owner which one.")
-        return {"tool": FIND_TOOL, "kind": kind, "count": len(out), "matches": out, "note": note}, "Looked for it"
+        res = {"tool": FIND_TOOL, "kind": kind, "count": len(out), "matches": out, "note": note}
+        if len(best) == 1:
+            done = self._find_act(kind, best[0], want)
+            if done is not None:
+                res["card"] = done[0]
+                res["note"] = done[1]
+                return res, ("Done" if done[0] == "done" else "Put up a card")
+        return res, "Looked for it"
+
+    def _find_act(self, kind, target, want):
+        """0.24.2: find named exactly one target and the owner's own latest message asks one action on it: Callsheet
+        proposes it itself (the same gate as propose_action: at once with Undo, or Confirm), so the answer can't
+        ask "which one?". Only when every word of find's query is in that message (a query taken from a message or a
+        tool result never acts) and no card is up yet. ("done"|"confirm", note) or None."""
+        intent = getattr(self, "action", None)
+        if intent is None or getattr(self, "preview", None) is None or self.action_args is not None or \
+                getattr(self, "setting_args", None) is not None:
+            return None
+        if not want or not want <= _words(intent["text"]):
+            return None
+        args = server_action(intent, kind, target[0], target[1])
+        if args is None:
+            return None
+        self.action_args = dict(args)
+        pv = self.preview("action", self.action_args)
+        if not pv or not pv.get("ok"):
+            self.action_args = None       # refused: nothing is up; the model may still ask or propose
+            return None
+        self.action_auto = ("done", pv["done"]) if pv.get("done") else ("confirm", pv["confirm"])
+        if pv.get("done"):
+            return "done", (f"One clear match, and Callsheet already did what the owner asked: {pv['done']}. The "
+                            "owner can Undo it. Say it is done in one short sentence; don't ask which one and don't "
+                            "call propose_action.")
+        return "confirm", (f"One clear match. Callsheet put up a card for the owner to confirm: {pv['confirm']}. "
+                           "Say so in one short sentence; don't ask which one and don't call propose_action.")
 
     def _find_tidy(self, scored, now, lv):
         """0.24.0 (B2, secret shopper Q10: "dismiss the PayPal bill" asked "which one?" of three rows that read the

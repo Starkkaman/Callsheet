@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.24.2
+
+- **One clear match, no "which one?".** When you ask Chat to do something to one thing ("Dismiss the PayPal bill") and
+  it finds exactly one, Callsheet puts up the card itself: done at once with Undo when every word is yours and it names
+  one thing, otherwise a Confirm card (adding to your calendar always asks). "Dismiss" on an item marks it done, like
+  its button. Text in messages can't trigger this.
+- **Two kinds of promotion that slipped through.** A shop mailing from its own name on its own mail subdomain, and a
+  software newsletter mailing from addresses like reply@, webinars@ or community@, now count as mailing lists even
+  when you once wrote to that company's help desk or saved the address. Their deals, "stock up", review requests,
+  product news, webinars and customer stories are promotions. Order shipped, a charge with its date, a prescription,
+  an invoice, a support reply and colleagues' mail from the same company stay.
+- **An email and its calendar invite are one meeting.** When an email is about a meeting on your calendar (the invite
+  inside it names the calendar entry, or it shares a word of the title, starts within 15 minutes and comes from the
+  meeting's organizer), it's linked to that entry and never shows as a clash with it. Clashes like that already open
+  close as "the same meeting".
+- **Bigger touch targets on phones in Setup and Projects.** The "?" help buttons, "Connect Slack workspace" and the
+  Projects chips are a full 44 px to tap on a phone. Nothing changes on a computer.
+
 ## 0.24.1
 
 - **No more clashes for dates in the past.** A clash is made, or stays open, only while its time hasn't passed, with

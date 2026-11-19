@@ -82,7 +82,7 @@ def _has_cal_file(row):
     except ValueError:
         return False
     for f in files if isinstance(files, list) else []:
-        if not isinstance(f, dict):
+        if not isinstance(f, dict) or f.get("inline"):     # 0.24.2: an inline calendar part (its UID) isn't a file
             continue
         if str(f.get("type") or "").lower() in CAL_MIMES or str(f.get("name") or "").lower().endswith(CAL_EXT):
             return True
@@ -248,7 +248,8 @@ def add_mail_invite(db, row, inv, now, tz):
             L.history(db, o["id"], "changed", now, row["id"], fields={"when": when["phrase"]},
                       note="updated invitation")
         return o["id"], False
-    if any(str(o["thread"]).startswith(CAL_KEY) for o in same) or _on_calendar(db, inv["title"], when, now, tz):
+    if any(str(o["thread"]).startswith(CAL_KEY) for o in same) or _on_calendar(db, inv["title"], when, now, tz) or \
+            L.uid_match(db, dict(when or {}), tz, row["id"]) is not None:   # 0.24.2: its calendar part names the entry
         return None, False                         # on a calendar Callsheet reads: the calendar's invite
     if inv.get("updated"):
         return None, False                         # a change to an invite the owner already dealt with: the model reads it
