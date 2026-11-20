@@ -376,6 +376,8 @@ class Planner:
                 continue
             seen.add(it["id"])
             why = None
+            if L.is_code_item(it):
+                continue   # 0.24.4: a one-time code is never a brief fact
             if it.get("subtype") == "invite" and it["id"] not in shown:
                 continue   # 0.24.0 (B1): an invite to answer is in Needs you; a shared calendar's is a heads-up
             if it.get("never_hide") and it["id"] not in shown:

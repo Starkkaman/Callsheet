@@ -58,8 +58,21 @@ def security_of(row):
     """The 0.8.0 rule on one stored message: {"marks", "brand", "lure"} or None."""
     if row.get("source") not in SEC_SOURCES or row.get("direction") != "in" or row.get("deleted_at") is not None:
         return None
-    return rules.security_alert(None, str(row.get("sender") or ""), str(row.get("subject") or ""),
-                                str(row.get("text") or "")[:SNIPPET])
+    alert = rules.security_alert(None, str(row.get("sender") or ""), str(row.get("subject") or ""),
+                                 str(row.get("text") or "")[:SNIPPET])
+    if L.code_of(row):     # 0.24.4: a one-time code: one item, never Needs you (the Security block while fresh)
+        alert = dict(alert or {"marks": [], "brand": None, "lure": None}, code=True)
+    return alert
+
+
+def _code_fields():
+    """0.24.4: what a one-time code's item becomes: a Clean up line (never a clash, a bill or Needs you) that shows in
+    the Security block while fresh (ledger.section_of)."""
+    return {"type": "cleanup", "subtype": L.CODE_GROUP, "never_hide": 0, "confidence": "sure"}
+
+
+def _item_of_alert(db, message):
+    return _item_of_message(db, message, "security") or _item_of_message(db, message, L.CODE_GROUP)
 
 
 def security_marks(alert):
@@ -202,7 +215,7 @@ def _fold_cleanup(db, message, into, now):
 
 def add_security(db, row, alert, now):
     """The security item of one message (made once). Returns (item id, created?)."""
-    have = _item_of_message(db, row["id"], "security")
+    have = _item_of_alert(db, row["id"])
     if have is not None:
         return have, False
     name = alert.get("brand") if alert.get("brand") and "lure" not in alert["marks"] else \
@@ -212,6 +225,8 @@ def add_security(db, row, alert, now):
           "purpose": "", "status": "open", "confidence": "sure", "never_hide": 1,
           "thread": f"{row['source']}:{row['account']}:{row.get('thread') or ''}", "anchor_ts": row["ts"],
           "phrase": "", "date_resolved": 1, "checks": []}
+    if alert.get("code"):
+        it.update(_code_fields(), checks=[{"field": "tidy", "value": L.CODE_GROUP, "why": L.CODE_WHY}])
     item_id = L.insert_item(db, it, row["id"], now)
     if row["ts"] < now - SECURITY_WINDOW_S:
         L.set_status(db, item_id, "done", now, note="older than 3 days when Callsheet first saw it")
@@ -303,7 +318,7 @@ def adopt_security(db, row, alert, res, now):
     security item (its words kept); else the rule makes one. res (ledger.apply's result) is changed to match.
     Returns (item id, created?)."""
     row = dict(row)
-    have = _item_of_message(db, row["id"], "security")
+    have = _item_of_alert(db, row["id"])
     if have is not None:
         _merge_into(db, have, res, row["id"], now, f"kept as the security alert L{have}")
         return have, False
@@ -316,6 +331,17 @@ def adopt_security(db, row, alert, res, now):
             res.setdefault("created", []).append(item_id)
         return item_id, new
     keep = made[0]
+    if alert.get("code"):   # 0.24.4: the model's reading of a one-time code is one Clean up line, never an ask or bill
+        it0 = L.get_item(db, keep) or {}
+        checks = [c for c in it0.get("checks") or [] if not (isinstance(c, dict) and c.get("field") == "tidy")]
+        L.update_fields(db, keep, dict(_code_fields(), start_ts=None, end_ts=None, start_date=None, end_date=None,
+                                       time="", amount="", anchor_ts=row["ts"], checks=checks + [
+                                           {"field": "tidy", "value": L.CODE_GROUP, "why": L.CODE_WHY}]), now)
+        L.history(db, keep, "changed", now, row["id"], fields={"subtype": L.CODE_GROUP},
+                  note="a one-time code (never Needs you)")
+        _merge_into(db, keep, res, row["id"], now, f"kept as the code L{keep}")
+        _fold_cleanup(db, row["id"], keep, now)
+        return keep, False
     L.update_fields(db, keep, {"subtype": "security", "never_hide": 1, "confidence": "sure"}, now)
     L.history(db, keep, "changed", now, row["id"], fields={"subtype": "security"},
               note="a security alert (always shown until marked Done)")

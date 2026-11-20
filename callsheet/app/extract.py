@@ -1697,7 +1697,8 @@ class Runner:
             self.state.update(stopped=why)
             return {"read": 0, "stopped": why}
         try:
-            out = self.ex.run_pass(writer.BG_NIGHT_S * 6, self.cap(), gate=self.gate)
+            with background.working(self.clock):   # 0.24.4: /v1/status says when background work runs
+                out = self.ex.run_pass(writer.BG_NIGHT_S * 6, self.cap(), gate=self.gate)
         except writer.ContextFull:
             out = {"read": 0, "stopped": "context_full"}
         except writer.Busy:

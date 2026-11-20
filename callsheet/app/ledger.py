@@ -28,6 +28,86 @@ OWNER = "owner"
 MERGE_DAYS = 45                               # an item can only merge into one created this recently
 NOW_NEXT_S = 90 * 60                          # Now and next: starting within 90 minutes (or all-day today)
 EVENT_MIN = 60                                # an item without an end lasts an hour (as dates.EVENT_MIN)
+
+# 0.24.4: one-time codes (verification and sign-in codes from automated senders). Never Needs you, never first in a
+# list, never a clash or a bill: while fresh (CODE_FRESH_S) a code may show in the Security block, then it is a Clean up
+# line ("Code, expired"). code_of reads a stored message; is_code_item an item (subtype "code", or a security alert or
+# never-hidden item whose words name a code).
+CODE_FRESH_S = 15 * 60
+CODE_WHY = "Code, expired"
+CODE_GROUP = "code"
+CODE_HEAD = 600
+CODE_WORDS = re.compile(r"\b(?:verification\s+code|security\s+code|one[-\s]?time\s+(?:pass)?code|one[-\s]?time\s+"
+                        r"password|2fa\s+code|sign[-\s]?in\s+code|log[-\s]?in\s+code|authentication\s+code|"
+                        r"confirmation\s+code\s+(?:is|:)\s*\d{4,8}\b)", re.I)
+CODE_NOT = frozenset("promo promotion promotional discount coupon zip postal gift referral door gate access booking "
+                     "tracking meeting confirmation reservation offer voucher area dress source qr bar country "
+                     "redemption".split())
+_CODE_IS = re.compile(r"(?:\b([\w-]+)\s+)?code\s*(?:is|:)\s*\d{4,8}\b", re.I)
+_IS_CODE = re.compile(r"\b\d{4,8}\s+is\s+your\s+((?:[\w.-]+\s+){0,2})code\b", re.I)
+_OTP_DIGITS = re.compile(r"\b(?:otp|2fa)\b[^.\n]{0,30}?\b\d{4,8}\b", re.I)
+
+
+def digit_code(hay):
+    """A 4-8 digit code with a "code" cue ("your code is 482913", "482913 is your Larkspur code", "Code: 4821"), not a
+    promo, gate, booking or tracking code."""
+    for m in _CODE_IS.finditer(hay):
+        if str(m.group(1) or "").lower() not in CODE_NOT:
+            return True
+    for m in _IS_CODE.finditer(hay):
+        if not CODE_NOT & set(m.group(1).lower().split()):
+            return True
+    return bool(_OTP_DIGITS.search(hay))
+
+
+_AUTO_LOCAL = re.compile(r"(?:^|[._+-])(?:no-?reply|do-?not-?reply|notifications?|notify|alerts?|security|verify|"
+                         r"verification|accounts?|auth|login|signin|otp|info|support|team|hello|mail|service|"
+                         r"mailer|system|admin)(?:$|[._+-])|^\d+$", re.I)
+
+
+def code_automated(row):
+    """Is the sender automated (a code comes from a service, not a person)? Mail from a no-reply, role or service
+    address (or one of Gmail's tabs), a text from a short code or a name instead of a number, and a phone
+    notification's title."""
+    src = row.get("source")
+    sender = str(row.get("sender") or "").strip()
+    if src == "gmail":
+        local = sender.lower().split("@", 1)[0]
+        labels = str(row.get("labels") or "").upper()
+        return bool(_AUTO_LOCAL.search(local)) or "CATEGORY_" in labels
+    if src == "sms":
+        digits = re.sub(r"\D", "", sender)
+        return len(digits) < 7
+    return src == "sms_live"
+
+
+def code_text(subject, text):
+    """Do these words carry a one-time code (the phrases, or a 4-8 digit code with a "code" cue)?"""
+    hay = f"{subject or ''}\n{str(text or '')[:CODE_HEAD]}"
+    return bool(CODE_WORDS.search(hay) or digit_code(hay))
+
+
+def code_of(row):
+    """A stored received message that is a one-time code from an automated sender."""
+    if not row or row.get("direction") != "in" or row.get("source") not in ("gmail", "sms", "sms_live"):
+        return False
+    return code_text(row.get("subject"), row.get("text")) and code_automated(row)
+
+
+def is_code_item(it):
+    """An item that stands for a one-time code: subtype "code", or a security alert (or another never-hidden item, not
+    an invite) whose words name a code."""
+    sub = it.get("subtype") or ""
+    if sub == CODE_GROUP:
+        return True
+    if sub == "invite" or not (sub == "security" or it.get("never_hide")):
+        return False
+    return bool(CODE_WORDS.search(str(it.get("what") or "")) or digit_code(str(it.get("what") or "")))
+
+
+def code_fresh(it, now):
+    ts = it.get("anchor_ts") or it.get("created_at") or 0
+    return now - ts <= CODE_FRESH_S
 TRIP_PARTS = frozenset({"lodging", "hotel", "flight", "car", "rental", "train", "transport", "ferry", "bus"})
 # 0.22.0 (acceptance Rule C): a trip's legs live inside the trip item (merged into it, kept in its history), never a
 # second item next to it; a hotel check-in with its time stays its own item under the trip (parent)
@@ -1286,6 +1366,8 @@ def section_of(it, now, tz):
     cancelled or past)."""
     if it.get("merged_into") is not None or it["status"] in CLOSED:
         return "none"
+    if is_code_item(it):                 # 0.24.4: a one-time code: the Security block while fresh, then Clean up
+        return "security" if code_fresh(it, now) else "clean_up"
     if it.get("subtype") == "security":
         return "security"                # 0.21.0 (heads.py): at the top of Now and next until the owner marks it Done
     t = it["type"]
@@ -1512,6 +1594,8 @@ class Ledger:
                 except Exception:  # noqa: BLE001
                     r["vip"] = False
         groups["needs_you"].sort(key=lambda r: (not r.get("vip"), not r.get("late"), r["created_at"]))
+        for k in ("security", "clean_up"):    # 0.24.4: a one-time code never leads a list
+            groups[k].sort(key=is_code_item)
         if self.cleanup_rule:
             for r in groups["clean_up"]:
                 try:

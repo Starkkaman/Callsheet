@@ -18,7 +18,9 @@ only draws text with `h()`. Design: the approved v4 Today design (4 rounds).
   as a card with a red edge, a lock, the word "Security", who, the subject, the source, the look-alike mark ("Not
   from Google: the address only looks like it") and Open in Gmail / See it / Done. The newest has the red key; no
   orange key on the screen then. Nothing but Done hides one: never in Clean up, never snoozed, never closed by the
-  model. An alert more than 3 days old when Callsheet first sees it is kept as done.
+  model. An alert more than 3 days old when Callsheet first sees it is kept as done. 0.24.4: a one-time code
+  (verification or sign-in code from an automated sender) shows here only while 15 minutes old or less, after the
+  real alerts; then it is a Clean up line in "Code, expired" (the last group). Never in Needs you.
 - **Needs you.** Open asks and your own promises with no time (`You said`), oldest first, without clash sides or
   snoozed items: source icon, who, how long it has waited, one line of why. 4 rows on a computer, 3 on a phone.
   0.21.0: invites to answer are asks here ("RSVP: Team sync, Wed Nov 18, 2:00 pm") with Open in Calendar (Google's

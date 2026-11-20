@@ -269,6 +269,43 @@ def in_window(t, start, end):
     return st <= t < en if st < en else (t >= st or t < en)
 
 
+# 0.24.4: is Callsheet's background model work running now (a request, or a reading pass), and since when? Read by the
+# voice API's /v1/status for the owner's model-server engineer. Counts only; nested work keeps the first start.
+_WORK = {"n": 0, "since": None}
+_WORK_LOCK = threading.Lock()
+
+
+class _Working:
+    def __init__(self, clock):
+        self.clock = clock
+
+    def __enter__(self):
+        with _WORK_LOCK:
+            if _WORK["n"] == 0:
+                _WORK["since"] = self.clock()
+            _WORK["n"] += 1
+        return self
+
+    def __exit__(self, *exc):
+        with _WORK_LOCK:
+            _WORK["n"] = max(0, _WORK["n"] - 1)
+            if _WORK["n"] == 0:
+                _WORK["since"] = None
+        return False
+
+
+def working(clock=time.time):
+    """`with working():` marks background model work as running (busy_view)."""
+    return _Working(clock)
+
+
+def busy_view():
+    """{busy, since}: background model work running now, and since when (unix seconds, None when idle)."""
+    with _WORK_LOCK:
+        busy = _WORK["n"] > 0
+        return {"busy": busy, "since": int(_WORK["since"]) if busy and _WORK["since"] is not None else None}
+
+
 class Busy(writer.Busy):
     """LOCAL_LOCK was taken (Chat or the brief writer): the sorter yields. (0.12.0: a writer.Busy, like ContextFull.)"""
 
@@ -488,6 +525,10 @@ class Background:
         the request's size and measured prefill are counted for `kind` (numbers only). 0.14.3: the answer's output
         pace and its output tokens per unit (`units`: the cards or items it answers) are learned too; while Chat is
         active on this server nothing is sent (Busy("chat"), see writer.chat_active)."""
+        with working(self.clock):
+            return self._post_bg(body, timeout, post_fn, budget, kind, units, stream)
+
+    def _post_bg(self, body, timeout, post_fn, budget, kind, units, stream):
         base, key = self._server()
         model = body.get("model") if isinstance(body, dict) else None
         extra = self.extra_for(model)

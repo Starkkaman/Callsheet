@@ -63,7 +63,8 @@ TYPE_WORD = {"ask": "Ask", "commitment": "Your word", "event": "Event", "cleanup
 CLEAN_GROUPS = (("people", "From people", "mail"),   # 0.24.0: real people apart from promotions (the audit)
                 ("channels", "From your channels", "slack"), ("promo", "Promotions", "news"),
                 ("newsletter", "Newsletters", "news"), ("receipt", "Receipts", "mail"),
-                ("chatter", "Slack chatter", "slack"), ("other", "Notifications", "note"))
+                ("chatter", "Slack chatter", "slack"), ("other", "Notifications", "note"),
+                (L.CODE_GROUP, L.CODE_WHY, "note"))   # 0.24.4: one-time codes, last (never leads a list)
 _REAL_ASK = frozenset({"decision", "reply", "appointment", "deadline", "bill", "payment", "document", "meeting"})
 _RECEIPT = re.compile(r"receipt|order|invoice|payment|paid|statement|shipping|delivery", re.I)
 _NEWS = re.compile(r"newsletter|digest|weekly|promo|offer|deal|sale|update", re.I)
@@ -290,6 +291,8 @@ def reply_link(src, address=None):
 def clean_group(it, source):
     # 0.21.4 (tidy.py): a line the rules moved or made says its group in a "tidy" check
     tg = next((c.get("value") for c in it.get("checks") or [] if isinstance(c, dict) and c.get("field") == "tidy"), "")
+    if tg == L.CODE_GROUP or L.is_code_item(it):
+        return L.CODE_GROUP
     if tg in ("channels", "promo"):
         return tg
     sub = f"{it.get('subtype') or ''} {it.get('what') or ''}"
@@ -587,9 +590,9 @@ class Today:
             rows.append({"id": it["id"], "who": it["who_name"] or it["who"] or "A sender", "what": it["what"],
                          "icon": SOURCES.get(src, ("mail", ""))[0], "source": SOURCES.get(src, ("", "Message"))[1],
                          "at": t12(d) if d.date() == local(now, tz).date() else ago(ts, now, tz),
-                         "marks": heads.security_marks(alert), "ts": ts,
+                         "marks": heads.security_marks(alert), "ts": ts, "code": L.is_code_item(it),
                          "link": dict(link, label="Open in " + link["app"]) if link else None})
-        rows.sort(key=lambda r: -r["ts"])
+        rows.sort(key=lambda r: (r["code"], -r["ts"]))   # 0.24.4: a fresh one-time code after the real alerts
         out, seen = [], {}
         for r in rows:                     # 0.24.0: one card per sender, alert and day (the audit: 2 of 5 were twins)
             k = F.alert_key(r["who"], r["what"], r["ts"], tz)
@@ -1671,7 +1674,7 @@ class Today:
             f = it["from"][0] if it["from"] else {}
             src = f.get("source") or "gmail"
             g = clean_group(it, src)
-            if g not in ("promo",) and it["who"] != L.OWNER and self._is_person(it, src, people):
+            if g not in ("promo", L.CODE_GROUP) and it["who"] != L.OWNER and self._is_person(it, src, people):
                 g = "people"                 # 0.24.0: colleagues' posts apart from promotions
             d = local(f.get("ts") or it["created_at"], tz)
             groups[g].append({"id": it["id"], "what": it["what"], "icon": dict((k, i) for k, _, i in CLEAN_GROUPS)[g],
@@ -1685,7 +1688,7 @@ class Today:
             if rows:
                 out.append({"key": k, "label": label, "icon": icon, "rows": rows})
                 ids += [r["id"] for r in rows]
-        smp = [g["rows"][0] for g in out][:samples] if samples else None
+        smp = [g["rows"][0] for g in out if g["key"] != L.CODE_GROUP][:samples] if samples else None
         oldest = min((r["ts"] for g in out for r in g["rows"]), default=now)
         days = (local(now, tz).date() - local(oldest, tz).date()).days + 1
         return {"total": len(ids), "ids": ids, "groups": out if not samples else [], "samples": smp or [],

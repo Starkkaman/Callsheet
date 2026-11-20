@@ -35,7 +35,7 @@ AGE_S = AGE_DAYS * 86400
 CLASH_PER_ITEM = 3
 HEAD = 600                    # promo cues count in the subject and this much of the text
 BANNER_KEY = "tidy_banner_0214"
-BANNER_REV = "0242"   # bump to offer Tidy up once more after an update (0.24.2: brand and list addresses)
+BANNER_REV = "0244"   # bump to offer Tidy up once more after an update (0.24.4: one-time codes)
 
 # ---- rule 1: promo mail without headers -------------------------------------------------------------------------------
 # Mailing services' sending domains (a list sender, whatever the brand) and the marketing subdomains brands send from.
@@ -463,7 +463,7 @@ CREATE TABLE IF NOT EXISTS tidy_moves (
   before TEXT NOT NULL, conflicts TEXT NOT NULL DEFAULT '[]', state TEXT NOT NULL DEFAULT 'moved');
 CREATE INDEX IF NOT EXISTS tidy_moves_run ON tidy_moves (run)
 """
-GROUP_WORD = {"promo": "Promotions", "channels": "From your channels"}
+GROUP_WORD = {"promo": "Promotions", "channels": "From your channels", L.CODE_GROUP: "Expired codes"}
 
 
 def ensure(ms):
@@ -511,6 +511,11 @@ class Tidy:
 
     def judge(self, it, row, known, names):
         """(group, why) when the rules move this open item to Clean up, else None."""
+        if row is not None and it.get("type") != "cleanup" and it.get("subtype") != "invite" and L.code_of(row):
+            # 0.24.4: a one-time code (an alert or anything the model made of it) once it is no longer fresh
+            if (row.get("ts") or 0) < self.clock() - L.CODE_FRESH_S:
+                return L.CODE_GROUP, L.CODE_WHY
+            return None
         if row is None or it.get("type") == "cleanup" or it.get("subtype") in ("security", "invite"):
             return None
         rep = getattr(known, "rep", None)
@@ -590,8 +595,9 @@ class Tidy:
                     db.execute("UPDATE ledger_conflicts SET state='resolved', resolved_at=?, resolved_why=?, "
                                "updated_at=? WHERE id=?", (now, f"tidy: {m['why']}"[:200], now, cid))
                 checks = list(it["checks"] or []) + [tidy_check(m["grp"], m["why"])]
-                db.execute("UPDATE ledger_items SET type='cleanup', checks=?, updated_at=? WHERE id=?",
-                           (json.dumps(checks), now, it["id"]))
+                sub = L.CODE_GROUP if m["grp"] == L.CODE_GROUP else it["subtype"]   # 0.24.4: a code stays a code
+                db.execute("UPDATE ledger_items SET type='cleanup', subtype=?, checks=?, updated_at=? WHERE id=?",
+                           (sub, json.dumps(checks), now, it["id"]))
                 L.history(db, it["id"], "tidy", now, note=f"Tidy up: {m['why']}"[:300],
                           fields={"type": [before["type"], "cleanup"]})
                 db.execute("INSERT INTO tidy_moves (run, item, grp, why, before, conflicts) VALUES (?,?,?,?,?,?)",

@@ -239,6 +239,19 @@ shows, `c…` an open clash) and runs the same function as Today's button, journ
 The Sources panel: `{now, sources: [{key, name, state, word, line, warn}], freshness: [{source, account, last_read,
 newest, lag_s, errors}], store: {messages, events}}`.
 
+0.24.4, for the owner's model-server engineer (read-only, same scope):
+
+- `background_busy` (bool): Callsheet's background model work (a reading pass or a background request) is running
+  now; `background_since`: when it started (unix seconds), else `null`.
+- `next_brief`: the next call time (ISO 8601 in the owner's time zone), else `null`.
+- `brief_times`: the owner's call times that are on, local `"HH:MM"`, sorted.
+- `quiet_windows`: the `model_quiet_times` setting, `[["HH:MM", "HH:MM"], ...]` local (a pair may cross midnight).
+- `suggested_engineer_quiet`: each brief time ±20 minutes merged with the quiet windows, sorted local
+  `[start, end]` pairs (an end before its start crosses midnight; `["00:00", "00:00"]` is the whole day).
+
+One-time codes (0.24.4): a verification or sign-in code is never `kind` `needs_you`; `/v1/ledger` lists it as
+`cleanup`, after everything else, and the voice brief never names it.
+
 ## Audit log
 
 `voice_audit` in callsheet.db: time, token id and name, the endpoint **template** (`/v1/threads/{id}`), status and
@@ -256,4 +269,5 @@ days are removed. Setup shows the last 20 under "Host names and recent calls".
 - `PATCH api/voice/tokens/<id>` `{actions: true|false}` (0.24.3): the device's "Can dismiss, snooze and mark done".
 - `GET api/voice` also has `write_scopes`, `actions_per_minute` and `undo_hours`.
 
-Example answers for the assistant's developers (fictional data): `docs/voice-api-fixtures/0.24.3.json`.
+Example answers for the assistant's developers (fictional data): `docs/voice-api-fixtures/0.24.3.json`;
+`/v1/status` with the 0.24.4 fields: `docs/voice-api-fixtures/0.24.4.json`.

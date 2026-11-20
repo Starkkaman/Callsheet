@@ -24,7 +24,10 @@ import unicodedata
 import urllib.parse
 
 import apitokens
+import background as bg_mod
+import ledger as L
 import need as need_mod
+import rules
 import people as people_mod
 import qr
 import voiceactions
@@ -493,16 +496,18 @@ class Reader:
         since, until = self.when(p.get("since"), "since"), self.when(p.get("until"), "until", end=True)
         terms = [_norm(t) for t in self.person_terms(p["person"])] if p.get("person") else []
         v = led.view()
-        rows = []
+        rows, codes = [], []
         for sec in ("security", "needs_you", "now_next", "coming_up", "clean_up"):
-            k = SECTION_KIND[sec]
-            if kind and kind != k:
-                continue
             for r in v.get(sec) or []:
+                code = L.is_code_item(r)
+                k = "cleanup" if code else SECTION_KIND[sec]   # 0.24.4: a one-time code is never Needs you
+                if kind and kind != k:
+                    continue
                 it = self._item(r, k)
                 hay = " ".join([r.get("who") or "", r.get("who_name") or ""] +
                                [f.get("sender_name") or "" for f in r.get("from") or []])
-                rows.append((it, hay, r.get("updated_at"), self._start(r)))
+                (codes if code else rows).append((it, hay, r.get("updated_at"), self._start(r)))
+        rows += codes                                          # ... and never leads the list
         if kind in ("", "conflicts"):
             for c in v.get("conflicts") or []:
                 hay = " ".join(" ".join([s.get("who_name") or "", s.get("title") or ""]) for s in c.get("sides") or [])
@@ -760,8 +765,73 @@ class Reader:
                           "newest": self.iso(r["newest_ts"]),
                           "lag_s": int(now - r["newest_ts"]) if r["newest_ts"] else None, "errors": r["errors"]})
         store = st.get("store") or {}
-        return {"now": self.iso(now), "sources": rows, "freshness": fresh,
-                "store": {"messages": store.get("messages"), "events": store.get("events")}}, len(rows)
+        out = {"now": self.iso(now), "sources": rows, "freshness": fresh,
+               "store": {"messages": store.get("messages"), "events": store.get("events")}}
+        out.update(self.model_times(now))
+        return out, len(rows)
+
+    def model_times(self, now):
+        """0.24.4: for the owner's model-server engineer (read-only): is Callsheet's background model work running now
+        and since when, the next brief, the owner's call times, his quiet times for the model server, and a suggested
+        quiet list (each call time ±ENGINEER_PAD_MIN merged with the quiet times). Local times."""
+        busy = bg_mod.busy_view()
+        st = getattr(self.app, "store", None)
+        try:
+            settings = st.settings() if st is not None else {}
+        except Exception:  # noqa: BLE001 (no settings yet: no call times)
+            settings = {}
+        times = sorted({str(c.get("time")) for c in settings.get("call_times") or []
+                        if isinstance(c, dict) and c.get("enabled") and bg_mod._hhmm(c.get("time"))})  # noqa: SLF001
+        nxt = None
+        if times:
+            try:
+                tz = rules.tzinfo(settings)
+                when, _c = rules.next_call(settings, dt.datetime.fromtimestamp(now, tz))
+                nxt = when.isoformat(timespec="seconds") if when else None
+            except Exception:  # noqa: BLE001 (an unreadable schedule: no next brief)
+                nxt = None
+        quiet = bg_mod.quiet_times(st) if st is not None else []
+        return {"background_busy": busy["busy"], "background_since": busy["since"], "next_brief": nxt,
+                "brief_times": times, "quiet_windows": quiet,
+                "suggested_engineer_quiet": engineer_quiet(times, quiet)}
+
+
+ENGINEER_PAD_MIN = 20   # 0.24.4: minutes around each call time the model server should be left alone
+
+
+def engineer_quiet(times, quiet, pad=ENGINEER_PAD_MIN):
+    """Each "HH:MM" call time ±pad minutes, merged with the quiet windows ([[start, end], ...], may cross midnight),
+    as sorted local [start, end] pairs (a pair whose end is before its start crosses midnight; ["00:00", "00:00"] is
+    the whole day)."""
+    def mins(hhmm):
+        h, m = map(int, hhmm.split(":"))
+        return h * 60 + m
+    spans = [(mins(t) - pad, mins(t) + pad) for t in times]
+    for a, b in quiet:
+        a, b = mins(a), mins(b)
+        spans.append((a, b if b > a else b + 1440))
+    if not spans:
+        return []
+    busy = [False] * 1440
+    for a, b in spans:
+        for k in range(a, b):
+            busy[k % 1440] = True
+    if all(busy):
+        return [["00:00", "00:00"]]
+    start = busy.index(False)        # walk the circle from a free minute so a span over midnight stays whole
+    out, i = [], 0
+    while i < 1440:
+        k = (start + i) % 1440
+        if busy[k]:
+            j = i
+            while j < 1440 and busy[(start + j) % 1440]:
+                j += 1
+            out.append([k, (start + j) % 1440])
+            i = j
+        else:
+            i += 1
+    hm = lambda m: "%02d:%02d" % divmod(m, 60)  # noqa: E731
+    return [[hm(a), hm(b)] for a, b in sorted(out)]
 
 
 ROUTES = (  # (path pattern, endpoint template for the audit log, scope, Reader method, ETag)

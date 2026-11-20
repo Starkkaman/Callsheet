@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.4
+
+- **Codes stay out of the way.** Verification and sign-in codes ("your verification code", "one-time passcode", a
+  2FA code) are never in Needs you, never first in a list, and never make a clash or a bill. For 15 minutes a new
+  code shows in Security, after any real alert; then it moves to Clean up under "Code, expired". Chat and the voice
+  assistant follow the same lists. Tidy up moves codes Callsheet had already filed.
+- **Model server times for your engineer.** The voice assistant's status now says whether Callsheet's background
+  model work is running and since when, the next brief, your call times, your quiet times for the model server, and
+  a suggested quiet list (each call time plus or minus 20 minutes, together with your quiet times).
+
 ## 0.24.3
 
 - **A brief made for listening.** The voice assistant can ask for today's brief as short spoken sentences: times and

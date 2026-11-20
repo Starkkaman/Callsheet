@@ -279,6 +279,16 @@ the type, subtype and checks and reopens those clashes.
   appointment needs booking words.
 - **Asks by name**: the Promotions tab alone (no promo cue) doesn't make promo mail when a personal address greets
   the owner by name and asks something (`by_name`, the read tier's "asks you by name").
+- **One-time codes** (0.24.4, `ledger.code_of`, `is_code_item`): verification and sign-in codes ("your verification
+  code", "security code", "one-time passcode", "2FA code", or a 4-8 digit code with a "code" cue that isn't a promo,
+  gate, booking or tracking code) from automated senders (a no-reply, role or service address, a Gmail tab, a text
+  from a short code or a name, a phone notification). One item per message (`heads.add_security` /
+  `adopt_security`: type `cleanup`, subtype `code`, never `never_hide`, no time or amount; the model's items from the
+  message join it), so never Needs you, a clash or a bill. `section_of`: in the Security block while 15 minutes old
+  or less (`CODE_FRESH_S`), after the real alerts; then Clean up, group "Code, expired", last. At view time a
+  security alert whose words name a code counts too. Tidy up moves stored items of code messages that are no longer
+  fresh (group `code`, why "Code, expired"; the subtype becomes `code`, Undo restores it). The brief never names one,
+  Chat's lists and the voice API (`kind` cleanup, last) follow `section_of`.
 - **Suggested People** don't count as known (`read_tier`: the resolver's `states`).
 - **Slack gate**: an incoming channel post (thread `C…`, labels `channel`/`private`) that doesn't name or @mention the
   owner, doesn't ask the reader directly (`asks_reader`: "can you", "can we", "let's" with no one else addressed: no

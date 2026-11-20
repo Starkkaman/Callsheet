@@ -94,11 +94,12 @@ class Security(Base):
         self.assertEqual(L.section_of(sec[0], self.now[0], TZI), "security")
 
     def test_the_models_item_becomes_the_security_item_never_clean_up(self):
-        self.put("2026-11-11T11:00", *GOOGLE, "Your verification code", "Your verification code is 482913.",
+        # 0.24.4: a one-time code is a code item (test_codes_status_0244): in Security only while fresh
+        self.put("2026-11-11T11:50", *GOOGLE, "Your verification code", "Your verification code is 482913.",
                  answer={"items": [F.item("cleanup", "sender", "one-time code")], "updates": []})
-        sec = self.items("subtype='security'")
+        sec = self.items("subtype='code'")
         self.assertEqual([(s["type"], s["what"]) for s in sec], [("cleanup", "one-time code")])
-        self.assertEqual(self.items("type='cleanup' AND subtype != 'security'"), [])
+        self.assertEqual(self.items("type='cleanup' AND subtype != 'code'"), [])
         v = self.td.view()
         self.assertEqual([r["id"] for r in v["now_next"]["security"]], [sec[0]["id"]])
         self.assertEqual(v["clean_up"]["total"], 0)

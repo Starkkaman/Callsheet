@@ -1,5 +1,5 @@
 name: "Callsheet"
-version: "0.24.3"
+version: "0.24.4"
 slug: "callsheet"
 description: "Your personal assistant: what needs you, what clashes and what is coming up, read from your messages by your own local model. Nothing is sent from here except an RSVP you press."
 url: "https://github.com/Starkkaman/callsheet"
